@@ -1,28 +1,11 @@
 "use client";
 
 import { ArrowUpRight, FlaskConical, Rocket, SquarePen } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { BuilderPanel } from "@/components/builder/panel";
 import { LandscapeCanvas } from "@/components/landscape-canvas";
 import { softEase, useReducedMotion } from "@/lib/motion";
 import { motion } from "motion/react";
-
-const EXAMPLES = [
-  {
-    title: "Prompt work",
-    prompt:
-      "Turn this rough instruction into a clearer prompt, with the variables and checks it is missing.",
-  },
-  {
-    title: "Pasted records",
-    prompt:
-      "Normalize this pasted table into typed JSON, and show which rows were duplicates.",
-  },
-  {
-    title: "Chain evidence",
-    prompt:
-      "Summarize this wallet’s recent activity from bounded account evidence, and separate observation from inference.",
-  },
-] as const;
 
 const NOTES = [
   {
@@ -35,7 +18,7 @@ const NOTES = [
   {
     Icon: FlaskConical,
     title: "Test",
-    text: "A real test needs the shared engine. This page cannot run one.",
+    text: "Test SDK runs the saved draft on the shared engine. The result stays private.",
     href: "#scope",
     label: "See current scope",
   },
@@ -49,10 +32,7 @@ const NOTES = [
 ] as const;
 
 export function BuilderIntro(): ReactNode {
-  const [selected, setSelected] = useState(0);
   const reduced = useReducedMotion();
-  const example = EXAMPLES[selected];
-  if (!example) return null;
 
   return (
     <section
@@ -62,61 +42,14 @@ export function BuilderIntro(): ReactNode {
     >
       <div className="relative isolate h-150 overflow-hidden bg-scene max-[800px]:h-137 max-[561px]:h-125">
         <LandscapeCanvas />
-        <div className="absolute top-[clamp(24px,_calc(30svh_-_192px),_250px)] left-1/2 w-[min(664px,_calc(100%_-_48px))] [transform:translateX(-50%)] rounded-[14px] border border-solid border-[color-mix(in_srgb,_var(--foreground)_30%,_var(--border))] bg-card px-5 pt-5 pb-4 shadow-[0_2px_8px_#00000020] max-[800px]:top-[clamp(24px,_calc(30svh_-_192px),_220px)] max-[561px]:top-[clamp(12px,_calc(30svh_-_192px),_72px)] max-[561px]:w-[calc(100%_-_32px)] max-[561px]:rounded-[10px] max-[561px]:px-3.5 max-[561px]:pt-4">
-          <p
-            id="builder-title"
-            className="font-mono text-[10px] tracking-[0.08em] text-accent-ink uppercase"
-          >
+        <div className="absolute top-4 bottom-10 left-1/2 w-[min(664px,_calc(100%_-_48px))] overflow-hidden [transform:translateX(-50%)] rounded-[14px] border border-solid border-[color-mix(in_srgb,_var(--foreground)_30%,_var(--border))] bg-card px-5 pt-5 pb-4 shadow-[0_2px_8px_#00000020] max-[561px]:top-3 max-[561px]:w-[calc(100%_-_32px)] max-[561px]:rounded-[10px] max-[561px]:px-3.5 max-[561px]:pt-4">
+          <h2 id="builder-title" className="sr-only">
             Builder
-          </p>
-          <p className="mt-3 min-h-16 text-[15px] leading-[23px] max-[561px]:min-h-18 max-[561px]:text-[14px] max-[561px]:leading-[22px]">
-            {example.prompt}
-          </p>
-          <div
-            className="mt-3 flex flex-wrap gap-2"
-            role="radiogroup"
-            aria-label="Inert example prompts"
-          >
-            {EXAMPLES.map((item, index) => {
-              const active = index === selected;
-              return (
-                <button
-                  key={item.title}
-                  type="button"
-                  role="radio"
-                  aria-checked={active}
-                  className={
-                    "rounded-md border border-solid px-2.5 py-1.5 font-mono text-[10px] tracking-[0.04em] uppercase " +
-                    (active
-                      ? "border-accent bg-accent-soft text-foreground"
-                      : "border-border bg-card text-muted-foreground hover:text-foreground")
-                  }
-                  onClick={() => setSelected(index)}
-                >
-                  {item.title}
-                </button>
-              );
-            })}
-          </div>
-          <div className="mt-4 flex items-center justify-between gap-3 border-t border-t-border pt-3">
-            <p
-              id="builder-unavailable"
-              className="font-mono text-[10px] leading-[1.5] text-muted-foreground"
-            >
-              Example only. Nothing is sent, and no result is produced.
-            </p>
-            <button
-              type="button"
-              disabled
-              aria-describedby="builder-unavailable"
-              className="shrink-0 rounded-lg border border-solid border-border bg-muted px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase"
-            >
-              Unavailable
-            </button>
-          </div>
+          </h2>
+          <BuilderPanel />
         </div>
         <span className="absolute right-0 bottom-5 left-0 text-center font-mono text-[9px] tracking-[0.06em] text-[#ffffff] [text-shadow:0_1px_3px_#000] max-[561px]:bottom-4.5 max-[561px]:text-[7px]">
-          THE ENGINE IS NOT CONNECTED.
+          A TEST IS NOT A LAUNCH.
         </span>
       </div>
       <div className="grid grid-cols-3 border border-t-0 border-solid border-border max-[561px]:grid-cols-1">

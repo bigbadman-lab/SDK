@@ -11,13 +11,13 @@ export function FinalCta(): ReactNode {
         id="cta-heading"
         className="text-[40px] leading-[1.2] tracking-[-1px]"
       >
-        Read the plan.
+        Test a private draft.
         <br />
-        Do not expect a run.
+        Do not expect a launch.
       </h2>
       <p>
-        Wallet sign-in is available. SDK execution, token launch, and rewards
-        are not. This site does not pretend those are connected.
+        Signed-in Builder tests use the shared engine. Token launch and rewards
+        are not available. A test does not publish a product.
       </p>
       <div>
         <Link

@@ -1,3 +1,4 @@
+import { DraftList } from "@/components/builder/draft-list";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { Footer } from "@/components/footer";
@@ -48,18 +49,20 @@ export default async function AccountPage(): Promise<ReactNode> {
             <CopyAddress address={account.walletAddress} />
             <p className="max-w-130 text-[15px] leading-[1.7] text-muted-foreground">
               This session belongs to the wallet that signed the server
-              challenge. Disconnecting or switching wallets ends it. SDK
-              drafts, launches, royalties, rewards, API keys, and the Feed are
-              not available.
+              challenge. Disconnecting or switching wallets ends it. Private
+              drafts can be tested. Launch, royalties, rewards, API keys, and
+              the Feed are not available.
             </p>
+            <DraftList />
           </div>
         ) : (
           <div className="mt-8 grid gap-5">
             <p className="max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
               Connect a Solana wallet, then approve the sign-in in that wallet.
               Connection alone does not create an account. Nothing here can
-              mint a token or move funds. SDK drafts, launches, royalties,
-              rewards, API keys, and the Feed are not available.
+              mint a token or move funds. Private drafts belong to a signed-in
+              wallet. Launch, royalties, rewards, API keys, and the Feed are
+              not available.
             </p>
             {session.state === "invalid" ? (
               <p className="font-mono text-[11px] text-muted-foreground uppercase">

@@ -2,7 +2,7 @@
 
 SDK is a unified place to build a working SDK, test it, and launch a token paired with native $SDK. A verified launch automatically publishes the working, token-associated product. Community developers will be able to submit reusable SDKs without minting a token. Operator approval makes a library listing, not a launched product.
 
-This repository is the Phase 02 site: a dark-first Agentframe layout, safe server configuration, and Solana wallet sign-in. A connected wallet is not a session until the server verifies a signature. It does not run SDKs, mint tokens, or pay rewards.
+This repository is the Phase 03 site: a dark-first Agentframe layout, Solana wallet sign-in, and a private conversational Builder. A connected wallet is not a session until the server verifies a signature. A tested draft is not a launched product. The site does not mint tokens or pay rewards.
 
 ## Requirements
 
@@ -27,15 +27,16 @@ npm run build
 npm start
 ```
 
-| Script              | Purpose                    |
-| ------------------- | -------------------------- |
-| `npm run dev`       | Development server         |
-| `npm run build`     | Production build           |
-| `npm start`         | Serve the production build |
-| `npm run typecheck` | Strict TypeScript check    |
-| `npm run lint`      | ESLint                     |
-| `npm run test:auth` | Wallet identity unit tests |
-| `npm run format`    | Prettier                   |
+| Script                   | Purpose                     |
+| ------------------------ | --------------------------- |
+| `npm run dev`            | Development server          |
+| `npm run build`          | Production build            |
+| `npm start`              | Serve the production build  |
+| `npm run typecheck`      | Strict TypeScript check     |
+| `npm run lint`           | ESLint                      |
+| `npm run test:auth`      | Wallet identity unit tests  |
+| `npm run test:blueprint` | Blueprint engine unit tests |
+| `npm run format`         | Prettier                    |
 
 Recognized variable names live in `.env.example`. Leave them blank for local development. Do not commit `.env`, `.env.local`, keys, or database URLs.
 
@@ -43,13 +44,14 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 
 - Homepage and About explain the product.
 - Dark theme is the default. A control can switch to light, and another can pause motion. System reduced motion still wins.
-- The Builder panel shows inert example prompts. The request control stays disabled.
+- Signed-in Builder requests and tests need `OPENAI_API_KEY`, `HELIUS_RPC_URL`, and the Phase 03 tables. Without those tables the Builder says it is unavailable.
 - A Solana wallet can connect in the header. Sign-in asks that wallet to sign a server-issued message. `/account` shows the server session after verification.
-- `supabase/migrations/` holds the foundation comment and the Phase 02 identity tables. This app does not apply migrations.
+- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, and the Phase 03 Builder tables. This app does not apply migrations. Until the Phase 03 migration is applied, Builder routes say the Builder is unavailable.
 
 ## What does not work
 
-- Conversational Builder, SDK execution, and tests
+- Saving or testing a draft before the Phase 03 tables exist
+- Anonymous Builder trials
 - Token launch, minting, and automatic publication
 - Community submission and operator review
 - Library, Feed, rewards, trading data, and the NPM client

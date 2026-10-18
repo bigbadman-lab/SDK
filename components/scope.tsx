@@ -4,11 +4,10 @@ const LIVE = [
   "This website explains the product in a dark-first layout.",
   "Theme and motion preferences stay in this browser.",
   "A Solana wallet can connect, then sign in with a server-verified signature.",
-  "The Builder panel shows inert examples. It does not accept a request.",
+  "A signed-in wallet can describe a private SDK. A test uses the shared engine and is not a launch.",
 ] as const;
 
 const LATER = [
-  "SDK execution, tests, and the conversational Builder.",
   "Token minting, verified launch, and automatic publication.",
   "The library, community submission, and operator review.",
   "Rewards, trading statistics, the Feed, and an NPM client.",
@@ -29,9 +28,9 @@ export function Scope(): ReactNode {
           id="scope-title"
           className="mt-4 max-w-160 text-[clamp(32px,_3.8vw,_44px)] leading-[1.18] tracking-[-1.2px]"
         >
-          A public description.
+          A private draft.
           <br />
-          Not a live service.
+          Not a launch.
         </h2>
       </header>
       <div className="grid grid-cols-2 max-[701px]:grid-cols-1">

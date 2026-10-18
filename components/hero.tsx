@@ -14,7 +14,7 @@ export function Hero(): ReactNode {
         <span className="bg-accent px-3.5 py-0 font-mono text-[10px] leading-[30px] font-normal text-accent-foreground not-italic max-[561px]:px-2.5 max-[561px]:text-[8px] max-[561px]:leading-[28px]">
           STATUS
         </span>
-        <span>Foundation only. The Builder does not run yet.</span>
+        <span>Private drafts. A test is not a launch.</span>
       </a>
       <h1 id="hero-title">
         Build a real SDK.
@@ -39,7 +39,7 @@ export function Hero(): ReactNode {
           data-ui="button button-primary"
           href="#builder"
         >
-          Builder status
+          Open Builder
         </a>
       </div>
     </section>

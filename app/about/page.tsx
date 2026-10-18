@@ -64,16 +64,16 @@ export default function AboutPage(): ReactNode {
             <p>
               It explains that product and keeps a dark theme by default. You
               can switch to a light theme, and you can pause motion. Those
-              preferences stay in this browser. The Builder shows example
-              prompts. Those prompts are not submitted, and the page does not
-              invent progress or results.
+              preferences stay in this browser. A signed-in wallet can describe
+              a private SDK and test that draft. The result stays private. A
+              test does not launch or publish anything.
             </p>
             <p>
               Wallet connection and sign-in are separate. A session exists
               only after the server checks a wallet signature. The site does
-              not execute an SDK, mint a token, take payment, or show trading
-              or reward activity. Canonical metadata uses the configured public
-              origin when one is set.
+              not mint a token, take payment, or show trading or reward
+              activity. Canonical metadata uses the configured public origin
+              when one is set.
             </p>
           </section>
           <section id="setup" className="scroll-mt-23">
@@ -81,8 +81,9 @@ export default function AboutPage(): ReactNode {
             <p>
               The app expects Node.js 20.9 or newer and npm. Install from the
               lockfile with <code>npm ci</code>, then start it with{" "}
-              <code>npm run dev</code>. No provider secrets are required for
-              these pages. Recognized variable names are listed in{" "}
+              <code>npm run dev</code>. Public pages do not need provider
+              secrets. A signed-in Builder test needs the Phase 03 tables plus
+              the OpenAI and Helius variables in{" "}
               <code>.env.example</code>.
             </p>
           </section>
@@ -108,8 +109,8 @@ export default function AboutPage(): ReactNode {
               >
                 Unsplash License
               </a>
-              . Template terms are in the repository LICENSE file. The wordmark
-              is the text “SDK” until approved artwork exists.
+              . Template terms are in the repository LICENSE file. The header
+              and footer use the SDK wordmark.
             </p>
           </section>
         </div>
