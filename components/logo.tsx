@@ -1,9 +1,15 @@
+import Image from "next/image";
 import type { ReactNode } from "react";
 
 export function Logo(): ReactNode {
   return (
-    <span className="inline-flex items-center font-mono text-[18px] leading-none font-semibold tracking-[0.16em] max-[1051px]:text-[16px] max-[561px]:text-[15px]">
-      SDK
-    </span>
+    <Image
+      src="/images/sdkmain.png"
+      alt="SDK"
+      width={600}
+      height={200}
+      priority
+      className="h-8 w-auto invert dark:invert-0 max-[561px]:h-7"
+    />
   );
 }
