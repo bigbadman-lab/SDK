@@ -28,6 +28,7 @@ yarn-error.log*
 *.log
 
 .vercel
+supabase/.temp/
 
 *.tsbuildinfo
 next-env.d.ts

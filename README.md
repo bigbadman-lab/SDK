@@ -2,7 +2,7 @@
 
 SDK is a unified place to build a working SDK, test it, and launch a token paired with native $SDK. A verified launch automatically publishes the working, token-associated product. Community developers will be able to submit reusable SDKs without minting a token. Operator approval makes a library listing, not a launched product.
 
-This repository is the Phase 01 foundation: a dark-first site on the Agentframe visual system, safe server configuration, and a versioned database migration boundary. It does not run SDKs, connect wallets, mint tokens, or pay rewards.
+This repository is the Phase 02 site: a dark-first Agentframe layout, safe server configuration, and Solana wallet sign-in. A connected wallet is not a session until the server verifies a signature. It does not run SDKs, mint tokens, or pay rewards.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ npm ci
 npm run dev
 ```
 
-Open the local URL printed by Next.js. The pages render with no environment variables.
+Open the local URL printed by Next.js. Public pages render without environment variables. Wallet connection needs `NEXT_PUBLIC_REOWN_PROJECT_ID`. Sign-in also needs `APP_SESSION_SECRET`, `DATABASE_URL`, and the Phase 02 tables.
 
 ```bash
 npm run typecheck
@@ -34,6 +34,7 @@ npm start
 | `npm start`         | Serve the production build |
 | `npm run typecheck` | Strict TypeScript check    |
 | `npm run lint`      | ESLint                     |
+| `npm run test:auth` | Wallet identity unit tests |
 | `npm run format`    | Prettier                   |
 
 Recognized variable names live in `.env.example`. Leave them blank for local development. Do not commit `.env`, `.env.local`, keys, or database URLs.
@@ -43,27 +44,31 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 - Homepage and About explain the product.
 - Dark theme is the default. A control can switch to light, and another can pause motion. System reduced motion still wins.
 - The Builder panel shows inert example prompts. The request control stays disabled.
-- Server configuration is checked only when a later integration calls it. The public pages do not need secrets.
-- `supabase/migrations/` holds one foundation migration. It creates no product or financial tables, and this app does not apply it.
+- A Solana wallet can connect in the header. Sign-in asks that wallet to sign a server-issued message. `/account` shows the server session after verification.
+- `supabase/migrations/` holds the foundation comment and the Phase 02 identity tables. This app does not apply migrations.
 
 ## What does not work
 
 - Conversational Builder, SDK execution, and tests
-- Wallet sign-in
 - Token launch, minting, and automatic publication
 - Community submission and operator review
 - Library, Feed, rewards, trading data, and the NPM client
-- Production deployment
+Sign-in stores a session only after the server accepts a wallet signature. The Phase 02 tables are required. If they are missing, the sign-in routes say sign-in is unavailable and do not invent a session.
 
 There is no separate publish action. Publication happens only after a verified token launch, which is not implemented.
 
 ## Deployment
 
-The app is a normal Next.js server project. A Vercel project can be created from `https://github.com/bigbadman-lab/SDK` and built with `npm run build`. No provider environment variables are required for the current pages.
+The app is a normal Next.js server project and builds with `npm run build`. Public pages do not need provider secrets. Sign-in needs `DATABASE_URL`, `APP_SESSION_SECRET`, `NEXT_PUBLIC_REOWN_PROJECT_ID`, and `NEXT_PUBLIC_SOLANA_NETWORK` in the host environment, plus the Phase 02 tables.
 
-Set `NEXT_PUBLIC_APP_URL` to the real origin, including `https://`, before treating metadata, robots, or the sitemap as public. Until that value is set, pages ask not to be indexed and robots disallow crawling, because no production domain is configured.
+Set `NEXT_PUBLIC_APP_URL` to the real origin, including `https://`, before treating metadata, robots, or the sitemap as public. Until that value is set, pages ask not to be indexed and robots disallow crawling.
 
-This repository is not linked to a Vercel project from Phase 01. Connecting an account, choosing the project, and confirming a preview URL is an operator step.
+Apply the identity migration only after review:
+
+```bash
+npx supabase db push --dry-run
+npx supabase db push
+```
 
 ## Design credit
 

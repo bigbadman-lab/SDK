@@ -3,13 +3,14 @@ import type { ReactNode } from "react";
 const LIVE = [
   "This website explains the product in a dark-first layout.",
   "Theme and motion preferences stay in this browser.",
+  "A Solana wallet can connect, then sign in with a server-verified signature.",
   "The Builder panel shows inert examples. It does not accept a request.",
 ] as const;
 
 const LATER = [
   "SDK execution, tests, and the conversational Builder.",
-  "Wallet sign-in, token minting, and verified launch.",
-  "Automatic publication, the library, and operator review.",
+  "Token minting, verified launch, and automatic publication.",
+  "The library, community submission, and operator review.",
   "Rewards, trading statistics, the Feed, and an NPM client.",
 ] as const;
 

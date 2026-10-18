@@ -10,5 +10,10 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "yearly",
       priority: 0.4,
     },
+    {
+      url: new URL("/account", siteConfig.url).toString(),
+      changeFrequency: "monthly",
+      priority: 0.5,
+    },
   ];
 }

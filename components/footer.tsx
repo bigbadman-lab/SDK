@@ -9,6 +9,7 @@ const GROUPS = [
     links: [
       { label: "Journeys", href: "/#journeys" },
       { label: "Builder status", href: "/#builder" },
+      { label: "Account", href: "/account" },
       { label: "Current scope", href: "/#scope" },
     ],
   },

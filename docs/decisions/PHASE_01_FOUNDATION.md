@@ -37,7 +37,7 @@ Architecture source: `docs/architecture/SDK_MASTER_ARCHITECTURE_V1_1.md`. This p
 ## Intentionally deferred
 
 - Blueprint engine, six operations, and the ten official SDKs.
-- Reown wallet auth, sessions, and the NPM client.
+- Reown wallet auth and sessions are implemented in Phase 02. The NPM client remains deferred.
 - Supabase application schema, and any applied migration or live connection.
 - Render transaction builder, native rewards worker, Redis, queues, and a second UI framework.
 - Token launch, royalties, canonical mint, Feed, market data, and rewards UI. Operator recovery copy is not shown.

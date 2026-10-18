@@ -1,4 +1,5 @@
 import { Providers } from "@/components/providers";
+import { SessionTouch } from "@/components/session-touch";
 import { SkipToContent } from "@/components/skip-to-content";
 import { ThemeSwitch } from "@/components/theme-switch";
 import { baseMetadata } from "@/lib/metadata";
@@ -50,6 +51,7 @@ export default function RootLayout({
       <body className="min-h-screen bg-background font-sans text-foreground antialiased [&_section[id]]:scroll-mt-23">
         <Providers>
           <SkipToContent />
+          <SessionTouch />
           {children}
           <ThemeSwitch />
         </Providers>

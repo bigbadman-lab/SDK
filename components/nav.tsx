@@ -5,12 +5,14 @@ import { ArrowUpRight, Menu, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { trapDialogFocus } from "@/lib/dialog";
 import { Logo } from "@/components/logo";
+import { WalletButton } from "@/components/wallet/wallet-button";
 
 const LINKS = [
   { label: "Journeys", href: "/#journeys" },
   { label: "Builder", href: "/#builder" },
   { label: "Scope", href: "/#scope" },
   { label: "About", href: "/about" },
+  { label: "Account", href: "/account" },
 ];
 
 export function Nav(): ReactNode {
@@ -69,13 +71,9 @@ export function Nav(): ReactNode {
             </Link>
           ))}
         </nav>
-        <Link
-          className="inline-flex min-h-8.5 items-center justify-center gap-2.5 rounded-lg border border-solid border-accent bg-accent px-4 py-2 font-mono text-[11px] leading-[1.4] font-medium tracking-[0.015em] whitespace-nowrap text-accent-foreground uppercase not-italic [transition:background_0.18s,_box-shadow_0.18s,_transform_0.18s] hover:[transform:translateY(-2px)] hover:bg-[color-mix(in_srgb,_var(--accent)_88%,_#111111)] hover:shadow-[0_2px_5px_#00000010] active:[transform:translateY(1px)] max-[800px]:hidden max-[561px]:px-3 max-[561px]:text-[10px] [&_svg]:transition-transform [&_svg]:duration-[180ms] [&_svg]:ease-[ease] [&:hover_svg]:[transform:translate(2px,_-2px)]"
-          data-ui="button"
-          href="/#builder"
-        >
-          Builder status <ArrowUpRight size={14} />
-        </Link>
+        <div className="max-[800px]:hidden">
+          <WalletButton />
+        </div>
         <button
           ref={trigger}
           className="hidden max-[800px]:grid max-[800px]:h-8 max-[800px]:w-8 max-[800px]:place-items-center"
@@ -124,15 +122,11 @@ export function Nav(): ReactNode {
             </Link>
           ))}
         </nav>
-        <Link
-          className="inline-flex min-h-8.5 items-center justify-center gap-2.5 rounded-lg border border-solid border-accent bg-accent px-4 py-2 font-mono text-[11px] leading-[1.4] font-medium tracking-[0.015em] whitespace-nowrap text-accent-foreground uppercase not-italic [transition:background_0.18s,_box-shadow_0.18s,_transform_0.18s] hover:[transform:translateY(-2px)] hover:bg-[color-mix(in_srgb,_var(--accent)_88%,_#111111)] hover:shadow-[0_2px_5px_#00000010] active:[transform:translateY(1px)] max-[561px]:px-3 max-[561px]:text-[10px] [&_svg]:transition-transform [&_svg]:duration-[180ms] [&_svg]:ease-[ease] [&:hover_svg]:[transform:translate(2px,_-2px)]"
-          data-ui="button button-primary"
-          href="/#builder"
-          onClick={() => setOpen(false)}
-        >
-          Builder status <ArrowUpRight size={16} />
-        </Link>
-        <p>The Builder, wallets, and token launch are not available yet.</p>
+        <WalletButton compact />
+        <p>
+          Connect your wallet, then approve the sign-in there. Token launch
+          is not available.
+        </p>
       </dialog>
     </header>
   );

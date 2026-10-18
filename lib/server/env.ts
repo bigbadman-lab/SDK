@@ -20,6 +20,7 @@ const SECRET_ENV_NAMES = [
   "PINATA_GATEWAY_DOMAIN",
   "TX_BUILDER_URL",
   "TX_BUILDER_SECRET",
+  "OPERATOR_WALLET_ADDRESS",
 ] as const;
 
 export type PublicEnvName = (typeof PUBLIC_ENV_NAMES)[number];

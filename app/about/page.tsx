@@ -69,10 +69,11 @@ export default function AboutPage(): ReactNode {
               invent progress or results.
             </p>
             <p>
-              It does not execute an SDK, connect a wallet, mint a token, take
-              payment, or show trading or reward activity. No production domain
-              is configured, so this deployment does not publish a canonical
-              public URL of its own.
+              Wallet connection and sign-in are separate. A session exists
+              only after the server checks a wallet signature. The site does
+              not execute an SDK, mint a token, take payment, or show trading
+              or reward activity. Canonical metadata uses the configured public
+              origin when one is set.
             </p>
           </section>
           <section id="setup" className="scroll-mt-23">

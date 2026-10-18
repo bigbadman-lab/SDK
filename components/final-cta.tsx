@@ -16,8 +16,8 @@ export function FinalCta(): ReactNode {
         Do not expect a run.
       </h2>
       <p>
-        Wallet sign-in, SDK execution, token launch, and rewards are later work.
-        This site does not pretend they are connected.
+        Wallet sign-in is available. SDK execution, token launch, and rewards
+        are not. This site does not pretend those are connected.
       </p>
       <div>
         <Link
