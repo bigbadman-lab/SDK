@@ -56,12 +56,12 @@ export function Nav(): ReactNode {
       className="sticky top-0 z-60 h-16 bg-[color-mix(in_srgb,_var(--background)_96%,_transparent)] [backdrop-filter:blur(12px)] [&[data-ui~='is-scrolled']]:shadow-[0_1px_0_var(--border)]"
       data-ui={scrolled ? "is-scrolled" : ""}
     >
-      <div className="mx-auto flex h-16 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between gap-8 max-[1051px]:gap-5 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
-        <Link href="/#top" aria-label="SDK home" className="inline-flex">
+      <div className="relative mx-auto flex h-16 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between gap-8 max-[1051px]:gap-5 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
+        <Link href="/#top" aria-label="SDK home" className="relative z-10 inline-flex">
           <Logo />
         </Link>
         <nav
-          className="flex items-center gap-7 max-[1051px]:gap-5 max-[800px]:hidden [&_a]:relative [&_a]:py-3 [&_a]:font-mono [&_a]:text-[11px] [&_a]:[line-height:normal] [&_a]:font-medium [&_a]:uppercase [&_a]:not-italic [&_a]:transition-opacity [&_a]:duration-[180ms] [&_a]:ease-[ease] [&_a::after]:absolute [&_a::after]:right-0 [&_a::after]:bottom-1.25 [&_a::after]:left-0 [&_a::after]:h-0.5 [&_a::after]:[transform-origin:left] [&_a::after]:[transform:scaleX(0)] [&_a::after]:bg-accent [&_a::after]:transition-transform [&_a::after]:duration-[250ms] [&_a::after]:ease-[ease] [&_a::after]:[content:''] [&_a:hover]:opacity-100 [&_a:hover::after]:[transform:scaleX(1)]"
+          className="absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 items-center gap-7 max-[1051px]:gap-5 max-[800px]:hidden [&_a]:relative [&_a]:py-3 [&_a]:font-mono [&_a]:text-[11px] [&_a]:[line-height:normal] [&_a]:font-medium [&_a]:uppercase [&_a]:not-italic [&_a]:transition-opacity [&_a]:duration-[180ms] [&_a]:ease-[ease] [&_a::after]:absolute [&_a::after]:right-0 [&_a::after]:bottom-1.25 [&_a::after]:left-0 [&_a::after]:h-0.5 [&_a::after]:[transform-origin:left] [&_a::after]:[transform:scaleX(0)] [&_a::after]:bg-accent [&_a::after]:transition-transform [&_a::after]:duration-[250ms] [&_a::after]:ease-[ease] [&_a::after]:[content:''] [&_a:hover]:opacity-100 [&_a:hover::after]:[transform:scaleX(1)]"
           data-ui="desktop-nav"
           aria-label="Main navigation"
         >
@@ -71,7 +71,7 @@ export function Nav(): ReactNode {
             </Link>
           ))}
         </nav>
-        <div className="max-[800px]:hidden">
+        <div className="relative z-10 max-[800px]:hidden">
           <WalletButton />
         </div>
         <button
