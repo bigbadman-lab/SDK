@@ -13,6 +13,8 @@
 /out/
 
 /build
+/packages/sdk-client/dist
+*.tgz
 
 .DS_Store
 *.pem

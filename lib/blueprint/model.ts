@@ -60,6 +60,7 @@ export const PROVIDER_DEADLINE_MS = 20_000;
 export const PROVIDER_RETRIES = 0;
 export const BUILDER_MESSAGES_PER_DAY = 100;
 export const WEBSITE_RUNS_PER_DAY = 20;
+export const API_RUNS_PER_DAY = 100;
 export const MAX_DRAFTS = 20;
 export const MAX_CONCURRENT_RUNS = 2;
 export const MODEL_ID = "gpt-4.1-mini";

@@ -7,11 +7,12 @@ const LIVE = [
   "A signed-in wallet can describe an SDK on the homepage, then test it in the Builder. It is listed only after a name is saved, and a test is not a launch.",
   "The public Library lists published SDKs. Saving a private draft does not publish it.",
   "A saved, tested SDK can be submitted for operator review. Approval lists that revision. A submission is not a token launch.",
+  "A signed-in wallet can create API keys and call published SDKs. The client package is in this repository and is not on NPM.",
 ] as const;
 
 const LATER = [
   "Token minting, verified launch, and automatic publication.",
-  "Rewards, trading statistics, the Feed, and an NPM client.",
+  "Rewards, trading statistics, and the Feed.",
 ] as const;
 
 export function Scope(): ReactNode {

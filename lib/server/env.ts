@@ -21,6 +21,7 @@ const SECRET_ENV_NAMES = [
   "TX_BUILDER_URL",
   "TX_BUILDER_SECRET",
   "OPERATOR_WALLET_ADDRESS",
+  "API_KEY_PEPPER",
 ] as const;
 
 export type PublicEnvName = (typeof PUBLIC_ENV_NAMES)[number];
@@ -53,6 +54,14 @@ export function requireEnv(name: EnvName): string {
 
 export function requireSessionSecret(): string {
   return requireEnv("APP_SESSION_SECRET");
+}
+
+export function requireApiKeyPepper(): string {
+  const value = requireEnv("API_KEY_PEPPER");
+  if (value.length < 32) {
+    throw new Error("Missing required server configuration: API_KEY_PEPPER");
+  }
+  return value;
 }
 
 export function requireDatabaseUrl(): string {

@@ -18,6 +18,7 @@ const GROUPS = [
     title: "FOR DEVELOPERS",
     links: [
       { label: "Submit without a token", href: "/#community" },
+      { label: "Code", href: "/code" },
       { label: "About this site", href: "/about" },
     ],
   },

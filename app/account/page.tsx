@@ -1,3 +1,4 @@
+import { ApiKeys } from "@/components/account/api-keys";
 import { DraftList } from "@/components/builder/draft-list";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
@@ -53,8 +54,9 @@ export default async function AccountPage(): Promise<ReactNode> {
               challenge. Disconnecting or switching wallets ends it. Private
               drafts stay private until you test one and save a name. A saved
               SDK can be submitted for operator review. Approval lists that
-              revision. A submission is not a token launch. Launch, royalties,
-              rewards, API keys, and the Feed are not available.
+              revision.               A submission is not a token launch. API keys call published
+              SDKs and do not launch a token. Launch, royalties, rewards, and
+              the Feed are not available.
             </p>
             {isProvisionedOperator(account.walletAddress) ? (
               <Link href="/admin/library" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
@@ -62,14 +64,15 @@ export default async function AccountPage(): Promise<ReactNode> {
               </Link>
             ) : null}
             <DraftList />
+            <ApiKeys />
           </div>
         ) : (
           <div className="mt-8 grid gap-5">
             <p className="max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
               Connect a Solana wallet, then approve the sign-in in that wallet.
               Connection alone does not create an account. Nothing here can
-              mint a token or move funds. Saved SDKs belong to a signed-in
-              wallet. Launch, royalties, rewards, API keys, and the Feed are
+              mint a token or move funds. Saved SDKs and API keys belong to
+              a signed-in wallet. Launch, royalties, rewards, and the Feed are
               not available.
             </p>
             {session.state === "invalid" ? (

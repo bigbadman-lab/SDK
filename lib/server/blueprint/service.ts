@@ -14,6 +14,7 @@ import {
   WEBSITE_RUNS_PER_DAY,
   type Blueprint,
 } from "@/lib/blueprint/model";
+import { apiQuota } from "@/lib/api/contract";
 import { deleteDecision, isSameSavedIdentity, parseSdkIdentity, saveAllowed } from "@/lib/blueprint/save";
 import { developerLabel } from "@/lib/library/submission";
 import { validateBlueprint, validateInputsAgainst } from "@/lib/blueprint/validate";
@@ -434,6 +435,18 @@ async function reserveSpend(accountId: string, amount: number): Promise<void> {
   if (!account[0]) throw new BlueprintFlowError(429, "spend_limit");
 }
 
+export async function beginApiExecution(input: {
+  accountId: string;
+  keyId: string;
+  libraryVersionId: string;
+  aiSteps: number;
+}): Promise<{ executionId: string; startedAt: string }> {
+  if (input.aiSteps > 0) {
+    await guard(() => reserveSpend(input.accountId, input.aiSteps * OPENAI_RESERVE_USD));
+  }
+  return guard(() => reserveApiRun(input));
+}
+
 export async function beginLibraryExecution(input: {
   accountId: string;
   libraryVersionId: string;
@@ -466,6 +479,60 @@ export async function finishLibraryExecution(
   },
 ): Promise<void> {
   await guard(() => completeRun(executionId, result));
+}
+
+async function reserveApiRun(input: {
+  accountId: string;
+  keyId: string;
+  libraryVersionId: string;
+}): Promise<{ executionId: string; startedAt: string }> {
+  return getSql().begin(async (tx) => {
+    const day = utcDay();
+    const keys = await tx<{ id: string }[]>`
+      select id from api_keys
+      where id = ${input.keyId} and account_id = ${input.accountId} and revoked_at is null
+      for update
+    `;
+    if (!keys[0]) throw new BlueprintFlowError(401, "revoked_api_key");
+    await tx`
+      insert into usage_daily (account_id, day)
+      values (${input.accountId}, ${day})
+      on conflict (account_id, day) do nothing
+    `;
+    const usage = await tx<{ api_runs: number }[]>`
+      select api_runs from usage_daily
+      where account_id = ${input.accountId} and day = ${day}
+      for update
+    `;
+    const decision = apiQuota(usage[0]?.api_runs ?? 0);
+    if (!decision.admit) throw new BlueprintFlowError(429, "quota");
+    await tx`
+      update executions
+      set status = 'TIMEOUT', error_code = 'timeout', finished_at = now()
+      where account_id = ${input.accountId}
+        and status = 'RUNNING'
+        and started_at < now() - interval '70 seconds'
+    `;
+    const running = await tx<{ count: number }[]>`
+      select count(*)::int as count from executions
+      where account_id = ${input.accountId} and status = 'RUNNING'
+    `;
+    if ((running[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) throw new BlueprintFlowError(429, "concurrency");
+    const executions = await tx<{ id: string; started_at: Date }[]>`
+      insert into executions (account_id, library_version_id, api_key_id, status)
+      values (${input.accountId}, ${input.libraryVersionId}, ${input.keyId}, 'RUNNING')
+      returning id, started_at
+    `;
+    await tx`
+      update usage_daily
+      set api_runs = api_runs + 1
+      where account_id = ${input.accountId} and day = ${day}
+    `;
+    await tx`update api_keys set last_used_at = now() where id = ${input.keyId}`;
+    const execution = executions[0];
+    if (!execution) throw new BlueprintFlowError(503, "execution_unavailable");
+    return { executionId: execution.id, startedAt: execution.started_at.toISOString() };
+  });
 }
 
 async function reserveLibraryRun(

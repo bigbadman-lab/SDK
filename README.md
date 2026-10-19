@@ -47,7 +47,8 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 - The homepage prompt opens `/build` after a verified sign-in. Signed-in Builder requests and tests need `OPENAI_API_KEY`, `HELIUS_RPC_URL`, and the Phase 03 tables. Without those tables the Builder says it is unavailable.
 - A Solana wallet can connect in the header. Sign-in asks that wallet to sign a server-issued message. `/account` shows the server session after verification.
 - `/library` is the public SDK Library. It lists only published SDKs. Saving a private draft does not publish it. Remix opens an unsaved private copy in the Builder.
-- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, the Phase 03 Builder tables, the Phase 04A Library tables, and the Phase 04C submission table. `20261019133000_phase_03c_explicit_save.sql`, `20261019143000_phase_03d_soft_delete.sql`, and `20261019160000_phase_04a_library.sql` are already applied and must not be reapplied. `20261019180000_phase_04c_community_submissions.sql` is local until the operator applies it. This app does not apply migrations. The ten official SDKs are published through the operator seed.
+- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, the Phase 03 Builder tables, the Phase 04A Library tables, the Phase 04C submission table, and the Phase 04D API key table. `20261019133000_phase_03c_explicit_save.sql`, `20261019143000_phase_03d_soft_delete.sql`, and `20261019160000_phase_04a_library.sql` are already applied and must not be reapplied. `20261019180000_phase_04c_community_submissions.sql` and `20261019200000_phase_04d_api_keys.sql` are local until the operator applies them. This app does not apply migrations. The ten official SDKs are published through the operator seed.
+- `packages/sdk-client` is the universal execution client. It is not published to NPM. Build and pack it locally. `/code` explains the API.
 
 ## What does not work
 
@@ -55,6 +56,7 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 - Anonymous Builder trials
 - Token launch, minting, and automatic publication
 - Community submission until `20261019180000_phase_04c_community_submissions.sql` is applied. After that, a saved tested SDK can be submitted, and only an operator approval publishes it.
+- API keys and `POST /api/v1/sdk/execute` until `20261019200000_phase_04d_api_keys.sql` is applied and `API_KEY_PEPPER` is set. The client package is not on NPM.
 - Feed, rewards, trading data, and the NPM client
 Sign-in stores a session only after the server accepts a wallet signature. The Phase 02 tables are required. If they are missing, the sign-in routes say sign-in is unavailable and do not invent a session.
 
