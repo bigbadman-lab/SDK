@@ -11,6 +11,7 @@ const LINKS = [
   { label: "Journeys", href: "/#journeys" },
   { label: "Builder", href: "/build" },
   { label: "Library", href: "/library" },
+  { label: "Launch", href: "/launch" },
   { label: "Code", href: "/code" },
   { label: "Scope", href: "/#scope" },
   { label: "About", href: "/about" },
@@ -59,7 +60,11 @@ export function Nav(): ReactNode {
       data-ui={scrolled ? "is-scrolled" : ""}
     >
       <div className="relative mx-auto flex h-16 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between gap-8 max-[1051px]:gap-5 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
-        <Link href="/#top" aria-label="SDK home" className="relative z-10 inline-flex">
+        <Link
+          href="/#top"
+          aria-label="SDK home"
+          className="relative z-10 inline-flex"
+        >
           <Logo />
         </Link>
         <nav
@@ -68,7 +73,13 @@ export function Nav(): ReactNode {
           aria-label="Main navigation"
         >
           {LINKS.map((link) => (
-            <Link key={link.href} href={link.href}>
+            <Link
+              key={link.href}
+              href={link.href}
+              className={
+                link.href === "/launch" ? "text-accent-ink" : undefined
+              }
+            >
               {link.label}
             </Link>
           ))}
@@ -126,8 +137,8 @@ export function Nav(): ReactNode {
         </nav>
         <WalletButton compact />
         <p>
-          Connect your wallet, then approve the sign-in there. Token launch
-          is not available.
+          Connect your wallet, then approve the sign-in there. On-chain
+          launching is not available yet.
         </p>
       </dialog>
     </header>

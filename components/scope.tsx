@@ -8,6 +8,7 @@ const LIVE = [
   "The public Library lists published SDKs. Saving a private draft does not publish it.",
   "A saved, tested SDK can be submitted for operator review. Approval lists that revision. A submission is not a token launch.",
   "A signed-in wallet can create API keys and call published SDKs. The client package is in this repository and is not on NPM.",
+  "A tested private SDK, or a published Library version, can be prepared for launch. Preparation stores artwork and metadata. It does not mint a token.",
 ] as const;
 
 const LATER = [

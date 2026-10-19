@@ -51,18 +51,29 @@ function SavedSdkList(): ReactNode {
   useEffect(() => {
     let active = true;
     void (async () => {
-      const session = await fetch("/api/auth/session", { credentials: "same-origin", cache: "no-store" });
+      const session = await fetch("/api/auth/session", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       const current = (await session.json()) as { authenticated?: boolean };
       if (!active || current.authenticated !== true) return;
-      const response = await fetch("/api/builder/drafts", { credentials: "same-origin" });
-      const body = (await response.json()) as { drafts?: Draft[]; error?: string };
+      const response = await fetch("/api/builder/drafts", {
+        credentials: "same-origin",
+      });
+      const body = (await response.json()) as {
+        drafts?: Draft[];
+        error?: string;
+      };
       if (!active) return;
       if (!response.ok) {
         setNotice(body.error ?? "Saved SDKs are unavailable.");
         return;
       }
       setDrafts(body.drafts ?? []);
-      const review = await fetch("/api/library/submissions", { credentials: "same-origin", cache: "no-store" });
+      const review = await fetch("/api/library/submissions", {
+        credentials: "same-origin",
+        cache: "no-store",
+      });
       const reviewBody = (await review.json()) as {
         submissions?: Submission[];
         remaining?: number;
@@ -84,7 +95,9 @@ function SavedSdkList(): ReactNode {
 
   useEffect(() => {
     if (!selectedId || !drafts) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
     document.getElementById(`sdk-${selectedId}`)?.scrollIntoView({
       block: "center",
       behavior: reduced ? "auto" : "smooth",
@@ -114,12 +127,17 @@ function SavedSdkList(): ReactNode {
         method: "DELETE",
         credentials: "same-origin",
       });
-      const body = (await response.json()) as { error?: string; deleted?: boolean };
+      const body = (await response.json()) as {
+        error?: string;
+        deleted?: boolean;
+      };
       if (!response.ok || body.deleted !== true) {
         setNotice(body.error ?? "The SDK could not be deleted.");
         return;
       }
-      setDrafts((current) => current?.filter((draft) => draft.id !== target.id) ?? []);
+      setDrafts(
+        (current) => current?.filter((draft) => draft.id !== target.id) ?? []
+      );
       setNotice(`${target.name} was removed from My SDKs.`);
       setTarget(null);
     } catch {
@@ -152,7 +170,11 @@ function SavedSdkList(): ReactNode {
       }
       setSubmissions((current) => {
         const next = (current ?? []).filter(
-          (item) => !(item.draftId === submitTarget.id && item.contentHash === body.contentHash),
+          (item) =>
+            !(
+              item.draftId === submitTarget.id &&
+              item.contentHash === body.contentHash
+            )
         );
         next.unshift({
           draftId: submitTarget.id,
@@ -167,7 +189,7 @@ function SavedSdkList(): ReactNode {
       setNotice(
         body.created
           ? `${submitTarget.name} is in review. Submission does not launch a token.`
-          : `${submitTarget.name} was already submitted.`,
+          : `${submitTarget.name} was already submitted.`
       );
       setSubmitTarget(null);
     } catch {
@@ -179,12 +201,17 @@ function SavedSdkList(): ReactNode {
 
   const selected = drafts?.find((draft) => draft.id === selectedId) ?? null;
   const targetPublished = target
-    ? submissions?.some((item) => item.draftId === target.id && item.status === "approved") === true
+    ? submissions?.some(
+        (item) => item.draftId === target.id && item.status === "approved"
+      ) === true
     : false;
 
   return (
     <section className="grid gap-3" aria-labelledby="my-sdks-title">
-      <h2 id="my-sdks-title" className="font-mono text-[11px] tracking-[0.08em] uppercase">
+      <h2
+        id="my-sdks-title"
+        className="font-mono text-[11px] tracking-[0.08em] uppercase"
+      >
         My SDKs
       </h2>
       {remaining === 0 ? (
@@ -193,31 +220,48 @@ function SavedSdkList(): ReactNode {
         </p>
       ) : null}
       {justSaved && selected ? (
-        <p className="font-mono text-[11px] text-accent-ink uppercase" aria-live="polite">
+        <p
+          className="font-mono text-[11px] text-accent-ink uppercase"
+          aria-live="polite"
+        >
           SDK saved successfully.
         </p>
       ) : null}
       {notice ? (
-        <p className="font-mono text-[11px] text-muted-foreground" aria-live="polite">
+        <p
+          className="font-mono text-[11px] text-muted-foreground"
+          aria-live="polite"
+        >
           {notice}
         </p>
       ) : null}
       {drafts && drafts.length === 0 ? (
         <p className="text-[15px] leading-[1.7] text-muted-foreground">
-          No saved SDKs yet. A blueprint appears here after you test it and choose a name. It is not a launched product.
+          No saved SDKs yet. A blueprint appears here after you test it and
+          choose a name. It is not a launched product.
         </p>
       ) : null}
       {drafts && drafts.length > 0 ? (
         <ul className="grid gap-4">
           {drafts.map((draft) => {
-            const launch = launchAction({ sdkId: draft.id, versionId: draft.versionId });
+            const launch = launchAction({
+              sdkId: draft.id,
+              tested: draft.tested,
+            });
             const current = submissions?.find(
-              (item) => item.draftId === draft.id && item.contentHash === draft.contentHash,
+              (item) =>
+                item.draftId === draft.id &&
+                item.contentHash === draft.contentHash
             );
-            const published = submissions?.find((item) => item.draftId === draft.id && item.status === "approved");
+            const published = submissions?.find(
+              (item) => item.draftId === draft.id && item.status === "approved"
+            );
             const olderPending =
               submissions?.some(
-                (item) => item.draftId === draft.id && item.status === "pending" && item.contentHash !== draft.contentHash,
+                (item) =>
+                  item.draftId === draft.id &&
+                  item.status === "pending" &&
+                  item.contentHash !== draft.contentHash
               ) === true;
             const reviewLabel =
               current?.status === "pending"
@@ -228,21 +272,29 @@ function SavedSdkList(): ReactNode {
                     ? "Rejected"
                     : "Not submitted";
             const canSubmit = Boolean(
-              submissions && draft.tested && draft.contentHash && !current && remaining !== null && remaining > 0,
+              submissions &&
+              draft.tested &&
+              draft.contentHash &&
+              !current &&
+              remaining !== null &&
+              remaining > 0
             );
             return (
               <li
                 key={draft.id}
                 id={`sdk-${draft.id}`}
                 data-sdk-id={launch.sdkId}
-                data-version-id={launch.versionId ?? ""}
+                data-version-id={draft.versionId ?? ""}
                 className="grid scroll-mt-24 gap-3 border-t border-t-border pt-4"
               >
                 <span className="text-[15px]">{draft.name}</span>
-                <span className="text-[13px] leading-[1.5] text-muted-foreground">{draft.description}</span>
+                <span className="text-[13px] leading-[1.5] text-muted-foreground">
+                  {draft.description}
+                </span>
                 <span className="font-mono text-[10px] text-muted-foreground uppercase">
-                  Saved draft · {formatSavedAt(draft.updatedAt)} · {draft.tested ? "Tested" : "Not tested"} ·{" "}
-                  {reviewLabel} · Not launched
+                  Saved draft · {formatSavedAt(draft.updatedAt)} ·{" "}
+                  {draft.tested ? "Tested" : "Not tested"} · {reviewLabel} · Not
+                  launched
                 </span>
                 {olderPending ? (
                   <span className="text-[13px] leading-[1.5] text-muted-foreground">
@@ -255,32 +307,55 @@ function SavedSdkList(): ReactNode {
                   </span>
                 ) : null}
                 {published?.librarySdkId ? (
-                  <a className="font-mono text-[10px] tracking-[0.04em] uppercase underline" href={`/library/${published.librarySdkId}`}>
+                  <a
+                    className="font-mono text-[10px] tracking-[0.04em] uppercase underline"
+                    href={`/library/${published.librarySdkId}`}
+                  >
                     View in Library
                   </a>
                 ) : null}
-                <button
-                  type="button"
-                  disabled
-                  data-sdk-id={launch.sdkId}
-                  data-version-id={launch.versionId ?? ""}
-                  aria-label={`Launch ${draft.name}. Coming soon.`}
-                  className="justify-self-start cursor-not-allowed rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
-                >
-                  Launch · {launch.label}
-                </button>
+                {launch.href ? (
+                  <a
+                    href={launch.href}
+                    data-sdk-id={launch.sdkId}
+                    className="justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
+                  >
+                    Launch
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    data-sdk-id={launch.sdkId}
+                    aria-label={`Launch ${draft.name}. Test this SDK first.`}
+                    className="cursor-not-allowed justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
+                  >
+                    Launch · Test first
+                  </button>
+                )}
                 <span className="flex flex-wrap gap-4 font-mono text-[10px] tracking-[0.04em] uppercase">
                   <a className="underline" href={`/build?draft=${draft.id}`}>
                     Edit
                   </a>
-                  <a className="underline" href={`/build?draft=${draft.id}&intent=test`}>
+                  <a
+                    className="underline"
+                    href={`/build?draft=${draft.id}&intent=test`}
+                  >
                     Test
                   </a>
-                  <button type="button" className="underline" onClick={() => setTarget(draft)}>
+                  <button
+                    type="button"
+                    className="underline"
+                    onClick={() => setTarget(draft)}
+                  >
                     Delete
                   </button>
                   {canSubmit ? (
-                    <button type="button" className="underline" onClick={() => setSubmitTarget(draft)}>
+                    <button
+                      type="button"
+                      className="underline"
+                      onClick={() => setSubmitTarget(draft)}
+                    >
                       Submit to Library
                     </button>
                   ) : null}
@@ -302,7 +377,8 @@ function SavedSdkList(): ReactNode {
           Delete {target?.name ?? "this SDK"}?
         </h3>
         <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
-          {target?.name ?? "This SDK"} will be removed from My SDKs. It will no longer open, edit, or test.
+          {target?.name ?? "This SDK"} will be removed from My SDKs. It will no
+          longer open, edit, or test.
           {targetPublished
             ? " The public Library listing stays available, with its published version and originating developer."
             : ""}
@@ -338,10 +414,13 @@ function SavedSdkList(): ReactNode {
         <h3 id="submit-sdk-title" className="text-[18px]">
           Submit {submitTarget?.name ?? "this SDK"}?
         </h3>
-        <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">{submitTarget?.description}</p>
         <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
-          This sends the saved, tested revision to the operator for review. It does not launch a token. If it is
-          approved, this exact revision becomes public and remixable.
+          {submitTarget?.description}
+        </p>
+        <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
+          This sends the saved, tested revision to the operator for review. It
+          does not launch a token. If it is approved, this exact revision
+          becomes public and remixable.
         </p>
         <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
           {submitTarget?.submitterIsOriginator
