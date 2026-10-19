@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  LaunchCapabilityDiagnostic,
+  LaunchCapabilityNotice,
+} from "@/components/launch/wallet-capability";
 import { trapDialogFocus } from "@/lib/dialog";
 import {
   canOpenConfirmation,
@@ -643,6 +647,8 @@ function ConfirmLaunch({
           {links.join(" · ")}
         </p>
       ) : null}
+      <LaunchCapabilityDiagnostic surface="modal" />
+      <LaunchCapabilityNotice />
       <p
         id="launch-not-ready"
         className="mt-4 text-[13px] leading-[1.5] text-muted-foreground"

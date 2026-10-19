@@ -1,5 +1,6 @@
 import { Footer } from "@/components/footer";
 import { LaunchForm } from "@/components/launch/form";
+import { LaunchCapabilityDiagnostic } from "@/components/launch/wallet-capability";
 import {
   HeldSdk,
   LaunchSelector,
@@ -119,6 +120,7 @@ export default async function LaunchPage({
         <p className="mt-3 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
           Turn your working SDK into a live token paired with $SDK.
         </p>
+        {process.env.NODE_ENV === "development" ? <LaunchCapabilityDiagnostic /> : null}
         {message ? (
           <p className="mt-6 text-[15px] leading-[1.6]" role="status">
             {message}

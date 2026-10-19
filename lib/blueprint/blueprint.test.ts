@@ -526,6 +526,44 @@ test("a camelCase model proposal is repaired into a valid blueprint", () => {
   if (!extra.ok) assert.equal(extra.code, "operation");
 });
 
+test("transaction detail reads version 1 from the response body", async () => {
+  const signature = "5".repeat(88);
+  let params: unknown;
+  const blueprint = base();
+  blueprint.inputs = { signature: { type: "string", required: true, maxLength: 100 } };
+  blueprint.capabilities = ["solana.transactions"];
+  blueprint.outputs = { result: { type: "object", from: { $ref: "steps.detail.result" } } };
+  blueprint.steps = [{
+    id: "detail",
+    op: "solana.transactions",
+    config: { mode: "detail" },
+    args: { signature: { $ref: "inputs.signature" } },
+  }];
+  const result = await runBlueprint({
+    blueprint,
+    values: { signature },
+    ports: {
+      now: () => 0,
+      openai: async () => ({ value: { text: "unused" }, inputTokens: 1, outputTokens: 1 }),
+      helius: async (method: string, args: unknown[]) => {
+        assert.equal(method, "getTransaction");
+        params = args;
+        return { version: 1, meta: { fee: 5000, err: null }, slot: 9, blockTime: 4 };
+      },
+    },
+    startedAt: 0,
+  });
+  assert.equal(result.status, "SUCCESS");
+  assert.deepEqual(params, [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }]);
+  const body = result.output?.result;
+  assert.equal(
+    typeof body === "object" && body !== null && "transaction" in body
+      ? (body.transaction as { version?: unknown }).version
+      : null,
+    1,
+  );
+});
+
 function reserve(current: number, limit: number): number | null {
   if (current >= limit) return null;
   return current + 1;

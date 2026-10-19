@@ -209,7 +209,7 @@ async function runSolana(
       const signature = stringOf(args.signature);
       if (!/^[1-9A-HJ-NP-Za-km-z]{32,88}$/.test(signature)) throw new RunFailure("signature");
       count();
-      const detail = await ports.helius("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]);
+      const detail = await ports.helius("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1 }]);
       return coverage("transaction", { transaction: summarizeTransaction(detail) });
     }
     const address = addressOf(args.address);
@@ -502,11 +502,17 @@ function summarizeSignature(value: unknown): unknown {
   };
 }
 
+function transactionVersion(value: unknown): "legacy" | 0 | 1 | null {
+  if (value === "legacy" || value === 0 || value === 1) return value;
+  return null;
+}
+
 function summarizeTransaction(value: unknown): unknown {
   const transaction = rpcValue(value);
   if (!record(transaction) || !record(transaction.meta)) return { found: false };
   return {
     found: true,
+    version: transactionVersion(transaction.version),
     slot: transaction.slot ?? null,
     blockTime: transaction.blockTime ?? null,
     fee: transaction.meta.fee ?? null,

@@ -1,5 +1,7 @@
 import "server-only";
 
+import { PLATFORM_FEE_WALLET } from "@/lib/launch/fees";
+
 const PUBLIC_ENV_NAMES = [
   "NEXT_PUBLIC_APP_URL",
   "NEXT_PUBLIC_SOLANA_NETWORK",
@@ -20,6 +22,7 @@ const SECRET_ENV_NAMES = [
   "PINATA_GATEWAY_DOMAIN",
   "TX_BUILDER_URL",
   "TX_BUILDER_SECRET",
+  "SDK_PLATFORM_FEE_WALLET",
   "OPERATOR_WALLET_ADDRESS",
   "API_KEY_PEPPER",
 ] as const;
@@ -113,4 +116,14 @@ export function requireTransactionBuilder(): { url: string; secret: string } {
     url: requireEnv("TX_BUILDER_URL"),
     secret: requireEnv("TX_BUILDER_SECRET"),
   };
+}
+
+export function requirePlatformFeeWallet(): string {
+  const value = requireEnv("SDK_PLATFORM_FEE_WALLET");
+  if (value !== PLATFORM_FEE_WALLET) {
+    throw new Error(
+      "Missing required server configuration: SDK_PLATFORM_FEE_WALLET",
+    );
+  }
+  return value;
 }
