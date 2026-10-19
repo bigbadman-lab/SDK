@@ -8,7 +8,7 @@ const GROUPS = [
     title: "PRODUCT",
     links: [
       { label: "Journeys", href: "/#journeys" },
-      { label: "Builder", href: "/#builder" },
+      { label: "Builder", href: "/build" },
       { label: "Account", href: "/account" },
       { label: "Current scope", href: "/#scope" },
     ],

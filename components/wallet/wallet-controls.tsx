@@ -14,12 +14,19 @@ import {
 
 import { appKitProjectConfigured, ensureAppKit } from "@/components/wallet/appkit";
 import {
+  loadBrowserSession,
+  noteSignedIn,
+  noteSignedOut,
+  subscribeBrowserSession,
+} from "@/lib/auth/browser-session";
+import {
   describeSignFailure,
   encodeSignInMessage,
   normalizeWalletSignature,
   signFailureNotice,
   signingAccountMatches,
 } from "@/lib/auth/sign-message";
+import { useRouter } from "next/navigation";
 
 type SessionState =
   | { status: "loading" }
@@ -76,6 +83,7 @@ export function WalletControls({
 }
 
 function WalletSession({ compact }: { compact: boolean }): ReactNode {
+  const router = useRouter();
   const { open } = useAppKit();
   const { disconnect } = useDisconnect();
   const { address, isConnected, status } = useAppKitAccount({
@@ -85,49 +93,18 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
-  const refreshSession = useCallback(async () => {
-    const response = await fetch("/api/auth/session", {
-      credentials: "same-origin",
+  useEffect(() => {
+    return subscribeBrowserSession((next) => {
+      if (next.status === "signed-in") {
+        setSession({ status: "signed-in", walletAddress: next.walletAddress });
+        return;
+      }
+      if (next.status === "anonymous") setSession({ status: "anonymous" });
     });
-    if (!response.ok) {
-      setSession({ status: "anonymous" });
-      return;
-    }
-    const body = (await response.json()) as {
-      authenticated?: boolean;
-      walletAddress?: string;
-    };
-    if (body.authenticated && body.walletAddress) {
-      setSession({ status: "signed-in", walletAddress: body.walletAddress });
-      return;
-    }
-    setSession({ status: "anonymous" });
   }, []);
 
   useEffect(() => {
-    let active = true;
-    void (async () => {
-      const response = await fetch("/api/auth/session", {
-        credentials: "same-origin",
-      });
-      if (!active) return;
-      if (!response.ok) {
-        setSession({ status: "anonymous" });
-        return;
-      }
-      const body = (await response.json()) as {
-        authenticated?: boolean;
-        walletAddress?: string;
-      };
-      if (body.authenticated && body.walletAddress) {
-        setSession({ status: "signed-in", walletAddress: body.walletAddress });
-        return;
-      }
-      setSession({ status: "anonymous" });
-    })();
-    return () => {
-      active = false;
-    };
+    void loadBrowserSession();
   }, []);
 
   const signOut = useCallback(async () => {
@@ -135,8 +112,9 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
       method: "POST",
       credentials: "same-origin",
     });
-    setSession({ status: "anonymous" });
-  }, []);
+    noteSignedOut();
+    router.refresh();
+  }, [router]);
 
   const walletObservation = useRef<{
     status: string;
@@ -161,13 +139,9 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
       address !== session.walletAddress;
     if (!leftWallet && !switchedWallet) return;
     void (async () => {
-      await fetch("/api/auth/logout", {
-        method: "POST",
-        credentials: "same-origin",
-      });
-      setSession({ status: "anonymous" });
+      await signOut();
     })();
-  }, [address, session, status]);
+  }, [address, session, signOut, status]);
 
   async function signIn(): Promise<void> {
     const provider = rawSolanaProvider();
@@ -227,7 +201,16 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
         setNotice("The signature was not accepted.");
         return;
       }
-      await refreshSession();
+      const verified = (await verifyResponse.json()) as {
+        authenticated?: boolean;
+        walletAddress?: string;
+      };
+      noteSignedIn(
+        verified.authenticated && verified.walletAddress
+          ? verified.walletAddress
+          : signingAddress,
+      );
+      router.refresh();
     } catch (error) {
       setNotice(signFailureNotice(describeSignFailure(error)));
     } finally {

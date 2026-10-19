@@ -37,7 +37,7 @@ export function Hero(): ReactNode {
         <a
           className="inline-flex min-h-8.5 items-center justify-center gap-2.5 rounded-lg border border-solid border-accent bg-accent px-4 py-2 font-mono text-[11px] leading-[1.4] font-medium tracking-[0.015em] whitespace-nowrap text-accent-foreground uppercase not-italic [transition:background_0.18s,_box-shadow_0.18s,_transform_0.18s] hover:[transform:translateY(-2px)] hover:bg-[color-mix(in_srgb,_var(--accent)_88%,_#111111)] hover:shadow-[0_2px_5px_#00000010] active:[transform:translateY(1px)] max-[561px]:px-3 max-[561px]:text-[10px]"
           data-ui="button button-primary"
-          href="#builder"
+          href="/build"
         >
           Open Builder
         </a>

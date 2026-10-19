@@ -44,9 +44,9 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 
 - Homepage and About explain the product.
 - Dark theme is the default. A control can switch to light, and another can pause motion. System reduced motion still wins.
-- Signed-in Builder requests and tests need `OPENAI_API_KEY`, `HELIUS_RPC_URL`, and the Phase 03 tables. Without those tables the Builder says it is unavailable.
+- The homepage prompt opens `/build` after a verified sign-in. Signed-in Builder requests and tests need `OPENAI_API_KEY`, `HELIUS_RPC_URL`, and the Phase 03 tables. Without those tables the Builder says it is unavailable.
 - A Solana wallet can connect in the header. Sign-in asks that wallet to sign a server-issued message. `/account` shows the server session after verification.
-- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, and the Phase 03 Builder tables. This app does not apply migrations. Until the Phase 03 migration is applied, Builder routes say the Builder is unavailable.
+- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, and the Phase 03 Builder tables. `20261019133000_phase_03c_explicit_save.sql` is already applied and must not be reapplied. `20261019143000_phase_03d_soft_delete.sql` hides a saved SDK from My SDKs without deleting its executions. This app does not apply migrations. Until `deleted_at` exists, Builder routes say the Builder is unavailable.
 
 ## What does not work
 

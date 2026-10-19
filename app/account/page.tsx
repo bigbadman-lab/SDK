@@ -50,8 +50,8 @@ export default async function AccountPage(): Promise<ReactNode> {
             <p className="max-w-130 text-[15px] leading-[1.7] text-muted-foreground">
               This session belongs to the wallet that signed the server
               challenge. Disconnecting or switching wallets ends it. Private
-              drafts can be tested. Launch, royalties, rewards, API keys, and
-              the Feed are not available.
+              drafts stay private until you test one and save a name. Launch,
+              royalties, rewards, API keys, and the Feed are not available.
             </p>
             <DraftList />
           </div>
@@ -60,7 +60,7 @@ export default async function AccountPage(): Promise<ReactNode> {
             <p className="max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
               Connect a Solana wallet, then approve the sign-in in that wallet.
               Connection alone does not create an account. Nothing here can
-              mint a token or move funds. Private drafts belong to a signed-in
+              mint a token or move funds. Saved SDKs belong to a signed-in
               wallet. Launch, royalties, rewards, API keys, and the Feed are
               not available.
             </p>

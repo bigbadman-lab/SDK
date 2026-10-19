@@ -13,6 +13,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const session = await readSession(token);
   if (session.state !== "active" || !token) {
     const response = NextResponse.json({ authenticated: false });
+    response.headers.set("cache-control", "no-store");
     if (session.state === "invalid") {
       response.cookies.set(clearSessionCookie(request));
     }
@@ -22,6 +23,7 @@ export async function GET(request: Request): Promise<NextResponse> {
     authenticated: true,
     walletAddress: session.account.walletAddress,
   });
+  response.headers.set("cache-control", "no-store");
   if (session.refresh) {
     response.cookies.set(
       sessionCookie({ request, token, maxAge: session.maxAge }),

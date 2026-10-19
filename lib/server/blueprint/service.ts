@@ -1,6 +1,6 @@
 import "server-only";
 
-import { compileProposal } from "@/lib/blueprint/compile";
+import { compileProposal, revisionTurns } from "@/lib/blueprint/compile";
 import { runBlueprint } from "@/lib/blueprint/execute";
 import { contentHash } from "@/lib/blueprint/json";
 import {
@@ -14,6 +14,7 @@ import {
   WEBSITE_RUNS_PER_DAY,
   type Blueprint,
 } from "@/lib/blueprint/model";
+import { deleteDecision, isSameSavedIdentity, parseSdkIdentity, saveAllowed } from "@/lib/blueprint/save";
 import { validateBlueprint, validateInputsAgainst } from "@/lib/blueprint/validate";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
@@ -33,20 +34,53 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-
 export async function listDrafts(account: AccountIdentity) {
   return guard(async () => {
     const rows = await getSql()<
-      { id: string; name: string; description: string; revision: number; updated_at: Date }[]
+      {
+        id: string;
+        saved_name: string | null;
+        saved_description: string | null;
+        revision: number;
+        updated_at: Date;
+        saved_hash: string | null;
+        version_id: string | null;
+        tested: boolean;
+      }[]
     >`
-      select id, name, description, revision, updated_at
+      select
+        sdk_drafts.id,
+        sdk_drafts.saved_name,
+        sdk_drafts.saved_description,
+        sdk_drafts.revision,
+        sdk_drafts.updated_at,
+        sdk_drafts.saved_hash,
+        blueprint_versions.id as version_id,
+        exists (
+          select 1
+          from executions
+          where executions.draft_id = sdk_drafts.id
+            and executions.account_id = sdk_drafts.account_id
+            and executions.version_id = blueprint_versions.id
+            and executions.status = 'SUCCESS'
+        ) as tested
       from sdk_drafts
-      where account_id = ${account.id}
-      order by updated_at desc
+      left join blueprint_versions
+        on blueprint_versions.draft_id = sdk_drafts.id
+        and blueprint_versions.content_hash = sdk_drafts.saved_hash
+      where sdk_drafts.account_id = ${account.id}
+        and sdk_drafts.saved_at is not null
+        and sdk_drafts.deleted_at is null
+      order by sdk_drafts.saved_at desc
       limit ${MAX_DRAFTS}
     `;
     return rows.map((row) => ({
       id: row.id,
-      name: row.name,
-      description: row.description,
+      name: row.saved_name ?? "SDK",
+      description: row.saved_description ?? "",
       revision: row.revision,
       updatedAt: row.updated_at.toISOString(),
+      status: "saved_draft" as const,
+      tested: row.tested === true,
+      versionId: row.version_id,
+      contentHash: row.saved_hash,
     }));
   });
 }
@@ -64,11 +98,19 @@ export async function readDraft(account: AccountIdentity, draftId: string) {
       order by created_at asc
       limit 40
     `;
+    const run = await latestExecution(account.id, draftId, draft.content_hash);
     return {
       id: draft.id,
       revision: draft.revision,
+      contentHash: draft.content_hash,
       blueprint: draft.working_blueprint,
       messages,
+      saved: draft.saved_at !== null,
+      savedName: draft.saved_name,
+      savedDescription: draft.saved_description,
+      dirty: draft.saved_hash !== null && draft.saved_hash !== draft.content_hash,
+      tested: saveAllowed(draft.content_hash, run?.status === "SUCCESS" ? draft.content_hash : null),
+      run,
     };
   });
 }
@@ -78,30 +120,36 @@ export async function sendBuilderMessage(input: {
   draftId?: string;
   revision?: number;
   message: string;
+  onStage?: (stage: "understanding" | "constructing" | "validating") => void;
 }) {
   if (input.message.length < 1 || input.message.length > MAX_BUILDER_MESSAGE_CHARS) {
     throw new BlueprintFlowError(400, "message");
   }
   if (input.draftId) assertId(input.draftId);
+  input.onStage?.("understanding");
   await guard(() => reserveCount(input.account.id, "builder_messages", BUILDER_MESSAGES_PER_DAY));
   await guard(() => reserveSpend(input.account.id, OPENAI_RESERVE_USD));
-  const history = input.draftId
-    ? await guard(() => messageHistory(input.account.id, input.draftId ?? ""))
-    : [];
+  const draft = input.draftId
+    ? await guard(() => ownedDraft(input.account.id, input.draftId ?? ""))
+    : null;
+  const history = draft ? await guard(() => messageHistory(input.account.id, draft.id)) : [];
+  const turns = revisionTurns(history, input.message, draft?.working_blueprint ?? null);
   let proposal: unknown;
   try {
-    proposal = await openAiProposal([...history, { role: "user", content: input.message }]);
+    input.onStage?.("constructing");
+    proposal = await openAiProposal(turns);
   } catch (error) {
     throw providerError(error);
   }
+  input.onStage?.("validating");
   let compiled = compileProposal(proposal);
   if (!compiled.ok) {
     console.error(`[blueprint] generated ${compiled.code} ${compiled.path}`.trim());
     await guard(() => reserveSpend(input.account.id, OPENAI_RESERVE_USD));
     try {
+      input.onStage?.("constructing");
       proposal = await openAiProposal([
-        ...history,
-        { role: "user", content: input.message },
+        ...turns,
         { role: "assistant", content: "The previous blueprint was rejected." },
         {
           role: "user",
@@ -111,6 +159,7 @@ export async function sendBuilderMessage(input: {
     } catch (error) {
       throw providerError(error);
     }
+    input.onStage?.("validating");
     compiled = compileProposal(proposal);
   }
   if (!compiled.ok) {
@@ -133,7 +182,130 @@ export async function sendBuilderMessage(input: {
       ...(input.revision !== undefined ? { expectedRevision: input.revision } : {}),
     }),
   );
-  return { ...saved, reply: compiled.reply, blueprint };
+  return {
+    ...saved,
+    reply: compiled.reply,
+    blueprint,
+    contentHash: contentHash(blueprint),
+    saved: saved.saved,
+    tested: false,
+  };
+}
+
+export async function saveNamedDraft(input: {
+  account: AccountIdentity;
+  draftId: string;
+  name: string;
+  description: string;
+}) {
+  assertId(input.draftId);
+  const named = parseSdkIdentity(input.name, input.description);
+  if (!named.ok) throw new BlueprintFlowError(400, named.code);
+  return guard(() =>
+    getSql().begin(async (tx) => {
+      const rows = await tx<
+        {
+          id: string;
+          working_blueprint: Blueprint;
+          content_hash: string;
+          saved_at: Date | null;
+          saved_name: string | null;
+          saved_description: string | null;
+          saved_hash: string | null;
+        }[]
+      >`
+        select id, working_blueprint, content_hash, saved_at, saved_name, saved_description, saved_hash
+        from sdk_drafts
+        where id = ${input.draftId}
+          and account_id = ${input.account.id}
+          and deleted_at is null
+        for update
+      `;
+      const draft = rows[0];
+      if (!draft) throw new BlueprintFlowError(404, "draft_not_found");
+      const validated = validateBlueprint(draft.working_blueprint);
+      if (!validated.ok) throw new BlueprintFlowError(400, "blueprint_invalid");
+      const hash = contentHash(validated.blueprint);
+      if (hash !== draft.content_hash) throw new BlueprintFlowError(400, "blueprint_invalid");
+      if (
+        isSameSavedIdentity(
+          {
+            savedHash: draft.saved_hash,
+            savedName: draft.saved_name,
+            savedDescription: draft.saved_description,
+          },
+          { hash, name: named.name, description: named.description },
+        )
+      ) {
+        return { draftId: draft.id, name: named.name, description: named.description, saved: true };
+      }
+      const success = await tx<{ id: string }[]>`
+        select executions.id
+        from executions
+        join blueprint_versions on blueprint_versions.id = executions.version_id
+        where executions.draft_id = ${draft.id}
+          and executions.account_id = ${input.account.id}
+          and executions.status = 'SUCCESS'
+          and blueprint_versions.content_hash = ${hash}
+        limit 1
+      `;
+      if (!success[0] || !saveAllowed(hash, hash)) throw new BlueprintFlowError(400, "test_required");
+      if (draft.saved_at === null) {
+        const count = await tx<{ count: number }[]>`
+          select count(*)::int as count
+          from sdk_drafts
+          where account_id = ${input.account.id}
+            and saved_at is not null
+            and deleted_at is null
+            and id <> ${draft.id}
+        `;
+        if ((count[0]?.count ?? 0) >= MAX_DRAFTS) throw new BlueprintFlowError(429, "draft_limit");
+      }
+      await tx`
+        update sdk_drafts
+        set saved_at = now(),
+            saved_name = ${named.name},
+            saved_description = ${named.description},
+            saved_hash = ${hash},
+            updated_at = now()
+        where id = ${draft.id} and account_id = ${input.account.id}
+      `;
+      return { draftId: draft.id, name: named.name, description: named.description, saved: true };
+    }),
+  );
+}
+
+export async function deleteSavedDraft(input: { account: AccountIdentity; draftId: string }) {
+  assertId(input.draftId);
+  return guard(() =>
+    getSql().begin(async (tx) => {
+      const rows = await tx<{ id: string; saved_at: Date | null; deleted_at: Date | null }[]>`
+        select id, saved_at, deleted_at
+        from sdk_drafts
+        where id = ${input.draftId} and account_id = ${input.account.id}
+        for update
+      `;
+      const draft = rows[0];
+      const decision = deleteDecision(
+        draft
+          ? { owner: true, saved: draft.saved_at !== null, deleted: draft.deleted_at !== null }
+          : null,
+      );
+      if (decision === "reject") throw new BlueprintFlowError(404, "draft_not_found");
+      if (decision === "already_deleted") return { draftId: input.draftId, deleted: true };
+      const updated = await tx<{ id: string }[]>`
+        update sdk_drafts
+        set deleted_at = now(), updated_at = now()
+        where id = ${input.draftId}
+          and account_id = ${input.account.id}
+          and saved_at is not null
+          and deleted_at is null
+        returning id
+      `;
+      if (!updated[0]) throw new BlueprintFlowError(404, "draft_not_found");
+      return { draftId: updated[0].id, deleted: true };
+    }),
+  );
 }
 
 export async function testDraft(input: {
@@ -178,6 +350,7 @@ export async function testDraft(input: {
     return {
       executionId: reserved.executionId,
       versionId: reserved.versionId,
+      contentHash: hash,
       status: result.status,
       output: result.output ?? null,
       errorCode: result.errorCode ?? null,
@@ -372,16 +545,31 @@ async function saveDraft(input: {
   blueprint: Blueprint;
   userMessage: string;
   assistantMessage: string;
-}): Promise<{ draftId: string; revision: number }> {
+}): Promise<{ draftId: string; revision: number; saved: boolean }> {
   const hash = contentHash(input.blueprint);
   return getSql().begin(async (tx) => {
     let draftId = input.draftId;
     let revision = 1;
+    let saved = false;
     if (!draftId) {
-      const count = await tx<{ count: number }[]>`
-        select count(*)::int as count from sdk_drafts where account_id = ${input.accountId}
+      await tx`
+        delete from sdk_drafts
+        where account_id = ${input.accountId}
+          and saved_at is null
+          and deleted_at is null
+          and updated_at < now() - interval '24 hours'
       `;
-      if ((count[0]?.count ?? 0) >= MAX_DRAFTS) throw new BlueprintFlowError(429, "draft_limit");
+      await tx`
+        delete from sdk_drafts
+        where id in (
+          select id from sdk_drafts
+          where account_id = ${input.accountId}
+            and saved_at is null
+            and deleted_at is null
+          order by updated_at desc
+          offset 4
+        )
+      `;
       const created = await tx<{ id: string }[]>`
         insert into sdk_drafts (account_id, name, description, working_blueprint, content_hash)
         values (
@@ -400,20 +588,21 @@ async function saveDraft(input: {
         values (${draftId}, ${input.accountId})
       `;
     } else {
-      const current = await tx<{ revision: number }[]>`
-        select revision from sdk_drafts
-        where id = ${draftId} and account_id = ${input.accountId}
+      const current = await tx<{ revision: number; saved_at: Date | null }[]>`
+        select revision, saved_at from sdk_drafts
+        where id = ${draftId}
+          and account_id = ${input.accountId}
+          and deleted_at is null
         for update
       `;
       if (!current[0]) throw new BlueprintFlowError(404, "draft_not_found");
       if (input.expectedRevision !== undefined && current[0].revision !== input.expectedRevision) {
         throw new BlueprintFlowError(409, "revision_conflict");
       }
+      saved = current[0].saved_at !== null;
       const updated = await tx<{ revision: number }[]>`
         update sdk_drafts
-        set name = ${input.blueprint.name},
-            description = ${input.blueprint.description},
-            working_blueprint = ${tx.json(jsonValue(input.blueprint))},
+        set working_blueprint = ${tx.json(jsonValue(input.blueprint))},
             content_hash = ${hash},
             revision = revision + 1,
             updated_at = now()
@@ -434,7 +623,7 @@ async function saveDraft(input: {
         (${conversationId}, ${input.accountId}, 'user', ${input.userMessage}, false),
         (${conversationId}, ${input.accountId}, 'assistant', ${input.assistantMessage}, false)
     `;
-    return { draftId, revision };
+    return { draftId, revision, saved };
   });
 }
 
@@ -476,15 +665,73 @@ async function messageHistory(accountId: string, draftId: string) {
 
 async function ownedDraft(accountId: string, draftId: string) {
   const rows = await getSql()<
-    { id: string; revision: number; working_blueprint: Blueprint }[]
+    {
+      id: string;
+      revision: number;
+      content_hash: string;
+      working_blueprint: Blueprint;
+      saved_at: Date | null;
+      saved_name: string | null;
+      saved_description: string | null;
+      saved_hash: string | null;
+    }[]
   >`
-    select id, revision, working_blueprint
+    select id, revision, content_hash, working_blueprint, saved_at, saved_name, saved_description, saved_hash
     from sdk_drafts
-    where id = ${draftId} and account_id = ${accountId}
+    where id = ${draftId}
+      and account_id = ${accountId}
+      and deleted_at is null
   `;
   const draft = rows[0];
   if (!draft) throw new BlueprintFlowError(404, "draft_not_found");
   return draft;
+}
+
+async function latestExecution(accountId: string, draftId: string, hash: string) {
+  const rows = await getSql()<
+    {
+      id: string;
+      status: string;
+      error_code: string | null;
+      output: unknown;
+      started_at: Date;
+      finished_at: Date | null;
+    }[]
+  >`
+    select executions.id, executions.status, executions.error_code, executions.output,
+           executions.started_at, executions.finished_at
+    from executions
+    join blueprint_versions on blueprint_versions.id = executions.version_id
+    where executions.draft_id = ${draftId}
+      and executions.account_id = ${accountId}
+      and blueprint_versions.content_hash = ${hash}
+    order by executions.started_at desc
+    limit 1
+  `;
+  const execution = rows[0];
+  if (!execution) return null;
+  const steps = await getSql()<
+    { step_id: string; status: string; duration_ms: number; error_code: string | null }[]
+  >`
+    select step_id, status, duration_ms, error_code
+    from execution_steps
+    where execution_id = ${execution.id}
+    order by position asc
+  `;
+  const finished = execution.finished_at?.getTime() ?? execution.started_at.getTime();
+  return {
+    executionId: execution.id,
+    status: execution.status,
+    errorCode: execution.error_code,
+    output: execution.output,
+    durationMs: Math.max(0, finished - execution.started_at.getTime()),
+    traces: steps.map((step) => ({
+      stepId: step.step_id,
+      status: step.status,
+      durationMs: step.duration_ms,
+      ...(step.error_code ? { errorCode: step.error_code } : {}),
+    })),
+  };
 }
 
 function assertId(value: string): void {

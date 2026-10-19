@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileProposal } from "./compile.ts";
+import { compileProposal, revisionTurns } from "./compile.ts";
 import { runBlueprint } from "./execute.ts";
 import type { Blueprint } from "./model.ts";
 import { applyTransform } from "./transform.ts";
@@ -22,6 +22,24 @@ const base = (): Blueprint => ({
   outputs: { result: { type: "object", from: { $ref: "steps.draft.result" } } },
   limits: { timeoutMs: 60000, maxOutputBytes: 131072 },
   capabilities: ["ai.generate"],
+});
+
+test("a follow-up request revises the current blueprint", () => {
+  const first = revisionTurns([], "Summarize a wallet.", null);
+  assert.deepEqual(first, [{ role: "user", content: "Summarize a wallet." }]);
+  const followUp = revisionTurns(
+    [
+      { role: "user", content: "Summarize a wallet." },
+      { role: "assistant", content: "Ready." },
+    ],
+    "Add the token symbol.",
+    base(),
+  );
+  assert.equal(followUp.at(-1)?.content, "Add the token symbol.");
+  const attached = followUp.find((turn) => turn.content.startsWith("Current blueprint to revise:"));
+  assert.equal(attached?.role, "user");
+  assert.match(attached?.content ?? "", /Prompt architect/);
+  assert.match(attached?.content ?? "", /inputs\.prompt/);
 });
 
 test("validator accepts a five-step blueprint and rejects a sixth", () => {
@@ -194,6 +212,185 @@ test("the shared engine runs each operation family through injected ports", asyn
       : undefined,
     false,
   );
+});
+
+test("a deep token account is summarized instead of failing the output ceiling", async () => {
+  const now = { value: 0 };
+  const ports = {
+    now: () => now.value,
+    openai: async () => ({ value: { text: "unused" }, inputTokens: 1, outputTokens: 1 }),
+    helius: async (): Promise<unknown> => ({
+      value: {
+        lamports: 1461600,
+        owner: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        executable: false,
+        data: {
+          parsed: {
+            info: {
+              decimals: 6,
+              supply: "1000",
+              extensions: [
+                {
+                  extension: "tokenMetadata",
+                  state: {
+                    name: "SDK",
+                    symbol: "SDK",
+                    uri: "https://example.com/meta.json",
+                    extra: { nested: { deeper: { raw: "x".repeat(200_000) } } },
+                  },
+                },
+              ],
+            },
+            type: "mint",
+          },
+        },
+      },
+    }),
+  };
+  const token = base();
+  token.outputs = { result: { type: "object", from: { $ref: "steps.fetch_token_account.result" } } };
+  token.inputs = { mint: { type: "solanaAddress", required: true } };
+  token.capabilities = ["solana.token"];
+  token.steps = [
+    {
+      id: "fetch_token_account",
+      op: "solana.token",
+      config: { mode: "mint" },
+      args: { mint: { $ref: "inputs.mint" } },
+    },
+  ];
+  const result = await runBlueprint({
+    blueprint: token,
+    values: { mint: "So11111111111111111111111111111111111111112" },
+    ports,
+    startedAt: 0,
+  });
+  assert.equal(result.status, "SUCCESS");
+  const body = result.output?.result;
+  const mint =
+    typeof body === "object" && body !== null && "mint" in body ? body.mint : null;
+  assert.equal(typeof mint === "object" && mint !== null && "symbol" in mint ? mint.symbol : null, "SDK");
+  assert.equal(JSON.stringify(body).includes("extensions"), false);
+  token.steps = [
+    {
+      id: "fetch_token_account",
+      op: "solana.token",
+      config: { mode: "supply" },
+      args: { mint: { $ref: "inputs.mint" } },
+    },
+  ];
+  ports.helius = async () => ({ value: { amount: "9".repeat(200_000), decimals: 6 } });
+  const oversized = await runBlueprint({
+    blueprint: token,
+    values: { mint: "So11111111111111111111111111111111111111112" },
+    ports,
+    startedAt: 0,
+  });
+  assert.equal(oversized.status, "FAILED");
+  assert.equal(oversized.errorCode, "output_too_large");
+});
+
+test("a wallet and mint read that wallet's token balance", async () => {
+  const wallet = "11111111111111111111111111111111";
+  const mint = "So11111111111111111111111111111111111111112";
+  const calls: string[] = [];
+  const ports = {
+    now: () => 0,
+    openai: async () => ({ value: { text: "unused" }, inputTokens: 1, outputTokens: 1 }),
+    helius: async (method: string) => {
+      calls.push(method);
+      if (method === "getTokenAccountsByOwner") {
+        return {
+          value: [
+            {
+              pubkey: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+              account: {
+                data: {
+                  parsed: {
+                    info: {
+                      mint,
+                      owner: wallet,
+                      tokenAmount: { amount: "1500000", decimals: 6, uiAmountString: "1.5" },
+                    },
+                    type: "account",
+                  },
+                },
+              },
+            },
+          ],
+        };
+      }
+      return { value: null };
+    },
+  };
+  const blueprint = base();
+  blueprint.inputs = {
+    token_mint: { type: "solanaAddress", required: true },
+    wallet_address: { type: "solanaAddress", required: true },
+  };
+  blueprint.capabilities = ["solana.token"];
+  blueprint.outputs = { token_balance: { type: "object", from: { $ref: "steps.get_token_balance.result" } } };
+  blueprint.steps = [
+    {
+      id: "get_token_account",
+      op: "solana.token",
+      config: { mode: "mint" },
+      args: { mint: { $ref: "inputs.token_mint" }, address: { $ref: "inputs.wallet_address" } },
+    },
+    {
+      id: "get_token_balance",
+      op: "solana.token",
+      config: { mode: "mint" },
+      args: { mint: { $ref: "steps.get_token_account.result" } },
+    },
+  ];
+  const result = await runBlueprint({
+    blueprint,
+    values: { token_mint: mint, wallet_address: wallet },
+    ports,
+    startedAt: 0,
+  });
+  assert.equal(result.status, "SUCCESS");
+  assert.equal(result.errorCode, undefined);
+  const body = result.output?.token_balance;
+  assert.equal(typeof body === "object" && body !== null && "amount" in body ? body.amount : null, "1500000");
+  assert.equal(typeof body === "object" && body !== null && "uiAmount" in body ? body.uiAmount : null, "1.5");
+  assert.deepEqual(calls, ["getTokenAccountsByOwner", "getTokenAccountsByOwner"]);
+  const compiled = compileProposal({
+    reply: "Balance.",
+    name: "Token balance",
+    description: "Read one wallet balance for one mint.",
+    outputKey: "token_balance",
+    inputs: [
+      { key: "token_mint", type: "solanaAddress", required: true, enumValues: [] },
+      { key: "wallet_address", type: "solanaAddress", required: true, enumValues: [] },
+    ],
+    steps: [
+      {
+        id: "get_token_account",
+        op: "solana.token",
+        mode: "mint",
+        task: "Find the token account.",
+        fields: [],
+        args: [
+          { key: "mint", ref: "inputs.token_mint" },
+          { key: "address", ref: "inputs.wallet_address" },
+        ],
+      },
+      {
+        id: "get_token_balance",
+        op: "solana.token",
+        mode: "balance",
+        task: "Read the balance.",
+        fields: [],
+        args: [{ key: "mint", ref: "steps.get_token_account.result" }],
+      },
+    ],
+  });
+  assert.equal(compiled.ok, true);
+  if (!compiled.ok) return;
+  assert.deepEqual(compiled.blueprint.steps[1]?.args.mint, { $ref: "inputs.token_mint" });
+  assert.deepEqual(compiled.blueprint.steps[1]?.args.address, { $ref: "inputs.wallet_address" });
 });
 
 test("transforms stay local and reject unknown shapes", () => {

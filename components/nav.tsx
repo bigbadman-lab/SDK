@@ -9,7 +9,7 @@ import { WalletButton } from "@/components/wallet/wallet-button";
 
 const LINKS = [
   { label: "Journeys", href: "/#journeys" },
-  { label: "Builder", href: "/#builder" },
+  { label: "Builder", href: "/build" },
   { label: "Scope", href: "/#scope" },
   { label: "About", href: "/about" },
   { label: "Account", href: "/account" },

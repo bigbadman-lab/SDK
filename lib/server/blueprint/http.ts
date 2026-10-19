@@ -4,18 +4,20 @@ import { NextResponse } from "next/server";
 
 import { BlueprintFlowError } from "@/lib/server/blueprint/service";
 
-export function blueprintError(error: unknown): NextResponse {
+export function describeBlueprintError(error: unknown): { status: number; code: string; error: string } {
   if (error instanceof BlueprintFlowError) {
     console.error(`[blueprint] ${error.code}`);
-    return NextResponse.json(
-      { error: publicMessage(error.code), code: error.code },
-      { status: error.status },
-    );
+    return { status: error.status, code: error.code, error: publicMessage(error.code) };
   }
   console.error("[blueprint] unexpected");
+  return { status: 503, code: "unexpected", error: "The Builder is unavailable." };
+}
+
+export function blueprintError(error: unknown): NextResponse {
+  const described = describeBlueprintError(error);
   return NextResponse.json(
-    { error: "The Builder is unavailable.", code: "unexpected" },
-    { status: 503 },
+    { error: described.error, code: described.code },
+    { status: described.status },
   );
 }
 
@@ -44,5 +46,8 @@ function publicMessage(code: string): string {
   if (code === "invalid_reference") return "The blueprint refers to a step or input that is not available.";
   if (code === "unsupported_configuration") return "That step configuration is not supported.";
   if (code === "persistence") return "The draft could not be saved.";
+  if (code === "test_required") return "Test this blueprint successfully before saving it.";
+  if (code === "name") return "Enter a name up to 80 characters.";
+  if (code === "description") return "Enter a description up to 500 characters.";
   return "The blueprint request was not accepted.";
 }

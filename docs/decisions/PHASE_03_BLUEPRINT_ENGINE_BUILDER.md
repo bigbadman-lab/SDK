@@ -83,3 +83,26 @@ After the migration:
 5. Log out.
 
 Do not start Phase 04 from this change.
+
+## Phase 03C — explicit save
+
+Sending a Builder message used to insert an `sdk_drafts` row and list it on the account page. That row is now an unsaved workspace. My SDKs lists only rows with `saved_at`. A name is stored only after a `SUCCESS` execution whose blueprint version hash matches the current workspace. Refining the blueprint changes that hash, so the previous test no longer authorizes Save. Repeating the same save updates the same row.
+
+`20261019133000` is recorded in `supabase_migrations.schema_migrations`. Do not reapply it. Unsaved workspaces older than 24 hours, and all but the four newest unsaved workspaces, are deleted on the next new description. Saved drafts and their executions are not deleted.
+
+## Phase 03D — account actions
+
+A confirmed save navigates to `/account?sdk=<id>&saved=1` and highlights that card. Launch on a saved card keeps the SDK id and tested version id and does not navigate. Delete sets `deleted_at` on that owner’s saved row. Versions and executions stay. A second delete of the same row is a no-op. Another wallet receives the same not-found response as a missing id.
+
+`supabase/migrations/20261019143000_phase_03d_soft_delete.sql` is local only. It was not applied. Review it, then:
+
+```bash
+npx supabase db push --dry-run
+npx supabase db push
+```
+
+Until `deleted_at` exists, Builder queries respond that the Builder is unavailable.
+
+## Phase 03E — dedicated Builder
+
+The homepage keeps the prompt. Send stores that prompt in session storage and opens `/build` with no query string. `/build` reads it once and starts one generation. A second mount during the same handoff waits on that same request. Refresh after generation uses `?draft=` and does not call the model again. Edit and Test from the account page open `/build`.

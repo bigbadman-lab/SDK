@@ -77,6 +77,84 @@ export function compileProposal(
   return { ok: true, reply: clip(value.reply, 2_000, "The draft was updated."), blueprint: validated.blueprint };
 }
 
+export function revisionTurns(
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  message: string,
+  blueprint: Blueprint | null,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  const turns = history.map((item) => ({ role: item.role, content: item.content }));
+  if (blueprint) {
+    turns.push({
+      role: "user",
+      content: `Current blueprint to revise:\n${JSON.stringify(compactDraft(blueprint))}`,
+    });
+  }
+  turns.push({ role: "user", content: message });
+  return turns;
+}
+
+function compactDraft(blueprint: Blueprint): {
+  name: string;
+  description: string;
+  outputKey: string;
+  inputs: Array<{ key: string; type: string; required: boolean; enumValues: string[] }>;
+  steps: Array<{
+    id: string;
+    op: Operation;
+    mode: string;
+    task: string;
+    args: Array<{ key: string; ref: string }>;
+    fields: string[];
+  }>;
+} {
+  return {
+    name: blueprint.name,
+    description: blueprint.description,
+    outputKey: Object.keys(blueprint.outputs)[0] ?? "result",
+    inputs: Object.entries(blueprint.inputs).map(([key, field]) => ({
+      key,
+      type: field.type,
+      required: field.required,
+      enumValues: field.type === "enum" ? field.values : [],
+    })),
+    steps: blueprint.steps.map((step) => ({
+      id: step.id,
+      op: step.op,
+      mode: stepMode(step),
+      task: stepTask(step),
+      args: Object.entries(step.args).map(([key, value]) => ({
+        key,
+        ref: typeof value === "object" ? value.$ref : String(value),
+      })),
+      fields: stepFields(step),
+    })),
+  };
+}
+
+function stepMode(step: Blueprint["steps"][number]): string {
+  if (typeof step.config.mode === "string") return step.config.mode;
+  const action = firstAction(step);
+  return action && typeof action.action === "string" ? action.action : "";
+}
+
+function stepTask(step: Blueprint["steps"][number]): string {
+  return typeof step.config.task === "string" ? step.config.task : "";
+}
+
+function stepFields(step: Blueprint["steps"][number]): string[] {
+  const action = firstAction(step);
+  if (!action || !Array.isArray(action.fields)) return [];
+  return action.fields.filter((field): field is string => typeof field === "string");
+}
+
+function firstAction(step: Blueprint["steps"][number]): { action?: unknown; fields?: unknown } | null {
+  const actions = step.config.actions;
+  if (!Array.isArray(actions)) return null;
+  const action = actions[0];
+  if (!action || typeof action !== "object") return null;
+  return action as { action?: unknown; fields?: unknown };
+}
+
 function normalizeProposal(value: Proposal): {
   name: string;
   description: string;
@@ -139,9 +217,33 @@ function normalizeProposal(value: Proposal): {
     };
   });
 
+  repairTokenBalanceRefs(steps);
+
   const outputSource = value.outputKey.split(".").at(-1) ?? value.outputKey;
   const outputKey = IDENTIFIER.test(snake(outputSource)) ? snake(outputSource) : "result";
   return { name: value.name, description: value.description, outputKey, inputs, steps };
+}
+
+function repairTokenBalanceRefs(
+  steps: Array<{ id: string; op: Operation; args: Blueprint["steps"][number]["args"] }>,
+): void {
+  const byId = new Map(steps.map((step) => [step.id, step]));
+  for (const step of steps) {
+    if (step.op !== "solana.token" && step.op !== "solana.account") continue;
+    const mint = step.args.mint;
+    if (mint === undefined || !isRefValue(mint)) continue;
+    const sourceId = /^steps\.([a-z][a-z0-9_]{0,40})\.result$/.exec(mint.$ref)?.[1];
+    if (!sourceId) continue;
+    const source = byId.get(sourceId);
+    const sourceMint = source?.args.mint;
+    if (!source || sourceMint === undefined || !isRefValue(sourceMint)) continue;
+    if (!/^inputs\.[a-z][a-z0-9_]{0,40}$/.test(sourceMint.$ref)) continue;
+    step.args.mint = { $ref: sourceMint.$ref };
+    const sourceAddress = source.args.address;
+    if (!Object.hasOwn(step.args, "address") && sourceAddress !== undefined && isRefValue(sourceAddress)) {
+      step.args.address = { $ref: sourceAddress.$ref };
+    }
+  }
 }
 
 function alignArgs(op: Operation, mode: string, args: Blueprint["steps"][number]["args"]): void {

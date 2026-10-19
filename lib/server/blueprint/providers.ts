@@ -100,7 +100,7 @@ export async function openAiProposal(history: Array<{ role: "user" | "assistant"
         {
           role: "system",
           content:
-            "Design one private SDK Blueprint using only ai.generate, ai.analyze, solana.account, solana.transactions, solana.token, and data.transform. Use at most 5 steps. Ids, input keys, output keys, argument keys, and fields are lowercase snake_case. References are inputs.<key> or steps.<earlier_id>.result. Solana account arguments use the key address, token arguments use mint, and transform arguments use data. If the request needs trading, secrets, loops, or a seventh operation, explain that in reply and still return the closest valid read-only Blueprint. Never ask for or include API keys.",
+            "Design one private SDK Blueprint using only ai.generate, ai.analyze, solana.account, solana.transactions, solana.token, and data.transform. Use at most 5 steps. Ids, input keys, output keys, argument keys, and fields are lowercase snake_case. References are inputs.<key> or steps.<earlier_id>.result. Solana account arguments use the key address, token arguments use mint, and transform arguments use data. A wallet's balance of one token passes that wallet as address and the mint as mint on the same step. Do not pass a previous step's whole result as a mint. When a current blueprint is included, revise that blueprint and keep every input and step the request does not change. If the request needs trading, secrets, loops, or a seventh operation, explain that in reply and still return the closest valid read-only Blueprint. Never ask for or include API keys.",
         },
         ...history.map((message) => ({ role: message.role, content: message.content.slice(0, 8_000) })),
       ],

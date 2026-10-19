@@ -4,7 +4,7 @@ const LIVE = [
   "This website explains the product in a dark-first layout.",
   "Theme and motion preferences stay in this browser.",
   "A Solana wallet can connect, then sign in with a server-verified signature.",
-  "A signed-in wallet can describe a private SDK. A test uses the shared engine and is not a launch.",
+  "A signed-in wallet can describe an SDK on the homepage, then test it in the Builder. It is listed only after a name is saved, and a test is not a launch.",
 ] as const;
 
 const LATER = [

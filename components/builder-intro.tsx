@@ -2,7 +2,7 @@
 
 import { ArrowUpRight, FlaskConical, Rocket, SquarePen } from "lucide-react";
 import type { ReactNode } from "react";
-import { BuilderPanel } from "@/components/builder/panel";
+import { HomePrompt } from "@/components/builder/home-prompt";
 import { LandscapeCanvas } from "@/components/landscape-canvas";
 import { softEase, useReducedMotion } from "@/lib/motion";
 import { motion } from "motion/react";
@@ -18,7 +18,7 @@ const NOTES = [
   {
     Icon: FlaskConical,
     title: "Test",
-    text: "Test SDK runs the saved draft on the shared engine. The result stays private.",
+    text: "Test SDK runs the current blueprint on the shared engine. The result stays private.",
     href: "#scope",
     label: "See current scope",
   },
@@ -40,17 +40,14 @@ export function BuilderIntro(): ReactNode {
       className="mx-auto w-[min(1100px,_calc(100%_-_48px))] scroll-mt-23 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]"
       aria-labelledby="builder-title"
     >
-      <div className="relative isolate h-150 overflow-hidden bg-scene max-[800px]:h-137 max-[561px]:h-125">
+      <div className="relative isolate overflow-hidden bg-scene px-6 pt-8 pb-36 max-[561px]:px-4 max-[561px]:pt-6 max-[561px]:pb-24">
         <LandscapeCanvas />
-        <div className="absolute top-4 bottom-10 left-1/2 w-[min(664px,_calc(100%_-_48px))] overflow-hidden [transform:translateX(-50%)] rounded-[14px] border border-solid border-[color-mix(in_srgb,_var(--foreground)_30%,_var(--border))] bg-card px-5 pt-5 pb-4 shadow-[0_2px_8px_#00000020] max-[561px]:top-3 max-[561px]:w-[calc(100%_-_32px)] max-[561px]:rounded-[10px] max-[561px]:px-3.5 max-[561px]:pt-4">
+        <div className="relative z-10 mx-auto w-[min(720px,100%)]">
           <h2 id="builder-title" className="sr-only">
             Builder
           </h2>
-          <BuilderPanel />
+          <HomePrompt />
         </div>
-        <span className="absolute right-0 bottom-5 left-0 text-center font-mono text-[9px] tracking-[0.06em] text-[#ffffff] [text-shadow:0_1px_3px_#000] max-[561px]:bottom-4.5 max-[561px]:text-[7px]">
-          A TEST IS NOT A LAUNCH.
-        </span>
       </div>
       <div className="grid grid-cols-3 border border-t-0 border-solid border-border max-[561px]:grid-cols-1">
         {NOTES.map(({ Icon, title, text, href, label }, index) => (

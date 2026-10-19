@@ -1,4 +1,5 @@
 import { canonicalAddress } from "../auth/solana.ts";
+import { PublicKey } from "@solana/web3.js";
 import { exceedsDepth, withinOutputLimit } from "./json.ts";
 import {
   MAX_HELIUS_REQUESTS,
@@ -181,6 +182,8 @@ async function runSolana(
   if (op === "solana.account") {
     const address = addressOf(args.address);
     if (config.mode === "balances") {
+      const mint = canonicalAddress(typeof args.mint === "string" ? args.mint : "");
+      if (mint) return readTokenBalance(address, mint, ports, count);
       count();
       const balance = await ports.helius("getBalance", [address]);
       count();
@@ -216,6 +219,8 @@ async function runSolana(
       truncated: rows.length >= limit,
     });
   }
+  const balance = tokenBalanceArgs(args);
+  if (balance) return readTokenBalance(balance.wallet, balance.mint, ports, count);
   const mint = addressOf(args.mint);
   if (config.mode === "supply") {
     count();
@@ -300,6 +305,125 @@ function clip(value: unknown): unknown {
   return { truncated: true, preview: text.slice(0, 4_000) };
 }
 
+const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
+const SPL_TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
+
+async function readTokenBalance(
+  wallet: string,
+  mint: string,
+  ports: EnginePorts,
+  count: () => void,
+): Promise<Record<string, unknown>> {
+  count();
+  const listed = await ports.helius("getTokenAccountsByOwner", [wallet, { mint }, { encoding: "jsonParsed" }]);
+  let accounts = parseTokenAccounts(listed);
+  let complete = true;
+  if (accounts.length === 0) {
+    complete = false;
+    for (const program of [TOKEN_2022, SPL_TOKEN]) {
+      count();
+      const ata = associatedTokenAddress(wallet, mint, program);
+      const info = await ports.helius("getAccountInfo", [ata, { encoding: "jsonParsed" }]);
+      const parsed = parseTokenAccount({ pubkey: ata, account: rpcValue(info) });
+      if (parsed) {
+        accounts = [parsed];
+        break;
+      }
+    }
+  }
+  const sample = accounts.slice(0, 20);
+  const decimals = sample.find((item) => item.decimals !== null)?.decimals ?? null;
+  const total = sample.reduce((sum, item) => sum + rawAmount(item.amount), BigInt(0));
+  const formatted = formatAmount(total, decimals);
+  return {
+    wallet,
+    mint,
+    found: sample.length > 0,
+    amount: formatted.amount,
+    decimals,
+    uiAmount: formatted.uiAmount ?? (total === BigInt(0) ? "0" : null),
+    accounts: sample,
+    coverage: {
+      source: "getTokenAccountsByOwner",
+      sampleSize: sample.length,
+      truncated: accounts.length > 20,
+      complete: complete && accounts.length <= 20,
+    },
+  };
+}
+
+function tokenBalanceArgs(args: Record<string, unknown>): { wallet: string; mint: string } | null {
+  const wallet = firstAddress(args.address, args.wallet, nestedAddress(args.mint, "wallet"), nestedAddress(args.mint, "address"));
+  const mint = firstAddress(typeof args.mint === "string" ? args.mint : undefined, nestedAddress(args.mint, "mint"));
+  if (!wallet || !mint || wallet === mint) return null;
+  return { wallet, mint };
+}
+
+function firstAddress(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const address = canonicalAddress(value);
+    if (address) return address;
+  }
+  return null;
+}
+
+function nestedAddress(value: unknown, key: string): unknown {
+  if (!record(value)) return undefined;
+  if (Object.hasOwn(value, key)) return value[key];
+  if (record(value.mint) && Object.hasOwn(value.mint, key)) return value.mint[key];
+  return undefined;
+}
+
+function parseTokenAccounts(value: unknown): Array<{ pubkey: string | null; amount: string; decimals: number | null; uiAmount: string | null }> {
+  const result = rpcValue(value);
+  const rows = Array.isArray(result) ? result : [];
+  return rows.flatMap((item) => {
+    const parsed = parseTokenAccount(item);
+    return parsed ? [parsed] : [];
+  });
+}
+
+function parseTokenAccount(value: unknown): { pubkey: string | null; amount: string; decimals: number | null; uiAmount: string | null } | null {
+  if (!record(value)) return null;
+  const account = record(value.account) ? value.account : value;
+  const summary = summarizeAccount(account);
+  if (!record(summary) || typeof summary.amount !== "string") return null;
+  return {
+    pubkey: text(value.pubkey),
+    amount: summary.amount,
+    decimals: typeof summary.decimals === "number" ? summary.decimals : null,
+    uiAmount: typeof summary.uiAmount === "string" ? summary.uiAmount : null,
+  };
+}
+
+function rawAmount(value: string): bigint {
+  return /^\d+$/.test(value) ? BigInt(value) : BigInt(0);
+}
+
+function formatAmount(raw: bigint, decimals: number | null): { amount: string; uiAmount: string | null } {
+  const amount = raw.toString();
+  if (decimals === null || !Number.isInteger(decimals) || decimals < 0 || decimals > 18) {
+    return { amount, uiAmount: null };
+  }
+  const negative = raw < BigInt(0);
+  const value = negative ? -raw : raw;
+  const digits = value.toString().padStart(decimals + 1, "0");
+  const whole = digits.slice(0, digits.length - decimals);
+  const fraction = digits.slice(digits.length - decimals).replace(/0+$/, "");
+  const rendered = fraction.length > 0 ? `${whole}.${fraction}` : whole;
+  return { amount, uiAmount: negative ? `-${rendered}` : rendered };
+}
+
+function associatedTokenAddress(owner: string, mint: string, program: PublicKey): string {
+  const [address] = PublicKey.findProgramAddressSync(
+    [new PublicKey(owner).toBuffer(), program.toBuffer(), new PublicKey(mint).toBuffer()],
+    ATA_PROGRAM,
+  );
+  return address.toBase58();
+}
+
 function addressOf(value: unknown): string {
   if (typeof value !== "string") throw new RunFailure("address");
   const address = canonicalAddress(value);
@@ -323,12 +447,44 @@ function rpcValue(value: unknown): unknown {
 function summarizeAccount(value: unknown): unknown {
   const account = rpcValue(value);
   if (!record(account)) return null;
+  const parsed = record(account.data) ? account.data.parsed : null;
+  const info = record(parsed) && record(parsed.info) ? parsed.info : null;
+  const amount = info && record(info.tokenAmount) ? info.tokenAmount : null;
+  const metadata = tokenMetadata(info);
   return {
-    lamports: account.lamports ?? null,
-    owner: account.owner ?? null,
-    executable: account.executable ?? null,
-    data: record(account.data) ? { parsed: account.data.parsed ?? null } : null,
+    lamports: typeof account.lamports === "number" ? account.lamports : null,
+    owner: text(account.owner),
+    executable: typeof account.executable === "boolean" ? account.executable : null,
+    type: record(parsed) ? text(parsed.type) : null,
+    decimals: finiteNumber(info?.decimals ?? amount?.decimals),
+    supply: text(info?.supply),
+    amount: text(amount?.amount),
+    uiAmount: text(amount?.uiAmountString),
+    mint: text(info?.mint),
+    tokenOwner: text(info?.owner),
+    state: text(info?.state),
+    name: metadata.name,
+    symbol: metadata.symbol,
   };
+}
+
+function tokenMetadata(info: Record<string, unknown> | null): { name: string | null; symbol: string | null } {
+  const extensions = info && Array.isArray(info.extensions) ? info.extensions : [];
+  for (const extension of extensions) {
+    if (!record(extension) || !record(extension.state)) continue;
+    const name = text(extension.state.name);
+    const symbol = text(extension.state.symbol);
+    if (name || symbol) return { name, symbol };
+  }
+  return { name: null, symbol: null };
+}
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value.slice(0, 200) : null;
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function summarizeSignature(value: unknown): unknown {
