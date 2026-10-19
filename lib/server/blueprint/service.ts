@@ -99,12 +99,14 @@ export async function readDraft(account: AccountIdentity, draftId: string) {
       limit 40
     `;
     const run = await latestExecution(account.id, draftId, draft.content_hash);
+    const source = await draftSource(account.id, draft.id);
     return {
       id: draft.id,
       revision: draft.revision,
       contentHash: draft.content_hash,
       blueprint: draft.working_blueprint,
       messages,
+      source,
       saved: draft.saved_at !== null,
       savedName: draft.saved_name,
       savedDescription: draft.saved_description,
@@ -425,6 +427,91 @@ async function reserveSpend(accountId: string, amount: number): Promise<void> {
   if (!account[0]) throw new BlueprintFlowError(429, "spend_limit");
 }
 
+export async function beginLibraryExecution(input: {
+  accountId: string;
+  libraryVersionId: string;
+  aiSteps: number;
+}): Promise<{ executionId: string }> {
+  if (input.aiSteps > 0) {
+    await guard(() => reserveSpend(input.accountId, input.aiSteps * OPENAI_RESERVE_USD));
+  }
+  return guard(() => reserveLibraryRun(input.accountId, input.libraryVersionId));
+}
+
+export async function finishLibraryExecution(
+  executionId: string,
+  result: {
+    status: string;
+    errorCode?: string;
+    output?: unknown;
+    traces: Array<{
+      stepId: string;
+      status: string;
+      durationMs: number;
+      providerRequests: number;
+      errorCode?: string;
+    }>;
+    durationMs: number;
+    openaiRequests: number;
+    heliusRequests: number;
+    inputTokens: number;
+    outputTokens: number;
+  },
+): Promise<void> {
+  await guard(() => completeRun(executionId, result));
+}
+
+async function reserveLibraryRun(
+  accountId: string,
+  libraryVersionId: string,
+): Promise<{ executionId: string }> {
+  return getSql().begin(async (tx) => {
+    const day = utcDay();
+    await tx`
+      insert into usage_daily (account_id, day)
+      values (${accountId}, ${day})
+      on conflict (account_id, day) do nothing
+    `;
+    const usage = await tx<{ website_runs: number }[]>`
+      select website_runs
+      from usage_daily
+      where account_id = ${accountId} and day = ${day}
+      for update
+    `;
+    if ((usage[0]?.website_runs ?? 0) >= WEBSITE_RUNS_PER_DAY) {
+      throw new BlueprintFlowError(429, "quota");
+    }
+    await tx`
+      update executions
+      set status = 'TIMEOUT', error_code = 'timeout', finished_at = now()
+      where account_id = ${accountId}
+        and status = 'RUNNING'
+        and started_at < now() - interval '70 seconds'
+    `;
+    const running = await tx<{ count: number }[]>`
+      select count(*)::int as count
+      from executions
+      where account_id = ${accountId} and status = 'RUNNING'
+    `;
+    if ((running[0]?.count ?? 0) >= MAX_CONCURRENT_RUNS) {
+      throw new BlueprintFlowError(429, "concurrency");
+    }
+    const executions = await tx<{ id: string }[]>`
+      insert into executions (account_id, library_version_id, status)
+      values (${accountId}, ${libraryVersionId}, 'RUNNING')
+      returning id
+    `;
+    await tx`
+      update usage_daily
+      set website_runs = website_runs + 1
+      where account_id = ${accountId} and day = ${day}
+    `;
+    const executionId = executions[0]?.id;
+    if (!executionId) throw new BlueprintFlowError(503, "execution_unavailable");
+    return { executionId };
+  });
+}
+
 async function reserveRun(input: {
   accountId: string;
   draftId: string;
@@ -661,6 +748,32 @@ async function messageHistory(accountId: string, draftId: string) {
     limit 20
   `;
   return rows;
+}
+
+async function draftSource(accountId: string, draftId: string) {
+  try {
+    const rows = await getSql()<
+      {
+        source_sdk_id: string | null;
+        source_version_id: string | null;
+        originator_label: string | null;
+      }[]
+    >`
+      select source_sdk_id, source_version_id, originator_label
+      from sdk_drafts
+      where id = ${draftId} and account_id = ${accountId} and deleted_at is null
+    `;
+    const row = rows[0];
+    if (!row?.source_sdk_id || !row.source_version_id || !row.originator_label) return null;
+    return {
+      sdkId: row.source_sdk_id,
+      versionId: row.source_version_id,
+      originatorLabel: row.originator_label,
+    };
+  } catch (error) {
+    if (databaseFailure(error) === "missing_schema") return null;
+    throw error;
+  }
 }
 
 async function ownedDraft(accountId: string, draftId: string) {

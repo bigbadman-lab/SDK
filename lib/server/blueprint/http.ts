@@ -29,6 +29,11 @@ function publicMessage(code: string): string {
     return "This draft changed in another request. Reload it and try again.";
   }
   if (code === "draft_not_found") return "That draft is not available.";
+  if (code === "library_not_found") return "That SDK is not in the Library.";
+  if (code === "lineage") return "This remix could not keep its source attribution.";
+  if (code === "review_required") return "A community SDK is listed only after review.";
+  if (code === "official_changed") return "This official SDK already has a different published version.";
+  if (code === "official_id") return "An official SDK with this name is already listed under another id.";
   if (code === "schema_missing" || code === "provider_unconfigured" || code === "database_unavailable") {
     return "The Builder is unavailable.";
   }

@@ -16,6 +16,11 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.8,
     },
     {
+      url: new URL("/library", siteConfig.url).toString(),
+      changeFrequency: "weekly",
+      priority: 0.8,
+    },
+    {
       url: new URL("/account", siteConfig.url).toString(),
       changeFrequency: "monthly",
       priority: 0.5,

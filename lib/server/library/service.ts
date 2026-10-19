@@ -1,0 +1,588 @@
+import "server-only";
+
+import { contentHash } from "@/lib/blueprint/json";
+import type { Blueprint } from "@/lib/blueprint/model";
+import { parseSdkIdentity } from "@/lib/blueprint/save";
+import { validateBlueprint, validateInputsAgainst } from "@/lib/blueprint/validate";
+import { runBlueprint } from "@/lib/blueprint/execute";
+import {
+  ilikePattern,
+  isPublicId,
+  libraryQuery,
+  nextLibraryVersion,
+  originAllowsName,
+  publicInputs,
+  publicOutputs,
+  remixCopy,
+  type LibraryOrigin,
+  type LibraryQuery,
+} from "@/lib/library/library";
+import { OFFICIAL_ORIGINATOR_LABEL, OFFICIAL_SDKS, officialSeedPlan } from "@/lib/library/official";
+import type { AccountIdentity } from "@/lib/server/auth";
+import {
+  beginLibraryExecution,
+  BlueprintFlowError,
+  finishLibraryExecution,
+} from "@/lib/server/blueprint/service";
+import { heliusRpc, openAiStructured } from "@/lib/server/blueprint/providers";
+import { databaseFailure, getSql } from "@/lib/server/db";
+
+export type LibraryCard = {
+  id: string;
+  name: string;
+  description: string;
+  origin: LibraryOrigin;
+  originatorLabel: string;
+  versionId: string;
+  versionNumber: number;
+  contentHash: string;
+  capabilities: string[];
+};
+
+export type LibraryDetail = LibraryCard & {
+  inputs: ReturnType<typeof publicInputs>;
+  steps: Array<{ id: string; op: string }>;
+  outputs: ReturnType<typeof publicOutputs>;
+  versions: Array<{ id: string; versionNumber: number; contentHash: string }>;
+  blueprint: Blueprint;
+};
+
+type StoredVersion = {
+  sdk_id: string;
+  origin: LibraryOrigin;
+  originator_account_id: string | null;
+  originator_label: string;
+  name: string;
+  description: string;
+  version_id: string;
+  version_number: number;
+  content_hash: string;
+  blueprint: Blueprint;
+};
+
+export async function listPublished(input: {
+  q?: string | null;
+  origin?: string | null;
+  page?: string | null;
+}): Promise<{ query: LibraryQuery; listings: LibraryCard[]; nextPage: number | null }> {
+  const query = libraryQuery(input);
+  const pattern = ilikePattern(query.q);
+  const rows = await guard(() =>
+    getSql()<
+      {
+        id: string;
+        name: string;
+        description: string;
+        origin: LibraryOrigin;
+        originator_label: string;
+        version_id: string;
+        version_number: number;
+        content_hash: string;
+        capabilities: unknown;
+      }[]
+    >`
+      select
+        library_sdks.id,
+        library_sdks.name,
+        library_sdks.description,
+        library_sdks.origin,
+        library_sdks.originator_label,
+        library_versions.id as version_id,
+        library_versions.version_number,
+        library_versions.content_hash,
+        library_versions.blueprint -> 'capabilities' as capabilities
+      from library_sdks
+      join library_versions on library_versions.id = library_sdks.current_version_id
+      where library_sdks.status = 'published'
+        and (${query.origin}::text is null or library_sdks.origin = ${query.origin})
+        and (
+          ${pattern}::text is null
+          or library_sdks.name ilike ${pattern} escape '\\'
+          or library_sdks.description ilike ${pattern} escape '\\'
+        )
+      order by library_sdks.updated_at desc, library_sdks.id desc
+      limit ${query.limit + 1}
+      offset ${query.offset}
+    `,
+  );
+  const page = rows.slice(0, query.limit).map(cardFromRow);
+  return {
+    query,
+    listings: page,
+    nextPage: rows.length > query.limit ? query.page + 1 : null,
+  };
+}
+
+export async function readPublished(sdkId: string, versionId?: string | null): Promise<LibraryDetail> {
+  if (!isPublicId(sdkId)) throw new BlueprintFlowError(404, "library_not_found");
+  if (versionId && !isPublicId(versionId)) throw new BlueprintFlowError(404, "library_not_found");
+  const version = await guard(() => loadVersion(sdkId, versionId ?? null));
+  const versions = await guard(() => listVersionSummaries(sdkId));
+  return detailFrom(version, versions);
+}
+
+export async function testPublishedSdk(input: {
+  account: AccountIdentity;
+  sdkId: string;
+  versionId?: string | null;
+  values: unknown;
+}) {
+  const version = await publishedVersion(input.sdkId, input.versionId ?? null);
+  const validated = validateBlueprint(version.blueprint);
+  if (!validated.ok) throw new BlueprintFlowError(400, "blueprint_invalid");
+  const hash = contentHash(validated.blueprint);
+  if (hash !== version.content_hash) throw new BlueprintFlowError(400, "blueprint_invalid");
+  const inputs = validateInputsAgainst(validated.blueprint, input.values);
+  if (!inputs.ok) throw new BlueprintFlowError(400, inputs.issues[0]?.code ?? "inputs");
+  const aiSteps = validated.blueprint.steps.filter(
+    (step) => step.op === "ai.generate" || step.op === "ai.analyze",
+  ).length;
+  const reserved = await beginLibraryExecution({
+    accountId: input.account.id,
+    libraryVersionId: version.version_id,
+    aiSteps,
+  });
+  const started = Date.now();
+  try {
+    const result = await runBlueprint({
+      blueprint: validated.blueprint,
+      values: inputs.values,
+      startedAt: started,
+      ports: { now: () => Date.now(), openai: openAiStructured, helius: heliusRpc },
+    });
+    await finishLibraryExecution(reserved.executionId, result);
+    return {
+      executionId: reserved.executionId,
+      versionId: version.version_id,
+      contentHash: hash,
+      status: result.status,
+      output: result.output ?? null,
+      errorCode: result.errorCode ?? null,
+      durationMs: result.durationMs,
+      traces: result.traces,
+    };
+  } catch (error) {
+    const code = error instanceof BlueprintFlowError ? error.code : "provider";
+    await finishLibraryExecution(reserved.executionId, {
+      status: code === "timeout" ? "TIMEOUT" : "FAILED",
+      errorCode: code,
+      traces: [],
+      durationMs: Date.now() - started,
+      openaiRequests: 0,
+      heliusRequests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    if (error instanceof BlueprintFlowError) throw error;
+    throw new BlueprintFlowError(503, "provider");
+  }
+}
+
+export async function remixPublishedSdk(input: {
+  account: AccountIdentity;
+  sdkId: string;
+  versionId?: string | null;
+}) {
+  const version = await publishedVersion(input.sdkId, input.versionId ?? null);
+  const validated = validateBlueprint(version.blueprint);
+  if (!validated.ok) throw new BlueprintFlowError(400, "blueprint_invalid");
+  const hash = contentHash(validated.blueprint);
+  const copy = remixCopy({
+    remixerAccountId: input.account.id,
+    source: {
+      sdkId: version.sdk_id,
+      versionId: version.version_id,
+      contentHash: version.content_hash,
+      blueprintHash: hash,
+      originatorAccountId: version.originator_account_id,
+      originatorLabel: version.originator_label,
+    },
+  });
+  if (!copy.ok) throw new BlueprintFlowError(400, copy.code);
+  const blueprint = validated.blueprint;
+  const created = await guard(() =>
+    getSql().begin(async (tx) => {
+      const drafts = await tx<{ id: string }[]>`
+        insert into sdk_drafts (
+          account_id,
+          name,
+          description,
+          working_blueprint,
+          content_hash,
+          source_sdk_id,
+          source_version_id,
+          originator_account_id,
+          originator_label
+        )
+        values (
+          ${input.account.id},
+          ${blueprint.name},
+          ${blueprint.description},
+          ${tx.json(jsonValue(blueprint))},
+          ${copy.contentHash},
+          ${copy.sourceSdkId},
+          ${copy.sourceVersionId},
+          ${copy.originatorAccountId},
+          ${copy.originatorLabel}
+        )
+        returning id
+      `;
+      const draftId = drafts[0]?.id;
+      if (!draftId) throw new BlueprintFlowError(503, "draft_unavailable");
+      await tx`
+        insert into builder_conversations (draft_id, account_id)
+        values (${draftId}, ${input.account.id})
+      `;
+      const conversation = await tx<{ id: string }[]>`
+        select id from builder_conversations
+        where draft_id = ${draftId} and account_id = ${input.account.id}
+      `;
+      const conversationId = conversation[0]?.id;
+      if (!conversationId) throw new BlueprintFlowError(503, "conversation_unavailable");
+      await tx`
+        insert into builder_messages (conversation_id, account_id, role, content, failed)
+        values (
+          ${conversationId},
+          ${input.account.id},
+          'assistant',
+          ${`Remixed from ${blueprint.name}. The published source stays unchanged.`},
+          false
+        )
+      `;
+      return draftId;
+    }),
+  );
+  return {
+    draftId: created,
+    saved: false as const,
+    published: false as const,
+    sourceSdkId: copy.sourceSdkId,
+    sourceVersionId: copy.sourceVersionId,
+    originatorLabel: copy.originatorLabel,
+  };
+}
+
+export async function publishLibraryVersion(input: {
+  origin: LibraryOrigin;
+  name: string;
+  description: string;
+  blueprint: unknown;
+  originatorLabel: string;
+  originatorAccountId?: string | null;
+  creatorAccountId?: string | null;
+  parentSdkId?: string | null;
+  sdkId?: string | null;
+  listingId?: string | null;
+  reviewed?: boolean;
+}): Promise<{ sdkId: string; versionId: string; versionNumber: number; contentHash: string; created: boolean }> {
+  const named = parseSdkIdentity(input.name, input.description);
+  if (!named.ok) throw new BlueprintFlowError(400, named.code);
+  if (!originAllowsName(input.origin, named.name)) throw new BlueprintFlowError(400, "name");
+  if (input.origin === "community" && input.reviewed !== true) {
+    throw new BlueprintFlowError(400, "review_required");
+  }
+  const label = input.originatorLabel.trim();
+  if (label.length < 1 || label.length > 80) throw new BlueprintFlowError(400, "name");
+  const validated = validateBlueprint(input.blueprint);
+  if (!validated.ok) throw new BlueprintFlowError(400, "blueprint_invalid");
+  const hash = contentHash(validated.blueprint);
+  return guard(() =>
+    getSql().begin(async (tx) => {
+      let sdkId = input.sdkId ?? null;
+      if (sdkId) {
+        if (!isPublicId(sdkId)) throw new BlueprintFlowError(404, "library_not_found");
+        const existing = await tx<{ id: string; origin: LibraryOrigin }[]>`
+          select id, origin from library_sdks where id = ${sdkId} for update
+        `;
+        const listing = existing[0];
+        if (!listing || listing.origin !== input.origin) throw new BlueprintFlowError(404, "library_not_found");
+      }
+      const versions = sdkId
+        ? await tx<{ version_number: number; content_hash: string; id: string }[]>`
+            select id, version_number, content_hash
+            from library_versions
+            where sdk_id = ${sdkId}
+            order by version_number asc
+          `
+        : [];
+      const decision = nextLibraryVersion({
+        validated: true,
+        hash,
+        versions: versions.map((version) => ({
+          versionNumber: version.version_number,
+          contentHash: version.content_hash,
+        })),
+      });
+      if (decision.action === "reject") throw new BlueprintFlowError(400, "blueprint_invalid");
+      if (decision.action === "reuse") {
+        const current = versions.find((version) => version.content_hash === hash);
+        if (!current) throw new BlueprintFlowError(503, "version_unavailable");
+        return {
+          sdkId: sdkId ?? "",
+          versionId: current.id,
+          versionNumber: current.version_number,
+          contentHash: hash,
+          created: false,
+        };
+      }
+      if (!sdkId) {
+        const listingId = input.listingId ?? null;
+        if (listingId && !isPublicId(listingId)) throw new BlueprintFlowError(400, "blueprint_invalid");
+        const createdSdk = listingId
+          ? await tx<{ id: string }[]>`
+              insert into library_sdks (
+                id, origin, status, creator_account_id, originator_account_id, originator_label,
+                parent_sdk_id, name, description
+              )
+              values (
+                ${listingId},
+                ${input.origin},
+                'published',
+                ${input.creatorAccountId ?? null},
+                ${input.originatorAccountId ?? null},
+                ${label},
+                ${input.parentSdkId ?? null},
+                ${named.name},
+                ${named.description}
+              )
+              returning id
+            `
+          : await tx<{ id: string }[]>`
+              insert into library_sdks (
+                origin, status, creator_account_id, originator_account_id, originator_label,
+                parent_sdk_id, name, description
+              )
+              values (
+                ${input.origin},
+                'published',
+                ${input.creatorAccountId ?? null},
+                ${input.originatorAccountId ?? null},
+                ${label},
+                ${input.parentSdkId ?? null},
+                ${named.name},
+                ${named.description}
+              )
+              returning id
+            `;
+        sdkId = createdSdk[0]?.id ?? null;
+        if (!sdkId) throw new BlueprintFlowError(503, "draft_unavailable");
+      }
+      const createdVersion = await tx<{ id: string }[]>`
+        insert into library_versions (sdk_id, version_number, content_hash, blueprint)
+        values (${sdkId}, ${decision.versionNumber}, ${hash}, ${tx.json(jsonValue(validated.blueprint))})
+        returning id
+      `;
+      const versionId = createdVersion[0]?.id;
+      if (!versionId) throw new BlueprintFlowError(503, "version_unavailable");
+      await tx`
+        update library_sdks
+        set current_version_id = ${versionId},
+            name = ${named.name},
+            description = ${named.description},
+            updated_at = now()
+        where id = ${sdkId}
+      `;
+      return { sdkId, versionId, versionNumber: decision.versionNumber, contentHash: hash, created: true };
+    }),
+  );
+}
+
+export async function seedOfficialSdks(account: AccountIdentity): Promise<{
+  listings: Array<{
+    name: string;
+    id: string;
+    action: "create" | "reuse" | "attach" | "reject";
+    code: string | null;
+    versionId: string | null;
+    versionNumber: number | null;
+    contentHash: string | null;
+  }>;
+}> {
+  const listings = [];
+  for (const sdk of OFFICIAL_SDKS) {
+    const validated = validateBlueprint(sdk.blueprint);
+    if (!validated.ok) throw new BlueprintFlowError(400, "blueprint_invalid");
+    const hash = contentHash(validated.blueprint);
+    const rows = await guard(() =>
+      getSql()<
+        { id: string; name: string; content_hash: string | null }[]
+      >`
+        select library_sdks.id, library_sdks.name, library_versions.content_hash
+        from library_sdks
+        left join library_versions on library_versions.id = library_sdks.current_version_id
+        where library_sdks.origin = 'official'
+          and (library_sdks.name = ${sdk.name} or library_sdks.id = ${sdk.id}::uuid)
+      `,
+    );
+    const existing = rows.length === 1 ? rows[0] : null;
+    if (rows.length > 1 || (existing && existing.name !== sdk.name)) {
+      listings.push(seedRow(sdk.name, sdk.id, "reject", "official_id"));
+      continue;
+    }
+    const plan = officialSeedPlan({
+      existing: existing ? { id: existing.id, contentHash: existing.content_hash } : null,
+      sdk: { id: sdk.id, contentHash: hash },
+    });
+    if (plan.action === "reject") {
+      listings.push(seedRow(sdk.name, sdk.id, "reject", plan.code));
+      continue;
+    }
+    const published = await publishLibraryVersion({
+      origin: "official",
+      name: sdk.name,
+      description: sdk.description,
+      blueprint: validated.blueprint,
+      originatorLabel: OFFICIAL_ORIGINATOR_LABEL,
+      originatorAccountId: account.id,
+      creatorAccountId: account.id,
+      sdkId: plan.action === "create" ? null : sdk.id,
+      listingId: plan.action === "create" ? sdk.id : null,
+    });
+    listings.push({
+      name: sdk.name,
+      id: published.sdkId,
+      action: plan.action,
+      code: null,
+      versionId: published.versionId,
+      versionNumber: published.versionNumber,
+      contentHash: published.contentHash,
+    });
+  }
+  return { listings };
+}
+
+function seedRow(
+  name: string,
+  id: string,
+  action: "reject",
+  code: string,
+): {
+  name: string;
+  id: string;
+  action: "reject";
+  code: string;
+  versionId: null;
+  versionNumber: null;
+  contentHash: null;
+} {
+  return { name, id, action, code, versionId: null, versionNumber: null, contentHash: null };
+}
+
+async function publishedVersion(sdkId: string, versionId: string | null): Promise<StoredVersion> {
+  if (!isPublicId(sdkId) || (versionId !== null && !isPublicId(versionId))) {
+    throw new BlueprintFlowError(404, "library_not_found");
+  }
+  return guard(() => loadVersion(sdkId, versionId));
+}
+
+async function loadVersion(sdkId: string, versionId: string | null): Promise<StoredVersion> {
+  const rows = await getSql()<StoredVersion[]>`
+    select
+      library_sdks.id as sdk_id,
+      library_sdks.origin,
+      library_sdks.originator_account_id,
+      library_sdks.originator_label,
+      library_sdks.name,
+      library_sdks.description,
+      library_versions.id as version_id,
+      library_versions.version_number,
+      library_versions.content_hash,
+      library_versions.blueprint
+    from library_sdks
+    join library_versions on library_versions.sdk_id = library_sdks.id
+    where library_sdks.id = ${sdkId}
+      and library_sdks.status = 'published'
+      and (
+        (${versionId}::uuid is null and library_versions.id = library_sdks.current_version_id)
+        or library_versions.id = ${versionId}::uuid
+      )
+    limit 1
+  `;
+  const version = rows[0];
+  if (!version) throw new BlueprintFlowError(404, "library_not_found");
+  return version;
+}
+
+async function listVersionSummaries(sdkId: string) {
+  return getSql()<
+    { id: string; version_number: number; content_hash: string }[]
+  >`
+    select id, version_number, content_hash
+    from library_versions
+    where sdk_id = ${sdkId}
+    order by version_number desc
+  `;
+}
+
+function detailFrom(
+  version: StoredVersion,
+  versions: Array<{ id: string; version_number: number; content_hash: string }>,
+): LibraryDetail {
+  const blueprint = version.blueprint;
+  return {
+    ...cardFromVersion(version),
+    inputs: publicInputs(blueprint),
+    steps: blueprint.steps.map((step) => ({ id: step.id, op: step.op })),
+    outputs: publicOutputs(blueprint),
+    versions: versions.map((item) => ({
+      id: item.id,
+      versionNumber: item.version_number,
+      contentHash: item.content_hash,
+    })),
+    blueprint,
+  };
+}
+
+function cardFromRow(row: {
+  id: string;
+  name: string;
+  description: string;
+  origin: LibraryOrigin;
+  originator_label: string;
+  version_id: string;
+  version_number: number;
+  content_hash: string;
+  capabilities: unknown;
+}): LibraryCard {
+  return {
+    id: row.id,
+    name: row.name,
+    description: row.description,
+    origin: row.origin,
+    originatorLabel: row.originator_label,
+    versionId: row.version_id,
+    versionNumber: row.version_number,
+    contentHash: row.content_hash,
+    capabilities: Array.isArray(row.capabilities)
+      ? row.capabilities.filter((item): item is string => typeof item === "string")
+      : [],
+  };
+}
+
+function cardFromVersion(version: StoredVersion): LibraryCard {
+  return cardFromRow({
+    id: version.sdk_id,
+    name: version.name,
+    description: version.description,
+    origin: version.origin,
+    originator_label: version.originator_label,
+    version_id: version.version_id,
+    version_number: version.version_number,
+    content_hash: version.content_hash,
+    capabilities: version.blueprint.capabilities,
+  });
+}
+
+function jsonValue(value: unknown): Parameters<ReturnType<typeof getSql>["json"]>[0] {
+  return JSON.parse(JSON.stringify(value)) as Parameters<ReturnType<typeof getSql>["json"]>[0];
+}
+
+async function guard<T>(work: () => Promise<T>): Promise<T> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof BlueprintFlowError) throw error;
+    const failure = databaseFailure(error);
+    throw new BlueprintFlowError(503, failure === "missing_schema" ? "schema_missing" : "database_unavailable");
+  }
+}

@@ -5,11 +5,12 @@ const LIVE = [
   "Theme and motion preferences stay in this browser.",
   "A Solana wallet can connect, then sign in with a server-verified signature.",
   "A signed-in wallet can describe an SDK on the homepage, then test it in the Builder. It is listed only after a name is saved, and a test is not a launch.",
+  "The public Library lists published SDKs. Saving a private draft does not publish it.",
 ] as const;
 
 const LATER = [
   "Token minting, verified launch, and automatic publication.",
-  "The library, community submission, and operator review.",
+  "Community submission and operator review.",
   "Rewards, trading statistics, the Feed, and an NPM client.",
 ] as const;
 

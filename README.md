@@ -46,15 +46,16 @@ Recognized variable names live in `.env.example`. Leave them blank for local dev
 - Dark theme is the default. A control can switch to light, and another can pause motion. System reduced motion still wins.
 - The homepage prompt opens `/build` after a verified sign-in. Signed-in Builder requests and tests need `OPENAI_API_KEY`, `HELIUS_RPC_URL`, and the Phase 03 tables. Without those tables the Builder says it is unavailable.
 - A Solana wallet can connect in the header. Sign-in asks that wallet to sign a server-issued message. `/account` shows the server session after verification.
-- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, and the Phase 03 Builder tables. `20261019133000_phase_03c_explicit_save.sql` is already applied and must not be reapplied. `20261019143000_phase_03d_soft_delete.sql` hides a saved SDK from My SDKs without deleting its executions. This app does not apply migrations. Until `deleted_at` exists, Builder routes say the Builder is unavailable.
+- `/library` is the public SDK Library. It lists only published SDKs. Saving a private draft does not publish it. Remix opens an unsaved private copy in the Builder.
+- `supabase/migrations/` holds the foundation comment, the Phase 02 identity tables, the Phase 03 Builder tables, and the Phase 04A Library tables. `20261019133000_phase_03c_explicit_save.sql`, `20261019143000_phase_03d_soft_delete.sql`, and `20261019160000_phase_04a_library.sql` are already applied and must not be reapplied. This app does not apply migrations. The ten official SDKs are defined in code and stay unpublished until an operator posts to `/api/library/official/seed` while signed in.
 
 ## What does not work
 
 - Saving or testing a draft before the Phase 03 tables exist
 - Anonymous Builder trials
 - Token launch, minting, and automatic publication
-- Community submission and operator review
-- Library, Feed, rewards, trading data, and the NPM client
+- Community submission and operator review. The ten official SDKs are not listed until the operator seed runs.
+- Feed, rewards, trading data, and the NPM client
 Sign-in stores a session only after the server accepts a wallet signature. The Phase 02 tables are required. If they are missing, the sign-in routes say sign-in is unavailable and do not invent a session.
 
 There is no separate publish action. Publication happens only after a verified token launch, which is not implemented.

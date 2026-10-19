@@ -192,9 +192,12 @@ async function runSolana(
         { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
         { encoding: "jsonParsed" },
       ]);
+      const listed = boundTokenAccounts(tokens);
       return coverage("balances", {
         lamports: rpcValue(balance),
-        tokens: boundTokenAccounts(tokens),
+        tokens: listed.tokens,
+        tokenAccountCount: listed.tokens.length,
+        truncated: listed.truncated,
       });
     }
     count();
@@ -463,6 +466,8 @@ function summarizeAccount(value: unknown): unknown {
     mint: text(info?.mint),
     tokenOwner: text(info?.owner),
     state: text(info?.state),
+    mintAuthority: text(info?.mintAuthority),
+    freezeAuthority: text(info?.freezeAuthority),
     name: metadata.name,
     symbol: metadata.symbol,
   };
@@ -509,13 +514,16 @@ function summarizeTransaction(value: unknown): unknown {
   };
 }
 
-function boundTokenAccounts(value: unknown): unknown[] {
+function boundTokenAccounts(value: unknown): { tokens: unknown[]; truncated: boolean } {
   const result = rpcValue(value);
   const rows = Array.isArray(result) ? result : [];
-  return rows.slice(0, 20).map((item) => {
-    if (!record(item)) return {};
-    return { pubkey: item.pubkey ?? null };
-  });
+  return {
+    truncated: rows.length > 20,
+    tokens: rows.slice(0, 20).map((item) => {
+      if (!record(item)) return {};
+      return { pubkey: item.pubkey ?? null };
+    }),
+  };
 }
 
 function finish(

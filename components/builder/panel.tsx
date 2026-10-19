@@ -62,6 +62,7 @@ export function BuilderPanel(): ReactNode {
   const [sdkName, setSdkName] = useState("");
   const [sdkDescription, setSdkDescription] = useState("");
   const [savedName, setSavedName] = useState<string | null>(null);
+  const [source, setSource] = useState<{ sdkId: string; versionId: string; originatorLabel: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [pane, setPane] = useState<"conversation" | "sdk">("conversation");
   const busy = useRef(false);
@@ -107,7 +108,7 @@ export function BuilderPanel(): ReactNode {
           setNotice("That draft is not available.");
           return;
         }
-        applyDraft(loaded, setDraftId, setRevision, setBlueprint, setMessages, setRun, setTested, setSavedName, setDirty);
+        applyDraft(loaded, setDraftId, setRevision, setBlueprint, setMessages, setRun, setTested, setSavedName, setDirty, setSource);
         if (params.get("intent") === "test") {
           setPane("sdk");
           document.getElementById("sdk-test")?.scrollIntoView({ block: "nearest" });
@@ -155,6 +156,7 @@ export function BuilderPanel(): ReactNode {
       setNotice(ready?.error ?? "The blueprint request was not accepted.");
       return;
     }
+    if (draftIdRef.current !== ready.draftId) setSource(null);
     draftIdRef.current = ready.draftId;
     revisionRef.current = ready.revision ?? revisionRef.current;
     setDraftId(ready.draftId);
@@ -321,6 +323,11 @@ export function BuilderPanel(): ReactNode {
           <p className="font-mono text-[10px] tracking-[0.08em] text-accent-ink uppercase">
             {savedName ? "Saved SDK" : "Unsaved workspace"}
           </p>
+          {source ? (
+            <p className="font-mono text-[10px] text-muted-foreground uppercase">
+              Remixed from {source.originatorLabel}. The published source stays unchanged.
+            </p>
+          ) : null}
           <div className="grid min-h-24 gap-2">
             {messages.length === 0 ? (
               <p className="text-[14px] leading-[1.6] text-muted-foreground">
@@ -555,6 +562,7 @@ type DraftPayload = {
   savedName?: string | null;
   dirty?: boolean;
   run?: RunView | null;
+  source?: { sdkId: string; versionId: string; originatorLabel: string } | null;
 };
 
 async function loadDraft(id: string): Promise<DraftPayload | null> {
@@ -574,6 +582,7 @@ function applyDraft(
   setTested: (value: boolean) => void,
   setSavedName: (value: string | null) => void,
   setDirty: (value: boolean) => void,
+  setSource: (value: { sdkId: string; versionId: string; originatorLabel: string } | null) => void,
 ): void {
   const params = new URLSearchParams(window.location.search);
   const id = params.get("draft");
@@ -586,6 +595,7 @@ function applyDraft(
   setTested(body.tested === true);
   setSavedName(body.savedName ?? null);
   setDirty(body.dirty === true);
+  setSource(body.source?.sdkId && body.source.versionId && body.source.originatorLabel ? body.source : null);
 }
 
 async function postMessage(

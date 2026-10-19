@@ -229,6 +229,8 @@ test("a deep token account is summarized instead of failing the output ceiling",
             info: {
               decimals: 6,
               supply: "1000",
+              mintAuthority: "MintAuth11111111111111111111111111111111111",
+              freezeAuthority: null,
               extensions: [
                 {
                   extension: "tokenMetadata",
@@ -270,6 +272,10 @@ test("a deep token account is summarized instead of failing the output ceiling",
   const mint =
     typeof body === "object" && body !== null && "mint" in body ? body.mint : null;
   assert.equal(typeof mint === "object" && mint !== null && "symbol" in mint ? mint.symbol : null, "SDK");
+  assert.equal(
+    typeof mint === "object" && mint !== null && "mintAuthority" in mint ? mint.mintAuthority : null,
+    "MintAuth11111111111111111111111111111111111",
+  );
   assert.equal(JSON.stringify(body).includes("extensions"), false);
   token.steps = [
     {
