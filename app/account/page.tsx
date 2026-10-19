@@ -5,6 +5,7 @@ import { Footer } from "@/components/footer";
 import { Logo } from "@/components/logo";
 import { createMetadata } from "@/lib/metadata";
 import { readSession } from "@/lib/server/auth";
+import { isProvisionedOperator } from "@/lib/server/operator";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { cookies } from "next/headers";
 import Link from "next/link";
@@ -50,9 +51,16 @@ export default async function AccountPage(): Promise<ReactNode> {
             <p className="max-w-130 text-[15px] leading-[1.7] text-muted-foreground">
               This session belongs to the wallet that signed the server
               challenge. Disconnecting or switching wallets ends it. Private
-              drafts stay private until you test one and save a name. Launch,
-              royalties, rewards, API keys, and the Feed are not available.
+              drafts stay private until you test one and save a name. A saved
+              SDK can be submitted for operator review. Approval lists that
+              revision. A submission is not a token launch. Launch, royalties,
+              rewards, API keys, and the Feed are not available.
             </p>
+            {isProvisionedOperator(account.walletAddress) ? (
+              <Link href="/admin/library" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
+                Review Library
+              </Link>
+            ) : null}
             <DraftList />
           </div>
         ) : (

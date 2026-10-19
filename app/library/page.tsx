@@ -74,7 +74,9 @@ export default async function LibraryPage({
           </p>
         ) : loaded.listings.length === 0 ? (
           <p className="mt-10 max-w-150 text-[15px] leading-[1.7] text-muted-foreground">
-            No published SDKs yet. Official SDKs and approved community SDKs will appear here. A private draft is not published by saving it.
+            {loaded.query.origin === "community"
+              ? "No approved community SDKs yet. Pending and rejected submissions stay off this page."
+              : "No published SDKs yet. Official SDKs and approved community SDKs will appear here. A private draft is not published by saving it."}
           </p>
         ) : (
           <ul className="mt-10 grid gap-4 min-[801px]:grid-cols-2">

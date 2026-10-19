@@ -22,6 +22,9 @@ export function blueprintError(error: unknown): NextResponse {
 }
 
 function publicMessage(code: string): string {
+  if (code === "submission_quota") {
+    return "Three community submissions are allowed each day. This submission was not created.";
+  }
   if (code === "quota" || code === "spend_limit" || code === "concurrency" || code === "draft_limit") {
     return "The account limit for this action has been reached.";
   }
@@ -51,7 +54,13 @@ function publicMessage(code: string): string {
   if (code === "invalid_reference") return "The blueprint refers to a step or input that is not available.";
   if (code === "unsupported_configuration") return "That step configuration is not supported.";
   if (code === "persistence") return "The draft could not be saved.";
-  if (code === "test_required") return "Test this blueprint successfully before saving it.";
+  if (code === "test_required") return "Test this blueprint successfully before saving or submitting it.";
+  if (code === "unsaved") return "Save this SDK before submitting it.";
+  if (code === "deleted") return "A deleted SDK cannot be submitted.";
+  if (code === "reserved_name") return "That name is reserved for an official SDK.";
+  if (code === "review_note") return "Enter a review reason up to 500 characters.";
+  if (code === "submission_closed") return "This submission has already been reviewed.";
+  if (code === "not_owner") return "That SDK is not available.";
   if (code === "name") return "Enter a name up to 80 characters.";
   if (code === "description") return "Enter a description up to 500 characters.";
   return "The blueprint request was not accepted.";

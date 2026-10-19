@@ -15,6 +15,7 @@ import {
   type Blueprint,
 } from "@/lib/blueprint/model";
 import { deleteDecision, isSameSavedIdentity, parseSdkIdentity, saveAllowed } from "@/lib/blueprint/save";
+import { developerLabel } from "@/lib/library/submission";
 import { validateBlueprint, validateInputsAgainst } from "@/lib/blueprint/validate";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
@@ -43,6 +44,8 @@ export async function listDrafts(account: AccountIdentity) {
         saved_hash: string | null;
         version_id: string | null;
         tested: boolean;
+        originator_account_id: string | null;
+        originator_label: string | null;
       }[]
     >`
       select
@@ -52,6 +55,8 @@ export async function listDrafts(account: AccountIdentity) {
         sdk_drafts.revision,
         sdk_drafts.updated_at,
         sdk_drafts.saved_hash,
+        sdk_drafts.originator_account_id,
+        sdk_drafts.originator_label,
         blueprint_versions.id as version_id,
         exists (
           select 1
@@ -81,6 +86,8 @@ export async function listDrafts(account: AccountIdentity) {
       tested: row.tested === true,
       versionId: row.version_id,
       contentHash: row.saved_hash,
+      originatorLabel: row.originator_label ?? developerLabel(account.walletAddress),
+      submitterIsOriginator: !row.originator_account_id || row.originator_account_id === account.id,
     }));
   });
 }
