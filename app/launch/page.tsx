@@ -18,6 +18,7 @@ import { launchMessage } from "@/lib/launch/messages";
 import { libraryQuery, type LibraryQuery } from "@/lib/library/library";
 import { createMetadata } from "@/lib/metadata";
 import { getCurrentAccount } from "@/lib/server/account";
+import { isProvisionedOperator } from "@/lib/server/operator";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { BlueprintFlowError, listDrafts } from "@/lib/server/blueprint/service";
 import {
@@ -49,10 +50,15 @@ export default async function LaunchPage({
     version?: string;
     q?: string;
     page?: string;
+    rehearsal?: string;
   }>;
 }): Promise<ReactNode> {
   const query = await searchParams;
   const account = await getCurrentAccount();
+  const rehearsalRequested = query.rehearsal === "trest";
+  const rehearsal = Boolean(
+    rehearsalRequested && account && isProvisionedOperator(account.walletAddress),
+  );
   const mode = launchPageMode({
     signedIn: account !== null,
     draftId: query.draft ?? null,
@@ -103,7 +109,7 @@ export default async function LaunchPage({
       );
     }
   }
-  const catalog = source || held ? null : await loadCatalog(account, query);
+  const catalog = source || held ? null : await loadCatalog(account, query, rehearsal);
   return (
     <>
       <Nav />
@@ -118,8 +124,15 @@ export default async function LaunchPage({
           Launch your SDK
         </h1>
         <p className="mt-3 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
-          Turn your working SDK into a live token paired with $SDK.
+          {rehearsal
+            ? "TREST rehearsal. Choose an SDK and prepare it against the registered TREST parent."
+            : "Turn your working SDK into a live token paired with $SDK."}
         </p>
+        {rehearsalRequested && !rehearsal ? (
+          <p className="mt-6 text-[15px] leading-[1.6]" role="status">
+            The TREST rehearsal is limited to the provisioned operator. This page stays paired with $SDK.
+          </p>
+        ) : null}
         {process.env.NODE_ENV === "development" ? <LaunchCapabilityDiagnostic /> : null}
         {message ? (
           <p className="mt-6 text-[15px] leading-[1.6]" role="status">
@@ -130,6 +143,7 @@ export default async function LaunchPage({
           <LaunchForm
             key={`${source.kind}:${source.draftId ?? source.librarySdkId}:${source.versionId}`}
             source={source}
+            rehearsal={rehearsal}
           />
         ) : null}
         {held ? <HeldSdk sdk={held} /> : null}
@@ -142,6 +156,7 @@ export default async function LaunchPage({
             libraryUnavailable={catalog.libraryUnavailable}
             query={catalog.query}
             nextPage={catalog.nextPage}
+            rehearsal={rehearsal}
           />
         ) : null}
       </main>
@@ -152,7 +167,8 @@ export default async function LaunchPage({
 
 async function loadCatalog(
   account: AccountIdentity | null,
-  params: { q?: string; page?: string }
+  params: { q?: string; page?: string },
+  rehearsal: boolean,
 ): Promise<{
   mine: LaunchChoice[] | null;
   mineUnavailable: boolean;
@@ -174,7 +190,7 @@ async function loadCatalog(
       q: params.q ?? null,
       page: params.page ?? null,
     });
-    library = published.listings.map(toLibraryChoice);
+    library = published.listings.map((sdk) => toLibraryChoice(sdk, rehearsal));
     nextPage = published.nextPage;
     query = { q: published.query.q, page: published.query.page };
   } catch {
@@ -196,7 +212,7 @@ async function loadCatalog(
       mine: drafts
         .filter(isLaunchEligibleDraft)
         .filter((draft) => matchesSdkQuery(draft, query.q))
-        .map(toDraftChoice),
+        .map((draft) => toDraftChoice(draft, rehearsal)),
       mineUnavailable: false,
       library,
       libraryUnavailable,

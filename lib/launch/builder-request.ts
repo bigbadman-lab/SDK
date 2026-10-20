@@ -5,6 +5,8 @@ const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 export const BUILD_PATH = "/v1/build";
 export const INSPECT_PATH = "/v1/inspect";
 export const DIAGNOSE_PATH = "/v1/diagnose";
+export const PARENT_PATH = "/v1/parent";
+export const EVIDENCE_PATH = "/v1/evidence";
 
 export type UnsignedBuildRequest = {
   launchId: string;
@@ -55,6 +57,46 @@ export function parseLauncherBuildRequest(
     return { ok: false, code: "body" };
   }
   return { ok: true, value: { launchId, mintPublicKey } };
+}
+
+export function parseParentObservationRequest(
+  value: unknown,
+): { ok: true; mint: string } | { ok: false; code: "body" } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, code: "body" };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== "mint") return { ok: false, code: "body" };
+  if (typeof record.mint !== "string" || !ADDRESS.test(record.mint)) return { ok: false, code: "body" };
+  return { ok: true, mint: record.mint };
+}
+
+const EVIDENCE_KEYS = ["childMint", "signature"] as const;
+const SIGNATURE = /^[1-9A-HJ-NP-Za-km-z]{64,88}$/;
+
+export function parseEvidenceRequest(
+  value: unknown,
+): { ok: true; signature: string; childMint: string } | { ok: false; code: "body" } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, code: "body" };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== EVIDENCE_KEYS.join(",")) return { ok: false, code: "body" };
+  if (typeof record.signature !== "string" || !SIGNATURE.test(record.signature)) return { ok: false, code: "body" };
+  if (typeof record.childMint !== "string" || !ADDRESS.test(record.childMint)) return { ok: false, code: "body" };
+  return { ok: true, signature: record.signature, childMint: record.childMint };
+}
+
+const REHEARSAL_KEYS = ["idempotencyKey", "launchId", "mintPublicKey", "scope"] as const;
+
+export function parseRehearsalBuildRequest(
+  value: unknown,
+): { ok: true; value: UnsignedBuildRequest } | { ok: false; code: "body" } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, code: "body" };
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== REHEARSAL_KEYS.join(",")) return { ok: false, code: "body" };
+  if (record.scope !== "test") return { ok: false, code: "body" };
+  return parseUnsignedBuildRequest({
+    launchId: record.launchId,
+    idempotencyKey: record.idempotencyKey,
+    mintPublicKey: record.mintPublicKey,
+  });
 }
 
 export function unsignedBuildAccepted(value: unknown): boolean {

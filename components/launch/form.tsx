@@ -1,5 +1,7 @@
 "use client";
 
+import { RehearsalActions } from "@/components/launch/rehearsal-actions";
+import { LaunchSigningStatus } from "@/components/launch/signing-status";
 import {
   LaunchCapabilityDiagnostic,
   LaunchCapabilityNotice,
@@ -38,8 +40,10 @@ const fieldClass =
 
 export function LaunchForm({
   source,
+  rehearsal = false,
 }: {
   source: LaunchSourceView;
+  rehearsal?: boolean;
 }): ReactNode {
   const idempotencyKey = useRef(crypto.randomUUID());
   const lock = useRef(false);
@@ -220,7 +224,9 @@ export function LaunchForm({
       const response = await fetch("/api/launch/prepare", {
         method: "POST",
         credentials: "same-origin",
-        headers: { "content-type": "application/json" },
+        headers: rehearsal
+          ? { "content-type": "application/json", "x-sdk-rehearsal": "trest" }
+          : { "content-type": "application/json" },
         body: JSON.stringify({
           idempotencyKey: idempotencyKey.current,
           preparationId,
@@ -260,7 +266,12 @@ export function LaunchForm({
           void prepare();
         }}
       >
-        <SdkStrip source={source} />
+        <SdkStrip source={source} rehearsal={rehearsal} />
+        {rehearsal ? (
+          <p className="border border-solid border-border bg-card px-3 py-2 text-[13px] leading-[1.5]">
+            TREST rehearsal. This preparation is paired with the registered TREST mint. Signing opens only after preflight and approval of this build.
+          </p>
+        ) : null}
         <div className="grid items-start gap-4 min-[561px]:grid-cols-[168px_minmax(0,1fr)]">
           <ArtworkField
             inputRef={fileRef}
@@ -398,7 +409,7 @@ export function LaunchForm({
               : "grid"
           }
         >
-          <Field label="Developer buy · $SDK" htmlFor="token-buy">
+          <Field label={rehearsal ? "Developer buy · TREST" : "Developer buy · $SDK"} htmlFor="token-buy">
             <input
               id="token-buy"
               className={fieldClass}
@@ -461,6 +472,7 @@ export function LaunchForm({
         {confirm ? (
           <ConfirmLaunch
             review={confirm}
+            rehearsal={rehearsal}
             onEdit={() => setConfirmation(null)}
           />
         ) : null}
@@ -571,9 +583,11 @@ function ArtworkField({
 
 function ConfirmLaunch({
   review,
+  rehearsal,
   onEdit,
 }: {
   review: LaunchReview;
+  rehearsal: boolean;
   onEdit: () => void;
 }): ReactNode {
   const links = [review.website, review.twitter, review.telegram].filter(
@@ -609,7 +623,7 @@ function ConfirmLaunch({
               height={20}
               className="h-5 w-5 rounded-lg object-contain"
             />
-            Paired with $SDK
+            {rehearsal ? "Paired with TREST" : "Paired with $SDK"}
           </p>
         </div>
       </div>
@@ -618,10 +632,10 @@ function ConfirmLaunch({
       </p>
       <dl className="mt-4 grid gap-2 text-[14px] leading-[1.45]">
         <Row term="SDK" value={review.name} />
-        <Row term="Pair" value="$SDK" />
+        <Row term="Pair" value={rehearsal ? "TREST" : "$SDK"} />
         <Row
           term="Developer buy"
-          value={review.buyAmount === "0" ? "None" : `${review.buyAmount} $SDK`}
+          value={review.buyAmount === "0" ? "None" : `${review.buyAmount} ${rehearsal ? "TREST" : "$SDK"}`}
         />
         {review.slippageBps ? (
           <Row term="Slippage" value={`${review.slippageBps / 100}%`} />
@@ -649,13 +663,27 @@ function ConfirmLaunch({
       ) : null}
       <LaunchCapabilityDiagnostic surface="modal" />
       <LaunchCapabilityNotice />
-      <p
-        id="launch-not-ready"
-        className="mt-4 text-[13px] leading-[1.5] text-muted-foreground"
-      >
-        Token creation requires wallet approval. On-chain launching is not
-        available yet.
-      </p>
+      {rehearsal ? (
+        <RehearsalActions review={review} />
+      ) : (
+        <>
+          <LaunchSigningStatus phase="unavailable" />
+          <p id="launch-not-ready" className="text-[13px] leading-[1.5] text-muted-foreground">
+            Public launches stay paired with $SDK. Signing and submission are not available from this screen.
+          </p>
+          <div className="mt-4 flex flex-col-reverse gap-2 min-[561px]:flex-row min-[561px]:justify-end">
+            <button
+              type="button"
+              disabled
+              aria-describedby="launch-not-ready"
+              data-preparation-id={review.id}
+              className="rounded-lg border border-solid border-accent bg-accent px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Launch Token
+            </button>
+          </div>
+        </>
+      )}
       <div className="mt-4 flex flex-col-reverse gap-2 min-[561px]:flex-row min-[561px]:justify-end">
         <button
           type="button"
@@ -664,15 +692,6 @@ function ConfirmLaunch({
           className="rounded-lg border border-solid border-border bg-background px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase"
         >
           Back to Edit
-        </button>
-        <button
-          type="button"
-          disabled
-          aria-describedby="launch-not-ready"
-          data-preparation-id={review.id}
-          className="rounded-lg border border-solid border-accent bg-accent px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Launch Token
         </button>
       </div>
     </>
@@ -688,7 +707,7 @@ function Row({ term, value }: { term: string; value: string }): ReactNode {
   );
 }
 
-function SdkStrip({ source }: { source: LaunchSourceView }): ReactNode {
+function SdkStrip({ source, rehearsal = false }: { source: LaunchSourceView; rehearsal?: boolean }): ReactNode {
   return (
     <div className="grid gap-1 border-b border-solid border-border pb-3">
       <div className="flex items-center justify-between gap-3">
@@ -696,7 +715,7 @@ function SdkStrip({ source }: { source: LaunchSourceView }): ReactNode {
           Selected SDK
         </p>
         <Link
-          href="/launch"
+          href={rehearsal ? "/launch?rehearsal=trest" : "/launch"}
           className="font-mono text-[10px] tracking-[0.04em] uppercase"
         >
           Change SDK

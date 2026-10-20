@@ -3,7 +3,9 @@ import { PublicKey } from "@solana/web3.js";
 import { bindingDecision, payloadHash, type BuildIdentity } from "../../../lib/launch/build-binding.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "../../../lib/launch/fees.ts";
 import { feeCategory } from "../../../lib/launch/prepare.ts";
-import { parseUnsignedBuildRequest } from "../../../lib/launch/builder-request.ts";
+import { parseEvidenceRequest, parseParentObservationRequest, parseRehearsalBuildRequest, parseUnsignedBuildRequest } from "../../../lib/launch/builder-request.ts";
+import type { LaunchEvidence } from "../../../lib/launch/chain-evidence.ts";
+import type { ParentObservation } from "../../../lib/launch/parent.ts";
 import { verifyServiceRequest } from "../../../lib/launch/service-auth.ts";
 import { slippagePercent } from "../../../lib/launch/slippage.ts";
 import type { BuildRow, BuildStore, LaunchRecord, LaunchStore, NonceStore, ParentStore } from "./domain.ts";
@@ -14,6 +16,8 @@ export const ROUTES = [
   "POST /v1/diagnose",
   "POST /v1/build",
   "POST /v1/inspect",
+  "POST /v1/parent",
+  "POST /v1/evidence",
 ] as const;
 
 const BUILD_TTL_MS = 60_000;
@@ -48,6 +52,13 @@ export type HandlerPorts = {
   confirmParent: (mint: string) => Promise<boolean>;
   resimulate: (transaction: string) => Promise<boolean>;
   connectivity?: () => Promise<{ database: "ok" | "unavailable"; rpc: "ok" | "unavailable" }>;
+  observe?: (
+    mint: string,
+  ) => Promise<{ ok: true; observation: ParentObservation } | { ok: false; code: "parent_ineligible" | "unavailable" }>;
+  testParent?: () => Promise<{ mint: string; tokenProgram: string } | null>;
+  readEvidence?: (input: { signature: string; childMint: string }) => Promise<
+    { ok: true; evidence: LaunchEvidence } | { ok: false; code: "unavailable" }
+  >;
 };
 
 export type HandlerResult = { status: number; body: Record<string, unknown> };
@@ -159,7 +170,14 @@ export async function handle(
   if (request.method === "GET" && request.path === "/status") {
     return serviceStatus(ports);
   }
-  if (request.method !== "POST" || (request.path !== "/v1/build" && request.path !== "/v1/inspect" && request.path !== "/v1/diagnose")) {
+  if (
+    request.method !== "POST" ||
+    (request.path !== "/v1/build" &&
+      request.path !== "/v1/inspect" &&
+      request.path !== "/v1/diagnose" &&
+      request.path !== "/v1/parent" &&
+      request.path !== "/v1/evidence")
+  ) {
     return failure(404, "not_found");
   }
   const auth = verifyServiceRequest({
@@ -188,7 +206,24 @@ export async function handle(
     if (Object.keys(parsedBody as Record<string, unknown>).length !== 0) return failure(400, "body");
     return serviceStatus(ports);
   }
-  const parsed = parseUnsignedBuildRequest(parsedBody);
+  if (request.path === "/v1/parent") {
+    const parsed = parseParentObservationRequest(parsedBody);
+    if (!parsed.ok) return failure(400, "body");
+    if (!ports.observe) return failure(503, "unavailable");
+    const observed = await ports.observe(parsed.mint);
+    if (!observed.ok) return failure(observed.code === "unavailable" ? 503 : 422, observed.code);
+    return { status: 200, body: { ok: true, observation: observed.observation } };
+  }
+  if (request.path === "/v1/evidence") {
+    const parsed = parseEvidenceRequest(parsedBody);
+    if (!parsed.ok) return failure(400, "body");
+    if (!ports.readEvidence) return failure(503, "unavailable");
+    const evidence = await ports.readEvidence(parsed);
+    if (!evidence.ok) return failure(503, evidence.code);
+    return { status: 200, body: { ok: true, verified: false, evidence: evidence.evidence } };
+  }
+  const rehearsal = parseRehearsalBuildRequest(parsedBody);
+  const parsed = rehearsal.ok ? rehearsal : parseUnsignedBuildRequest(parsedBody);
   if (!parsed.ok) return failure(400, "body");
   const launch = await ports.launches.get(parsed.value.launchId);
   if (!launch || launch.idempotencyKey !== parsed.value.idempotencyKey) return failure(404, "not_found");
@@ -200,9 +235,13 @@ export async function handle(
     return failure(400, "body");
   }
   if (mint.toBase58() === launch.walletAddress) return failure(400, "mint");
-  const parent = await ports.parent.get();
-  const parentMint = parent?.mintAddress ?? null;
+  const production = await ports.parent.get();
+  const testParent = rehearsal.ok && ports.testParent ? await ports.testParent() : null;
+  const parentMint = rehearsal.ok ? testParent?.mint ?? null : production?.mintAddress ?? null;
   if (!parentMint) return failure(503, "parent_unregistered");
+  if (rehearsal.ok && production?.mintAddress && parentMint === production.mintAddress) {
+    return failure(422, "production_parent");
+  }
   if (mint.toBase58() === parentMint) return failure(400, "mint");
   const identified = await identityFor(launch, mint.toBase58(), parentMint);
   if (!identified.ok) return failure(422, identified.code);

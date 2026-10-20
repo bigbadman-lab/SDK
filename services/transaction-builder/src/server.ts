@@ -11,9 +11,12 @@ import { Connection, PublicKey } from "@solana/web3.js";
 
 import { PLATFORM_FEE_WALLET } from "../../../lib/launch/fees.ts";
 import { handle, type HandlerPorts } from "./handle.ts";
+import { observeQuoteParent } from "./chain.ts";
+import { loadLaunchEvidence } from "./evidence.ts";
 import { createLiveProducer } from "./live.ts";
 import { simulateUnsignedTransaction } from "./simulate.ts";
 import { createSql, postgresStores } from "./store.ts";
+import { registeredTestParent } from "./test-parent.ts";
 
 const unconfiguredStatus = {
   ok: true,
@@ -83,12 +86,60 @@ function livePorts(databaseUrl: string, rpcUrl: string): HandlerPorts {
     nonces: stores.nonces,
     confirmParent: async (mint) => {
       const row = await stores.parent.get();
-      if (!row?.mintAddress || row.mintAddress !== mint) return false;
+      const test = await registeredTestParent(sql);
+      const productionMint = row?.mintAddress ?? null;
+      const allowed = (productionMint !== null && mint === productionMint) || (test !== null && mint === test.mint && mint !== productionMint);
+      if (!allowed) return false;
       try {
         const account = await connection.getAccountInfo(new PublicKey(mint), "confirmed");
         return account !== null;
       } catch {
         return false;
+      }
+    },
+    testParent: () => registeredTestParent(sql),
+    readEvidence: async (input) => {
+      try {
+        const evidence = await loadLaunchEvidence(
+          {
+            async account(address) {
+              const info = await connection.getAccountInfo(new PublicKey(address), "confirmed");
+              return info ? { owner: info.owner.toBase58(), data: info.data } : null;
+            },
+            async transaction(signature) {
+              const found = await connection.getTransaction(signature, {
+                commitment: "confirmed",
+                maxSupportedTransactionVersion: 1,
+              });
+              if (!found?.meta) {
+                return {
+                  status: found ? "uncertain" : "missing",
+                  error: false,
+                  slot: found ? String(found.slot) : null,
+                  preTokenBalances: [],
+                  postTokenBalances: [],
+                };
+              }
+              const balances = (rows: typeof found.meta.preTokenBalances) =>
+                (rows ?? []).map((row) => ({
+                  mint: row.mint,
+                  owner: row.owner ?? "",
+                  amount: row.uiTokenAmount.amount,
+                }));
+              return {
+                status: found.meta?.err ? "failed" : "confirmed",
+                error: found.meta?.err !== null,
+                slot: String(found.slot),
+                preTokenBalances: balances(found.meta?.preTokenBalances ?? []),
+                postTokenBalances: balances(found.meta?.postTokenBalances ?? []),
+              };
+            },
+          },
+          { signature: input.signature, childMint: input.childMint, launcher: "" },
+        );
+        return { ok: true, evidence };
+      } catch {
+        return { ok: false, code: "unavailable" };
       }
     },
     resimulate: (transaction) => simulateUnsignedTransaction(connection.rpcEndpoint, transaction),
@@ -102,14 +153,17 @@ function livePorts(databaseUrl: string, rpcUrl: string): HandlerPorts {
       }
       return { database, rpc: await probeRpc(rpcUrl) };
     },
+    observe: (mint) => observeQuoteParent(connection, mint),
     produce: async (input) => {
       const row = await stores.parent.get();
+      const test = await registeredTestParent(sql);
+      const program = test && input.identity.parentMint === test.mint ? test.tokenProgram : row?.tokenProgram ?? null;
       return createLiveProducer(connection)({
         launch: input.launch,
         identity: input.identity,
         mint: input.mint,
         parentMint: input.identity.parentMint,
-        registeredTokenProgram: row?.tokenProgram ?? null,
+        registeredTokenProgram: program,
       });
     },
   };

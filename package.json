@@ -15,12 +15,13 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mjs,json,css,md}\"",
     "typecheck": "tsc --noEmit",
     "test:auth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test lib/auth/*.test.ts",
-    "test:blueprint": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test lib/blueprint/*.test.ts lib/builder/*.test.ts lib/library/*.test.ts lib/api/*.test.ts lib/launch/*.test.ts lib/wallet/*.test.ts",
+    "test:blueprint": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test lib/blueprint/*.test.ts lib/builder/*.test.ts lib/library/*.test.ts lib/api/*.test.ts lib/launch/*.test.ts lib/wallet/*.test.ts lib/rewards/*.test.ts",
     "test:builder": "npm test --prefix services/transaction-builder"
   },
   "dependencies": {
     "@reown/appkit": "^1.8.24",
     "@reown/appkit-adapter-solana": "^1.8.24",
+    "@solana/kit": "8.5.0",
     "@solana/web3.js": "^1.99.0",
     "@wallet-standard/app": "1.1.0",
     "bs58": "^6.0.0",

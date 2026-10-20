@@ -3,6 +3,7 @@ import { TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import BN from "bn.js";
 
 import type { Shareholder } from "../../../lib/launch/fees.ts";
+import type { ParentFeeMode, ParentObservation } from "../../../lib/launch/parent.ts";
 import { quoteBaseUnits } from "../../../lib/launch/quote-units.ts";
 import { slippagePercent } from "../../../lib/launch/slippage.ts";
 import { AssembleError, assembleChildLaunch, type AssembledLaunch } from "./assemble.ts";
@@ -245,4 +246,83 @@ export async function assembleLiveBuy(input: {
     pumpQuote: parent.accounts,
     buy,
   });
+}
+
+function rpcFailed(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : "";
+  return (
+    message.includes("fetch") ||
+    message.includes("network") ||
+    message.includes("timeout") ||
+    message.includes("econn") ||
+    message.includes("socket")
+  );
+}
+
+export async function observeQuoteParent(
+  connection: Connection,
+  mintAddress: string,
+): Promise<{ ok: true; observation: ParentObservation } | { ok: false; code: "parent_ineligible" | "unavailable" }> {
+  let mint: PublicKey;
+  try {
+    mint = new PublicKey(mintAddress);
+  } catch {
+    return { ok: false, code: "parent_ineligible" };
+  }
+  const online = new (liveSdk().OnlinePumpSdk)(connection);
+  let resolved: Resolved;
+  try {
+    resolved = await online.resolveQuoteMint(mint);
+  } catch (error) {
+    return { ok: false, code: rpcFailed(error) ? "unavailable" : "parent_ineligible" };
+  }
+  const quote = resolved.pumpQuote;
+  if (!quote) return { ok: false, code: "parent_ineligible" };
+  let maxCurveDepth: number;
+  try {
+    maxCurveDepth = (await online.fetchGlobal()).maxCurveDepth;
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+  const curve = quote.curve.bondingCurve as typeof quote.curve.bondingCurve & {
+    creator?: PublicKey;
+    quoteMint?: PublicKey;
+    isHolderReward?: boolean;
+  };
+  if (!curve.creator) return { ok: false, code: "parent_ineligible" };
+  const sharing = pump.feeSharingConfigPda(mint);
+  const feeMode: ParentFeeMode = curve.isHolderReward
+    ? "holder_rewards"
+    : curve.creator.equals(sharing)
+      ? "fee_sharing"
+      : "single_recipient";
+  const pool = quote.accounts.pool?.pool.toBase58() ?? null;
+  let bondingCurve: string | null = null;
+  try {
+    const pda = (pump as { bondingCurvePda?: (value: PublicKey) => PublicKey }).bondingCurvePda;
+    bondingCurve = pda ? pda(mint).toBase58() : null;
+  } catch {
+    bondingCurve = null;
+  }
+  return {
+    ok: true,
+    observation: {
+      mint: mint.toBase58(),
+      creator: curve.creator.toBase58(),
+      feeMode,
+      quoteMint: curve.quoteMint?.toBase58() ?? "11111111111111111111111111111111",
+      tokenProgram: resolved.quoteTokenProgram.toBase58(),
+      decimals: resolved.decimals,
+      mayhem: curve.isMayhemMode,
+      cashback: curve.isCashbackCoin,
+      holderReward: curve.isHolderReward === true,
+      depth: curve.depth,
+      maxCurveDepth,
+      graduated: curve.complete,
+      hasPool: pool !== null,
+      bondingCurve,
+      pool,
+      source: resolved.source,
+    },
+  };
 }

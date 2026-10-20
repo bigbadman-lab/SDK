@@ -6,10 +6,14 @@ import { builderFailureCode, readBuilderLinkReport, type BuilderLinkReport } fro
 import {
   BUILD_PATH,
   DIAGNOSE_PATH,
+  PARENT_PATH,
+  parseParentObservationRequest,
+  parseRehearsalBuildRequest,
   parseUnsignedBuildRequest,
   unsignedBuildAccepted,
   type UnsignedBuildRequest,
 } from "@/lib/launch/builder-request";
+import { parseParentObservation, type ParentObservation } from "@/lib/launch/parent";
 import { signServiceRequest } from "@/lib/launch/service-auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { requireTransactionBuilder } from "@/lib/server/env";
@@ -82,6 +86,232 @@ export async function requestUnsignedBuild(input: {
       return { ok: false, code: builderFailureCode(payload) };
     }
     return { ok: true, body: payload };
+  } catch {
+    return { ok: false, code: "builder_rejected" };
+  }
+}
+
+export async function rehearsalBoundMint(input: {
+  accountId: string;
+  launchId: string;
+}): Promise<{ ok: true; boundMint: string | null } | { ok: false; code: string }> {
+  const sql = getSql();
+  try {
+    const columns = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'token_launches'
+        and column_name in ('parent_scope', 'attempt_mint_address')
+    `;
+    if (columns.length < 2) return { ok: false, code: "not_ready" };
+    const rows = await sql<{ attempt_mint_address: string | null; account_id: string }[]>`
+      select account_id, attempt_mint_address from token_launches where id = ${input.launchId}
+    `;
+    const row = rows[0];
+    if (!row || row.account_id !== input.accountId) return { ok: false, code: "not_found" };
+    return { ok: true, boundMint: row.attempt_mint_address };
+  } catch (error) {
+    return { ok: false, code: databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable" };
+  }
+}
+
+export async function requestRehearsalBuild(input: {
+  accountId: string;
+  launchId: string;
+  mintPublicKey: string;
+}): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; code: string }> {
+  const sql = getSql();
+  try {
+    const columns = await sql<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'token_launches'
+        and column_name in ('parent_scope', 'parent_mint_address', 'attempt_status', 'attempt_mint_address')
+    `;
+    if (columns.length < 4) return { ok: false, code: "not_ready" };
+    const launches = await sql<{
+      account_id: string;
+      idempotency_key: string;
+      status: string;
+      parent_scope: string;
+      parent_mint_address: string | null;
+      attempt_mint_address: string | null;
+      attempt_status: string;
+    }[]>`
+      select account_id, idempotency_key, status, parent_scope, parent_mint_address, attempt_mint_address, attempt_status
+      from token_launches
+      where id = ${input.launchId}
+    `;
+    const launch = launches[0];
+    if (!launch || launch.account_id !== input.accountId || launch.status !== "ready_for_transaction") {
+      return { ok: false, code: "not_found" };
+    }
+    if (launch.parent_scope !== "test" || !launch.parent_mint_address) return { ok: false, code: "parent_scope" };
+    let parents: { mint_address: string }[];
+    try {
+      parents = await sql<{ mint_address: string }[]>`
+        select mint_address from parent_registrations
+        where scope = 'test' and symbol = 'TREST' and eligible = true and mint_address = ${launch.parent_mint_address}
+        limit 1
+      `;
+    } catch (error) {
+      return { ok: false, code: databaseFailure(error) === "missing_schema" ? "parent_unregistered" : "unavailable" };
+    }
+    if (!parents[0]) return { ok: false, code: "parent_unregistered" };
+    if (launch.attempt_mint_address && launch.attempt_mint_address !== input.mintPublicKey) {
+      return { ok: false, code: "mint_conflict" };
+    }
+    const open = await sql<{ mint_address: string }[]>`
+      select mint_address from launch_builds
+      where launch_id = ${input.launchId} and account_id = ${input.accountId} and status in ('built', 'signed')
+      order by created_at desc
+      limit 1
+    `;
+    if (open[0] && open[0].mint_address !== input.mintPublicKey) return { ok: false, code: "mint_conflict" };
+    const rehearsal = parseRehearsalBuildRequest({
+      launchId: input.launchId,
+      idempotencyKey: launch.idempotency_key,
+      mintPublicKey: input.mintPublicKey,
+      scope: "test",
+    });
+    if (!rehearsal.ok) return rehearsal;
+    const posted = await postBuild(rehearsal.value, true);
+    if (!posted.ok) return posted;
+    const rows = await sql<{
+      id: string;
+      parent_mint_address: string;
+      mint_address: string;
+      message_hash: string;
+      blockhash: string;
+      transaction: string;
+      buy_amount: string;
+      shareholders: unknown;
+      expires_at: Date;
+    }[]>`
+      select id, parent_mint_address, mint_address, message_hash, blockhash, transaction, buy_amount, shareholders, expires_at
+      from launch_builds
+      where launch_id = ${input.launchId} and account_id = ${input.accountId} and mint_address = ${input.mintPublicKey}
+      order by created_at desc
+      limit 1
+    `;
+    const row = rows[0];
+    if (!row || row.parent_mint_address !== launch.parent_mint_address) return { ok: false, code: "unavailable" };
+    await sql`
+      update token_launches
+      set attempt_status = 'ready_to_sign',
+          attempt_mint_address = ${row.mint_address},
+          attempt_message_hash = ${row.message_hash}
+      where id = ${input.launchId}
+        and account_id = ${input.accountId}
+        and (attempt_mint_address is null or attempt_mint_address = ${row.mint_address})
+    `;
+    return {
+      ok: true,
+      body: {
+        ok: true,
+        buildId: row.id,
+        launchId: input.launchId,
+        parentMint: row.parent_mint_address,
+        childMint: row.mint_address,
+        messageHash: row.message_hash,
+        blockhash: row.blockhash,
+        expiresAt: new Date(row.expires_at).toISOString(),
+        transaction: row.transaction,
+        buyAmount: row.buy_amount,
+        shareholders: row.shareholders,
+        authorized: false,
+      },
+    };
+  } catch (error) {
+    return { ok: false, code: databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable" };
+  }
+}
+
+async function postBuild(
+  value: UnsignedBuildRequest,
+  rehearsal: boolean,
+): Promise<{ ok: true } | { ok: false; code: string }> {
+  const body = JSON.stringify(rehearsal ? { ...value, scope: "test" } : value);
+  let config: { url: string; secret: string };
+  try {
+    config = requireTransactionBuilder();
+  } catch {
+    return { ok: false, code: "builder_unconfigured" };
+  }
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = randomUUID().replaceAll("-", "");
+  const signature = signServiceRequest({
+    secret: config.secret,
+    timestamp,
+    nonce,
+    method: "POST",
+    path: BUILD_PATH,
+    body,
+  });
+  try {
+    const response = await fetch(new URL(BUILD_PATH, config.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sdk-timestamp": timestamp,
+        "x-sdk-nonce": nonce,
+        "x-sdk-signature": signature,
+      },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok || !unsignedBuildAccepted(payload)) return { ok: false, code: builderFailureCode(payload) };
+    return { ok: true };
+  } catch {
+    return { ok: false, code: "builder_rejected" };
+  }
+}
+
+export async function requestParentObservation(
+  mint: string,
+): Promise<{ ok: true; observation: ParentObservation } | { ok: false; code: string }> {
+  const parsed = parseParentObservationRequest({ mint });
+  if (!parsed.ok) return parsed;
+  let config: { url: string; secret: string };
+  try {
+    config = requireTransactionBuilder();
+  } catch {
+    return { ok: false, code: "builder_unconfigured" };
+  }
+  const body = JSON.stringify({ mint: parsed.mint });
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = randomUUID().replaceAll("-", "");
+  const signature = signServiceRequest({
+    secret: config.secret,
+    timestamp,
+    nonce,
+    method: "POST",
+    path: PARENT_PATH,
+    body,
+  });
+  try {
+    const response = await fetch(new URL(PARENT_PATH, config.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sdk-timestamp": timestamp,
+        "x-sdk-nonce": nonce,
+        "x-sdk-signature": signature,
+      },
+      body,
+      signal: AbortSignal.timeout(10_000),
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok) {
+      const code =
+        payload && typeof payload === "object" && "code" in payload ? String((payload as { code: unknown }).code) : "";
+      if (code === "parent_ineligible" || code === "unavailable" || code === "body") return { ok: false, code };
+      return { ok: false, code: "builder_rejected" };
+    }
+    if (!payload || typeof payload !== "object" || !("observation" in payload)) {
+      return { ok: false, code: "builder_rejected" };
+    }
+    const observation = parseParentObservation((payload as { observation: unknown }).observation);
+    return observation.ok ? observation : { ok: false, code: "builder_rejected" };
   } catch {
     return { ok: false, code: "builder_rejected" };
   }

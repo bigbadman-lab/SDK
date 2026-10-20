@@ -823,3 +823,47 @@ type LibraryRow = {
   content_hash: string;
   blueprint: unknown;
 };
+
+export async function assertRehearsalParent(): Promise<string> {
+  try {
+    const columns = await getSql()<{ column_name: string }[]>`
+      select column_name from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'token_launches'
+        and column_name in ('parent_scope', 'parent_mint_address')
+    `;
+    if (columns.length < 2) throw new LaunchFlowError(503, "not_ready");
+    const rows = await getSql()<{ mint_address: string }[]>`
+      select mint_address from parent_registrations
+      where scope = 'test' and symbol = 'TREST' and eligible = true
+      limit 1
+    `;
+    const mint = rows[0]?.mint_address;
+    if (!mint) throw new LaunchFlowError(422, "parent_unregistered");
+    return mint;
+  } catch (error) {
+    if (error instanceof LaunchFlowError) throw error;
+    throw new LaunchFlowError(503, databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable");
+  }
+}
+
+export async function bindRehearsalParent(accountId: string, launchId: string): Promise<void> {
+  const mint = await assertRehearsalParent();
+  try {
+    const updated = await getSql()<{ id: string }[]>`
+      update token_launches
+      set parent_scope = 'test', parent_mint_address = ${mint}
+      where id = ${launchId}
+        and account_id = ${accountId}
+        and (
+          (parent_scope = 'production' and parent_mint_address is null)
+          or (parent_scope = 'test' and parent_mint_address = ${mint})
+        )
+      returning id
+    `;
+    if (!updated[0]) throw new LaunchFlowError(409, "parent_immutable");
+  } catch (error) {
+    if (error instanceof LaunchFlowError) throw error;
+    throw new LaunchFlowError(503, databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable");
+  }
+}

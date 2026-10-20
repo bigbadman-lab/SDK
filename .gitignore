@@ -1,6 +1,7 @@
 /node_modules
 /services/transaction-builder/node_modules
 /services/transaction-builder/dist
+/services/rewards-worker/node_modules
 /.pnp
 .pnp.*
 .yarn/*

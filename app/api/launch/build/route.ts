@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { builderFailureCode } from "@/lib/launch/builder-probe";
-import { parseLauncherBuildRequest } from "@/lib/launch/builder-request";
+import { publicLaunchScope } from "@/lib/launch/parent-scope";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { requestUnsignedBuild } from "@/lib/server/launch/unsigned";
@@ -18,7 +18,7 @@ function statusFor(code: string): number {
   if (code === "builder_unconfigured" || code === "parent_unregistered" || code === "parent_ineligible") {
     return 503;
   }
-  if (code === "body" || code === "mint") return 400;
+  if (code === "body" || code === "mint" || code === "parent_scope") return 400;
   return 502;
 }
 
@@ -39,14 +39,17 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch {
     return NextResponse.json({ ok: false, error: launchMessage("body"), code: "body" }, { status: 400 });
   }
-  const parsed = parseLauncherBuildRequest(body);
+  if (request.headers.get("x-sdk-rehearsal") === "trest") {
+    return NextResponse.json({ ok: false, error: launchMessage("parent_scope"), code: "parent_scope" }, { status: 403 });
+  }
+  const parsed = publicLaunchScope(body);
   if (!parsed.ok) {
-    return NextResponse.json({ ok: false, error: launchMessage("body"), code: "body" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: launchMessage(parsed.code), code: parsed.code }, { status: 400 });
   }
   const result = await requestUnsignedBuild({
     accountId: account.id,
-    launchId: parsed.value.launchId,
-    mintPublicKey: parsed.value.mintPublicKey,
+    launchId: parsed.launchId,
+    mintPublicKey: parsed.mintPublicKey,
   });
   if (!result.ok) {
     const code = builderFailureCode({ code: result.code });

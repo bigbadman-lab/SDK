@@ -4,7 +4,8 @@ import { parsePrepareBody } from "@/lib/launch/prepare";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { launchError } from "@/lib/server/launch/http";
-import { prepareLaunch } from "@/lib/server/launch/service";
+import { assertRehearsalParent, bindRehearsalParent, prepareLaunch } from "@/lib/server/launch/service";
+import { isProvisionedOperator } from "@/lib/server/operator";
 import { trustedOrigin } from "@/lib/server/origin";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,13 @@ export async function POST(request: Request): Promise<NextResponse> {
       { status: 400 }
     );
   }
+  const rehearsal = request.headers.get("x-sdk-rehearsal") === "trest";
+  if (rehearsal && !isProvisionedOperator(account.walletAddress)) {
+    return NextResponse.json(
+      { error: launchMessage("parent_scope"), code: "parent_scope" },
+      { status: 403 },
+    );
+  }
   const parsed = parsePrepareBody(body);
   if (!parsed.ok) {
     return NextResponse.json(
@@ -40,7 +48,10 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
   }
   try {
-    return NextResponse.json(await prepareLaunch(account, parsed.value));
+    if (rehearsal) await assertRehearsalParent();
+    const review = await prepareLaunch(account, parsed.value);
+    if (rehearsal) await bindRehearsalParent(account.id, review.id);
+    return NextResponse.json(review);
   } catch (error) {
     return launchError(error);
   }

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import test from "node:test";
 
+import { readFileSync } from "node:fs";
+
+import { PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID } from "../../../lib/rewards/collect.ts";
 import { executeAlt, refuseExecution } from "./alt-cli.ts";
+import { EXPECTED_PROGRAMS } from "./protocol.ts";
 import { ROUTES, handle, type HandlerPorts, type Produced } from "./handle.ts";
 import { memoryStores } from "./store.ts";
 import type { BuildRow, LaunchRecord, ParentRow } from "./domain.ts";
@@ -116,7 +120,15 @@ function signed(path: string, body: Record<string, unknown>, nonce = randomBytes
 const body = { launchId: LAUNCH, idempotencyKey: KEY, mintPublicKey: MINT };
 
 test("routes expose no signing or broadcast method", () => {
-  assert.deepEqual(ROUTES, ["GET /health", "GET /status", "POST /v1/diagnose", "POST /v1/build", "POST /v1/inspect"]);
+  assert.deepEqual(ROUTES, [
+    "GET /health",
+    "GET /status",
+    "POST /v1/diagnose",
+    "POST /v1/build",
+    "POST /v1/inspect",
+    "POST /v1/parent",
+    "POST /v1/evidence",
+  ]);
   assert.equal(ROUTES.some((route) => /broadcast|sign/i.test(route)), false);
 });
 
@@ -232,6 +244,87 @@ test("an authenticated diagnose reports an unregistered parent and rejects repla
   assert.equal(replay.body.code, "replay");
   const wrong = signed("/v1/diagnose", { shareholders: [] });
   assert.equal((await handle(wrong, bound)).body.code, "body");
+});
+
+test("parent observation does not build, sign, or broadcast", async () => {
+  let produced = false;
+  const { bound } = ports({
+    launch: launch(),
+    produce: async () => {
+      produced = true;
+      return { ok: false, code: "unavailable" };
+    },
+  });
+  const missing = await handle(signed("/v1/parent", { mint: PARENT }), bound);
+  assert.equal(missing.status, 503);
+  assert.equal(missing.body.code, "unavailable");
+  const observed = await handle(signed("/v1/parent", { mint: PARENT }), {
+    ...bound,
+    async observe(mint) {
+      assert.equal(mint, PARENT);
+      return {
+        ok: true,
+        observation: {
+          mint: PARENT,
+          creator: LAUNCHER,
+          feeMode: "single_recipient",
+          quoteMint: "11111111111111111111111111111111",
+          tokenProgram: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+          decimals: 6,
+          mayhem: false,
+          cashback: false,
+          holderReward: false,
+          depth: 0,
+          maxCurveDepth: 5,
+          graduated: false,
+          hasPool: false,
+          bondingCurve: null,
+          pool: null,
+          source: "pumpCoin",
+        },
+      };
+    },
+  });
+  assert.equal(observed.status, 200);
+  assert.equal(observed.body.ok, true);
+  assert.equal(produced, false);
+  assert.equal(JSON.stringify(observed.body).includes("private"), false);
+  assert.equal(PUMP_PROGRAM_ID, EXPECTED_PROGRAMS.pump);
+  assert.equal(PUMP_AMM_PROGRAM_ID, EXPECTED_PROGRAMS.amm);
+  const store = readFileSync(new URL("./store.ts", import.meta.url), "utf8");
+  assert.equal(store.includes("where id = 1"), true);
+  assert.equal(store.includes("parent_registrations"), false);
+  const substituted = await handle(signed("/v1/build", { ...body, parentMint: PARENT }), bound);
+  assert.equal(substituted.status, 400);
+  assert.equal(substituted.body.code, "body");
+});
+
+test("a rehearsal build stays closed until TREST is registered", async () => {
+  const { bound, calls } = ports({
+    launch: launch(),
+    parent: { mintAddress: null, tokenProgram: null, altAddress: null, altAuthority: null, altStatus: "absent" },
+  });
+  const missing = await handle(signed("/v1/build", { ...body, scope: "test" }), bound);
+  assert.equal(missing.status, 503);
+  assert.equal(missing.body.code, "parent_unregistered");
+  assert.equal(calls.produce, 0);
+  const TREST = PARENT;
+  let seen = "";
+  bound.testParent = async () => ({ mint: TREST, tokenProgram: "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb" });
+  bound.produce = async (input) => {
+    seen = input.identity.parentMint;
+    calls.produce += 1;
+    return { ok: true, produced: produced({ parentMint: TREST }) };
+  };
+  const built = await handle(signed("/v1/build", { ...body, scope: "test" }, randomBytes(16).toString("hex")), bound);
+  assert.equal(built.status, 200);
+  assert.equal(seen, TREST);
+  assert.equal(calls.produce, 1);
+  const quoted = await handle(signed("/v1/build", { ...body, scope: "test", quoteMint: TREST }, randomBytes(16).toString("hex")), bound);
+  assert.equal(quoted.status, 400);
+  const lookup = readFileSync(new URL("./test-parent.ts", import.meta.url), "utf8");
+  assert.equal(lookup.includes("parent_registrations"), true);
+  assert.equal(lookup.includes("sdk_parent_config"), false);
 });
 
 test("execution refuses without reading a signer", async () => {

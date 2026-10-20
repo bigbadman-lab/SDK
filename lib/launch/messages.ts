@@ -46,7 +46,19 @@ export function launchMessage(code: string): string {
     return "The metadata link is too long for a token launch.";
   if (code === "pin_failed")
     return "The artwork or metadata could not be pinned. Nothing was marked ready.";
-  if (code === "schema_missing" || code === "unavailable")
+  if (code === "schema_missing" || code === "unavailable" || code === "not_ready")
     return "Launch preparation is unavailable.";
+  if (code === "parent_unregistered")
+    return "The rehearsal parent is not registered.";
+  if (code === "parent_immutable" || code === "parent_scope")
+    return "This launch stays paired with its original parent.";
+  if (code === "wire_key")
+    return "Submission needs the signing-wire key before it can be saved.";
+  if (code === "mint_conflict" || code === "mint_lost")
+    return "This launch already has a mint. A new mint was not created.";
+  if (code === "message_changed")
+    return "The transaction changed. It was not signed.";
+  if (code === "sign_rejected")
+    return "Phantom declined the transaction. Nothing was submitted.";
   return "The launch preparation was not accepted.";
 }

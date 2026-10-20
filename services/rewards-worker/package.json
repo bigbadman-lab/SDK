@@ -1,0 +1,22 @@
+{
+  "name": "sdk-rewards-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/**/*.test.ts",
+    "start": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/server.ts"
+  },
+  "dependencies": {
+    "@pump-fun/pump-sdk": "4.2.0",
+    "postgres": "3.4.9"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "embedded-postgres": "^18.4.0-beta.17"
+  }
+}

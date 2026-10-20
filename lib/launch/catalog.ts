@@ -14,20 +14,24 @@ export function launchPageMode(input: {
   return "resolve";
 }
 
-export function launchCatalogHref(query: { q: string; page: number }): string {
+export function launchCatalogHref(query: { q: string; page: number; rehearsal?: boolean }): string {
   const params = new URLSearchParams();
+  if (query.rehearsal) params.set("rehearsal", "trest");
   if (query.q) params.set("q", query.q);
   if (query.page > 1) params.set("page", String(query.page));
   const text = params.toString();
   return text.length > 0 ? `/launch?${text}` : "/launch";
 }
 
-export function launchDraftHref(draftId: string): string {
-  return `/launch?draft=${encodeURIComponent(draftId)}`;
+export function launchDraftHref(draftId: string, rehearsal = false): string {
+  const params = new URLSearchParams({ draft: draftId });
+  if (rehearsal) params.set("rehearsal", "trest");
+  return `/launch?${params.toString()}`;
 }
 
-export function launchLibraryHref(sdkId: string, versionId: string): string {
+export function launchLibraryHref(sdkId: string, versionId: string, rehearsal = false): string {
   const params = new URLSearchParams({ library: sdkId, version: versionId });
+  if (rehearsal) params.set("rehearsal", "trest");
   return `/launch?${params.toString()}`;
 }
 

@@ -26,6 +26,7 @@ export function LaunchSelector({
   libraryUnavailable,
   query,
   nextPage,
+  rehearsal = false,
 }: {
   signedIn: boolean;
   mine: LaunchChoice[] | null;
@@ -34,6 +35,7 @@ export function LaunchSelector({
   libraryUnavailable: boolean;
   query: Pick<LibraryQuery, "q" | "page">;
   nextPage: number | null;
+  rehearsal?: boolean;
 }): ReactNode {
   return (
     <div className="mt-6 grid gap-6">
@@ -67,6 +69,7 @@ export function LaunchSelector({
           SDK Library
         </h2>
         <form method="get" action="/launch" className="flex gap-2">
+          {rehearsal ? <input type="hidden" name="rehearsal" value="trest" /> : null}
           <label className="sr-only" htmlFor="launch-sdk-search">
             Search published SDKs
           </label>
@@ -101,13 +104,13 @@ export function LaunchSelector({
           <div className="flex gap-4 font-mono text-[10px] tracking-[0.04em] uppercase">
             {query.page > 1 ? (
               <Link
-                href={launchCatalogHref({ q: query.q, page: query.page - 1 })}
+                href={launchCatalogHref({ q: query.q, page: query.page - 1, rehearsal })}
               >
                 Previous
               </Link>
             ) : null}
             {nextPage ? (
-              <Link href={launchCatalogHref({ q: query.q, page: nextPage })}>
+              <Link href={launchCatalogHref({ q: query.q, page: nextPage, rehearsal })}>
                 Next
               </Link>
             ) : null}
@@ -160,12 +163,15 @@ export function HeldSdk({
   );
 }
 
-export function toDraftChoice(draft: {
-  id: string;
-  name: string;
-  description: string;
-  originatorLabel: string;
-}): LaunchChoice {
+export function toDraftChoice(
+  draft: {
+    id: string;
+    name: string;
+    description: string;
+    originatorLabel: string;
+  },
+  rehearsal = false,
+): LaunchChoice {
   return {
     id: draft.id,
     name: draft.name,
@@ -173,7 +179,7 @@ export function toDraftChoice(draft: {
     provenance: "My SDK",
     versionLabel: "Tested revision",
     originatorLabel: draft.originatorLabel,
-    href: launchDraftHref(draft.id),
+    href: launchDraftHref(draft.id, rehearsal),
   };
 }
 
@@ -185,7 +191,7 @@ export function toLibraryChoice(sdk: {
   originatorLabel: string;
   versionId: string;
   versionNumber: number;
-}): LaunchChoice {
+}, rehearsal = false): LaunchChoice {
   return {
     id: sdk.id,
     name: sdk.name,
@@ -193,7 +199,7 @@ export function toLibraryChoice(sdk: {
     provenance: sdk.origin === "official" ? "Official" : "Community",
     versionLabel: `Version ${sdk.versionNumber}`,
     originatorLabel: sdk.originatorLabel,
-    href: launchLibraryHref(sdk.id, sdk.versionId),
+    href: launchLibraryHref(sdk.id, sdk.versionId, rehearsal),
   };
 }
 
