@@ -324,7 +324,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         where parent_mint_address = ${parentMint}
           and scope = ${scope}
           and idempotency_key = ${idempotencyKey}
-          and status in ('reserved', 'submitted', 'uncertain')
+          and status in ('reserved', 'submitted', 'uncertain', 'unreconciled')
           and ${status} in ('submitted', 'confirmed', 'failed', 'uncertain', 'unreconciled')
         returning id::text
       `;

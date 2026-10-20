@@ -63,12 +63,16 @@ test("an unconfigured rewards worker stays up and does not sign", async () => {
   try {
     const health = await waitForHealth(port);
     assert.equal(health.signer, "unconfigured");
+    assert.equal(health.http, "ok");
+    assert.equal(health.runtime, "unconfigured");
     assert.equal(health.signing, false);
     assert.equal(health.broadcasts, false);
     const refused = await fetch(`http://127.0.0.1:${port}/v1/collect`, { method: "POST", body: "{\"instructions\":[]}" });
     assert.equal(refused.status, 404);
     const body = await refused.json();
     assert.equal(JSON.stringify(body).includes("instructions"), false);
+    const claims = await fetch(`http://127.0.0.1:${port}/v1/claims`, { method: "POST" });
+    assert.equal(claims.status, 401);
   } finally {
     child.kill("SIGTERM");
   }
@@ -112,10 +116,31 @@ test("a matching suspended signer stays dark and does not echo the key", async (
     const health = await waitForHealth(port);
     const logged = Buffer.concat(chunks).toString("utf8");
     assert.equal(health.signer, "suspended");
+    assert.equal(health.http, "ok");
+    assert.equal(health.runtime, "suspended");
     assert.equal(health.signing, false);
     assert.equal(health.broadcasts, false);
     assert.equal(JSON.stringify(health).includes(key.secret), false);
     assert.equal(logged.includes(key.secret), false);
+  } finally {
+    child.kill("SIGTERM");
+  }
+});
+
+test("an authenticated claim stays inactive while financial execution is off", async () => {
+  const port = 18134;
+  const child = start(port, { REWARDS_WORKER_SECRET: "worker-secret-for-test" });
+  try {
+    await waitForHealth(port);
+    const response = await fetch(`http://127.0.0.1:${port}/v1/claims`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-sdk-worker-auth": "worker-secret-for-test" },
+      body: JSON.stringify({ asset: "sol", instructions: [] }),
+    });
+    assert.equal(response.status, 503);
+    const body = (await response.json()) as { code?: string };
+    assert.equal(body.code, "inactive");
+    assert.equal(JSON.stringify(body).includes("signature"), false);
   } finally {
     child.kill("SIGTERM");
   }

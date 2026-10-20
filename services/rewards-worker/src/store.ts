@@ -195,7 +195,7 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
     async markClaim(parentMint, scope, idempotencyKey, status, signature) {
       return exclusive(() => {
         const claim = claims.find((row) => row.parentMint === parentMint && row.scope === scope && row.idempotencyKey === idempotencyKey);
-        if (!claim || (claim.status !== "recorded" && claim.status !== "submitted" && claim.status !== "uncertain")) return "order";
+        if (!claim || (claim.status !== "recorded" && claim.status !== "submitted" && claim.status !== "uncertain" && claim.status !== "unreconciled")) return "order";
         claim.status = status;
         claim.signature = signature ?? claim.signature;
         return "ok";

@@ -1,4 +1,5 @@
 import { TrestForm } from "@/components/admin/trest-form";
+import { RewardsMonitor } from "@/components/admin/rewards-monitor";
 import { Footer } from "@/components/footer";
 import { Logo } from "@/components/logo";
 import { WalletButton } from "@/components/wallet/wallet-button";
@@ -6,6 +7,7 @@ import { createMetadata } from "@/lib/metadata";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { readSession } from "@/lib/server/auth";
 import { isProvisionedOperator } from "@/lib/server/operator";
+import { loadOperatorRewards } from "@/lib/server/rewards/operator";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -28,6 +30,7 @@ export default async function TrestParentPage(): Promise<ReactNode> {
   const session = await readSession(store.get(SESSION_COOKIE)?.value);
   const account = session.state === "active" ? session.account : null;
   if (account && !isProvisionedOperator(account.walletAddress)) notFound();
+  const rewards = account ? await loadOperatorRewards() : null;
 
   return (
     <>
@@ -56,6 +59,7 @@ export default async function TrestParentPage(): Promise<ReactNode> {
               scope. It does not create a token or send a transaction.
             </p>
             <TrestForm />
+            {rewards ? <RewardsMonitor status={rewards} /> : null}
             <p className="mt-8">
               <Link href="/launch?rehearsal=trest" className="font-mono text-[11px] tracking-[0.04em] uppercase">
                 Open the TREST rehearsal in the launch form

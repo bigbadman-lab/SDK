@@ -76,9 +76,20 @@ export function signInspected(input: {
   }
 }
 
+export type RewardsRuntime = "ready" | "suspended" | "unconfigured" | "inactive";
+
+export function rewardsRuntime(signer: SignerState, active: boolean): RewardsRuntime {
+  if (active) return "ready";
+  if (signer === "suspended") return "suspended";
+  if (signer === "unconfigured") return "unconfigured";
+  return "inactive";
+}
+
 export function rewardsHealth(signer: SignerState, active = false): {
   ok: true;
   service: "rewards-worker";
+  http: "ok";
+  runtime: RewardsRuntime;
   signer: SignerState;
   signing: false;
   broadcasts: boolean;
@@ -88,6 +99,8 @@ export function rewardsHealth(signer: SignerState, active = false): {
   return {
     ok: true,
     service: "rewards-worker",
+    http: "ok",
+    runtime: rewardsRuntime(signer, active),
     signer,
     signing: false,
     broadcasts: active,

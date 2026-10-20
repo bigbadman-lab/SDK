@@ -45,8 +45,16 @@ test("a deployer signer matches only its derived address and stays out of respon
     signer: "suspended",
   });
   const health = rewardsHealth("matched");
+  assert.equal(health.http, "ok");
+  assert.equal(health.runtime, "inactive");
   assert.equal(health.signing, false);
   assert.equal(health.broadcasts, false);
+  assert.equal(rewardsHealth("suspended").runtime, "suspended");
+  assert.equal(rewardsHealth("unconfigured").runtime, "unconfigured");
+  const ready = rewardsHealth("matched", true);
+  assert.equal(ready.runtime, "ready");
+  assert.equal(ready.signing, false);
+  assert.equal(ready.loop, true);
   assert.equal(JSON.stringify(health).includes(signer.secret), false);
   assert.equal(JSON.stringify(inspectDeployerSigner({ secret: signer.secret, expectedAddress: other.address, suspended: false })).includes(signer.secret), false);
 });

@@ -4,7 +4,7 @@ import { PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID } from "../../../lib/rewards/colle
 import { allocateWindow, buybackBlocked } from "../../../lib/rewards/cycle.ts";
 import { messageSha256, signedTransactionWire, type CompiledTransaction } from "../../../lib/rewards/inspect.ts";
 import { snapshotHolders } from "../../../lib/rewards/holders.ts";
-import { claimAuthorizationMessage, verifyClaimOwnership } from "../../../lib/rewards/ownership.ts";
+import { boundClaimMessage, claimAuthorizationMessage, parseBoundClaim, verifyClaimOwnership } from "../../../lib/rewards/ownership.ts";
 import { explainCreatorDelta, reconcileBuyback, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
 import { derivedDeployerAddress, rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
@@ -404,6 +404,8 @@ export async function submitClaim(input: {
   idempotencyKey: string;
   message: string;
   signature: string;
+  domain?: string;
+  nowMs?: number;
   store: RewardsStore;
   chain: Chain;
 }): Promise<{ ok: true; signature: string } | { ok: false; code: CycleCode | "duplicate" | "ownership" | "amount" }> {
@@ -414,15 +416,31 @@ export async function submitClaim(input: {
   })) {
     return { ok: false, code: "inactive" };
   }
-  const expected = claimAuthorizationMessage({
-    scope: input.scope,
-    parentMint: input.parentMint,
-    claimant: input.claimant,
-    asset: input.asset,
-    idempotencyKey: input.idempotencyKey,
-    amount: input.amount,
-  });
+  const bound = parseBoundClaim(input.message);
+  const expected = bound
+    ? boundClaimMessage({
+        domain: bound.domain,
+        scope: input.scope,
+        parentMint: input.parentMint,
+        claimant: input.claimant,
+        asset: input.asset,
+        idempotencyKey: input.idempotencyKey,
+        amount: input.amount,
+        nonce: bound.nonce,
+        expiresAt: bound.expiresAt,
+      })
+    : claimAuthorizationMessage({
+        scope: input.scope,
+        parentMint: input.parentMint,
+        claimant: input.claimant,
+        asset: input.asset,
+        idempotencyKey: input.idempotencyKey,
+        amount: input.amount,
+      });
   if (!expected || expected !== input.message) return { ok: false, code: "ownership" };
+  if (bound && (input.domain !== bound.domain || !Number.isInteger(input.nowMs) || (input.nowMs ?? 0) >= bound.expiresAt)) {
+    return { ok: false, code: "ownership" };
+  }
   const proof = verifyClaimOwnership({ message: input.message, signature: input.signature, claimant: input.claimant });
   if (!proof.ok) return proof;
   const parent = await input.store.parent(input.scope);
@@ -440,7 +458,32 @@ export async function submitClaim(input: {
     entitlement += BigInt(input.asset === "sol" ? row.solLamports : row.tokenAmount);
   }
   const prior = await input.store.claims(parent.mintAddress, parent.scope);
-  if (prior.some((claim) => claim.idempotencyKey === input.idempotencyKey)) return { ok: false, code: "duplicate" };
+  const existing = prior.find((claim) => claim.idempotencyKey === input.idempotencyKey);
+  if (existing?.status === "confirmed") return { ok: false, code: "duplicate" };
+  if (existing?.signature && (existing.status === "uncertain" || existing.status === "submitted" || existing.status === "unreconciled")) {
+    const vaults = await readCreatorVaults(input.chain, parent.deployerAddress);
+    const observed = await input.chain.transaction(existing.signature, {
+      creator: parent.deployerAddress,
+      solVault: vaults.ok ? vaults.solVault : parent.deployerAddress,
+      wsolVault: vaults.ok ? vaults.wsolVault : parent.deployerAddress,
+      parentMint: parent.mintAddress,
+      destination: input.claimant,
+    });
+    if (!observed || observed.status === "uncertain") return { ok: false, code: "uncertain" };
+    if (observed.status === "failed") {
+      await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "failed", existing.signature);
+      return { ok: false, code: "failed" };
+    }
+    const received = BigInt(input.asset === "sol" ? observed.destinationDelta : observed.destinationTokenDelta);
+    if (received < BigInt(input.amount)) {
+      await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "unreconciled", existing.signature);
+      return { ok: false, code: "unreconciled" };
+    }
+    const marked = await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "confirmed", existing.signature);
+    if (marked !== "ok") return { ok: false, code: "uncertain" };
+    return { ok: true, signature: existing.signature };
+  }
+  if (existing) return { ok: false, code: "duplicate" };
   const claimed = prior
     .filter((claim) => claim.claimant === input.claimant && claim.asset === input.asset && claim.status === "confirmed")
     .reduce((sum, claim) => sum + BigInt(claim.amount), BigInt(0));

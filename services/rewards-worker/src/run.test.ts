@@ -11,6 +11,7 @@ import { claimAuthorizationMessage } from "../../../lib/rewards/ownership.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
 import { creatorVaultAddress, heliusChain, observeMeta, readCreatorVaults, type Chain, type ObservedTransaction } from "./chain.ts";
 import { buildSolCollection } from "./instructions.ts";
+import { settleClaimHttp, type ClaimBody } from "./claim-route.ts";
 import { runCycle, submitClaim } from "./run.ts";
 import { memoryStore, type RegisteredParent } from "./store.ts";
 
@@ -379,6 +380,151 @@ test("SOL and TREST claims require ownership and cannot be repeated or cross par
   if (otherParent.ok) return;
   assert.equal(otherParent.code, "parent");
   assert.equal(env.submits.length, before + 2);
+});
+
+test("an uncertain claim is reconciled without a second transfer", async () => {
+  const env = harness();
+  await cycle(env);
+  const before = env.submits.length;
+  const message = claimAuthorizationMessage({
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    idempotencyKey: "claim-sol-resume-0001",
+    amount: "298500",
+  });
+  assert.ok(message);
+  assert.equal(await env.store.saveClaim({
+    claimant: env.holder.address,
+    asset: "sol",
+    amount: "298500",
+    idempotencyKey: "claim-sol-resume-0001",
+    status: "uncertain",
+    signature: "resume-signature",
+    scope: "test",
+    parentMint: TREST,
+    proofHash: "ab".repeat(32),
+  }), "ok");
+  const resumed = await submitClaim({
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    amount: "298500",
+    idempotencyKey: "claim-sol-resume-0001",
+    message,
+    signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), bs58.decode(env.holder.secret))),
+    store: env.store,
+    chain: env.chain,
+  });
+  assert.equal(resumed.ok, true);
+  if (!resumed.ok) return;
+  assert.equal(resumed.signature, "resume-signature");
+  assert.equal(env.submits.length, before);
+});
+
+test("an account claim crosses the worker boundary only for its reserved entitlement", async () => {
+  const env = harness();
+  await cycle(env);
+  const before = env.submits.length;
+  const message = claimAuthorizationMessage({
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    idempotencyKey: "claim-sol-boundary-01",
+    amount: "298500",
+  });
+  assert.ok(message);
+  const body = {
+    scope: "test" as const,
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol" as const,
+    amount: "298500",
+    idempotencyKey: "claim-sol-boundary-01",
+    message,
+    signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), bs58.decode(env.holder.secret))),
+    domain: "sdk.fund",
+  };
+  const execute = (claim: ClaimBody) => submitClaim({
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    scope: claim.scope,
+    parentMint: claim.parentMint,
+    claimant: claim.claimant,
+    asset: claim.asset,
+    amount: claim.amount,
+    idempotencyKey: claim.idempotencyKey,
+    message: claim.message,
+    signature: claim.signature,
+    domain: claim.domain,
+    store: env.store,
+    chain: env.chain,
+  });
+  const unsigned = await settleClaimHttp({
+    headerMatches: false,
+    runtimeReady: true,
+    raw: JSON.stringify(body),
+    execute,
+  });
+  assert.equal(unsigned.status, 401);
+  const inactive = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: false,
+    raw: JSON.stringify(body),
+    execute,
+  });
+  assert.equal(inactive.status, 503);
+  const arbitrary = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    raw: JSON.stringify({ ...body, instructions: [{ programId: "11111111111111111111111111111111" }] }),
+    execute,
+  });
+  assert.equal(arbitrary.status, 400);
+  assert.equal(env.submits.length, before);
+  const accepted = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    raw: JSON.stringify(body),
+    execute,
+  });
+  assert.equal(accepted.status, 200);
+  assert.equal(typeof accepted.body.signature, "string");
+  assert.equal(env.submits.length, before + 1);
+  const inflated = claimAuthorizationMessage({
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    idempotencyKey: "claim-sol-boundary-02",
+    amount: "999999999",
+  });
+  assert.ok(inflated);
+  const over = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    raw: JSON.stringify({
+      ...body,
+      amount: "999999999",
+      idempotencyKey: "claim-sol-boundary-02",
+      message: inflated,
+      signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(inflated), bs58.decode(env.holder.secret))),
+    }),
+    execute,
+  });
+  assert.equal(over.status, 409);
+  assert.equal(env.submits.length, before + 1);
 });
 
 test("Helius vault reads use the derived creator vault and parsed transaction meta", async () => {

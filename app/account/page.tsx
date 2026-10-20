@@ -1,4 +1,5 @@
 import { ApiKeys } from "@/components/account/api-keys";
+import { HolderRewards, SdkEarnings } from "@/components/account/holder-rewards";
 import { DraftList } from "@/components/builder/draft-list";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
@@ -6,6 +7,7 @@ import { Footer } from "@/components/footer";
 import { Logo } from "@/components/logo";
 import { createMetadata } from "@/lib/metadata";
 import { readSession } from "@/lib/server/auth";
+import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { cookies } from "next/headers";
@@ -19,11 +21,17 @@ export const metadata = createMetadata({
   path: "/account",
 });
 
-export default async function AccountPage(): Promise<ReactNode> {
+export default async function AccountPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ scope?: string }>;
+}): Promise<ReactNode> {
   const store = await cookies();
   const token = store.get(SESSION_COOKIE)?.value;
   const session = await readSession(token);
   const account = session.state === "active" ? session.account : null;
+  const scope = rewardScope((await searchParams).scope ?? null);
+  const rewards = account ? await loadAccountRewards(account.walletAddress, scope) : null;
 
   return (
     <>
@@ -57,8 +65,9 @@ export default async function AccountPage(): Promise<ReactNode> {
               revision. A submission is not a token launch. A tested SDK can be
               prepared for launch. Preparation stores artwork and metadata. It
               does not mint a token. API keys call published SDKs and do not
-              launch a token. Royalties, rewards, and the Feed are not
-              available.
+              launch a token. Holder rewards and SDK earnings below are
+              accounting records. They do not move funds while the rewards
+              worker is suspended.
             </p>
             {isProvisionedOperator(account.walletAddress) ? (
               <Link
@@ -70,6 +79,25 @@ export default async function AccountPage(): Promise<ReactNode> {
             ) : null}
             <DraftList />
             <ApiKeys />
+            {rewards ? (
+              <>
+                {scope === "production" ? (
+                  <p className="text-[14px] leading-[1.6]">
+                    <Link href="/account?scope=test" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
+                      TREST rehearsal balances
+                    </Link>
+                  </p>
+                ) : (
+                  <p className="text-[14px] leading-[1.6]">
+                    <Link href="/account" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
+                      Production rewards
+                    </Link>
+                  </p>
+                )}
+                <HolderRewards view={rewards} wallet={account.walletAddress} />
+                <SdkEarnings view={rewards} />
+              </>
+            ) : null}
           </div>
         ) : (
           <div className="mt-8 grid gap-5">

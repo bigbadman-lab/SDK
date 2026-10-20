@@ -54,7 +54,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-7), [
+  assert.deepEqual(files.slice(-8), [
     "20261020140000_phase_05d1_signing_attempt.sql",
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
@@ -62,6 +62,7 @@ before(async () => {
     "20261020230000_trest031_reward_claim_status.sql",
     "20261020240000_phase_05d2_launch_submission.sql",
     "20261020250000_phase_05d2b_launch_approval.sql",
+    "20261020260000_trest04_claims_child_fees_emergency.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -248,12 +249,94 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(submissionLock[0]?.forced, true);
   const parentConfig = await db()`select mint_address from sdk_parent_config where id = 1`;
   assert.equal(parentConfig.length, 0);
+  const trest04 = await db()`
+    select to_regclass('public.reward_claim_challenges') as challenges,
+           to_regclass('public.child_fee_distributions') as distributions,
+           to_regclass('public.child_fee_receipts') as receipts,
+           to_regclass('public.emergency_sweeps') as sweeps
+  `;
+  assert.ok(trest04[0]?.challenges);
+  assert.ok(trest04[0]?.distributions);
+  assert.ok(trest04[0]?.receipts);
+  assert.ok(trest04[0]?.sweeps);
+  await db()`
+    insert into reward_claim_challenges (
+      wallet_address, parent_mint_address, scope, asset, nonce, amount, domain, expires_at
+    ) values (
+      ${HOLDER}, ${MINT}, 'test', 'sol', 'challenge-nonce-01', '10', 'sdk.fund', now() + interval '10 minutes'
+    )
+  `;
+  await assert.rejects(() => db()`
+    insert into reward_claim_challenges (
+      wallet_address, parent_mint_address, scope, asset, nonce, amount, domain, expires_at
+    ) values (
+      ${HOLDER}, ${MINT}, 'test', 'sol', 'challenge-nonce-01', '11', 'sdk.fund', now() + interval '10 minutes'
+    )
+  `);
+  const raced = await Promise.allSettled([
+    db()`
+      insert into reward_claim_challenges (
+        wallet_address, parent_mint_address, scope, asset, nonce, amount, domain, expires_at
+      ) values (
+        ${HOLDER}, ${MINT}, 'test', 'parent_token', 'challenge-nonce-02', '4', 'sdk.fund', now() + interval '10 minutes'
+      )
+    `,
+    db()`
+      insert into reward_claim_challenges (
+        wallet_address, parent_mint_address, scope, asset, nonce, amount, domain, expires_at
+      ) values (
+        ${HOLDER}, ${MINT}, 'test', 'parent_token', 'challenge-nonce-02', '4', 'sdk.fund', now() + interval '10 minutes'
+      )
+    `,
+  ]);
+  assert.equal(raced.filter((row) => row.status === "fulfilled").length, 1);
+  await db()`
+    insert into child_fee_distributions (
+      idempotency_key, child_mint_address, quote_mint_address, scope, status, signature
+    ) values (
+      'child-built-0000001', ${MINT}, ${PRODUCTION_MINT}, 'test', 'submitted', ${SIGNATURE}
+    )
+  `;
+  const built = await db()`
+    select count(*)::int as count
+    from child_fee_receipts r
+    join child_fee_distributions d on d.id = r.distribution_id
+    where d.idempotency_key = 'child-built-0000001'
+  `;
+  assert.equal(Number(built[0]?.count), 0);
+  await assert.rejects(() => db()`
+    insert into child_fee_distributions (
+      idempotency_key, child_mint_address, quote_mint_address, scope, status, signature
+    ) values (
+      'child-confirmed-nosig', ${MINT}, ${PRODUCTION_MINT}, 'test', 'confirmed', null
+    )
+  `);
+  await assert.rejects(() => db()`
+    insert into emergency_sweeps (
+      parent_mint_address, scope, destination_address, signer_address, mode, status,
+      sol_lamports, token_amount, claimable_sol, claimable_token, shortfall, signature
+    ) values (
+      ${MINT}, 'test', ${PRODUCTION_MINT}, ${DEPLOYER}, 'execute', 'confirmed',
+      '1', '1', '1', '1', true, null
+    )
+  `);
+  await db()`
+    insert into emergency_sweeps (
+      parent_mint_address, scope, destination_address, signer_address, mode, status,
+      sol_lamports, token_amount, claimable_sol, claimable_token, shortfall
+    ) values (
+      ${MINT}, 'test', ${PRODUCTION_MINT}, ${DEPLOYER}, 'dry_run', 'planned',
+      '1', '1', '1', '1', true
+    )
+  `;
 
   try {
     await db()`set role anon`;
     await assert.rejects(() => db()`select id from parent_registrations`);
     await assert.rejects(() => db()`select id from launch_submissions`);
     await assert.rejects(() => db()`select id from launch_approvals`);
+    await assert.rejects(() => db()`select id from reward_claim_challenges`);
+    await assert.rejects(() => db()`select id from emergency_sweeps`);
   } finally {
     await db()`reset role`;
   }

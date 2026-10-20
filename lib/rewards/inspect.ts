@@ -16,6 +16,7 @@ const PUMP_FEE_PROGRAM_ID = "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ";
 const BUY_DISCRIMINATOR = [225, 247, 80, 30, 213, 179, 132, 136];
 const AMM_BUY_DISCRIMINATOR = [102, 6, 61, 18, 1, 218, 235, 234];
 const AMM_COLLECT_DISCRIMINATOR = [160, 57, 89, 42, 181, 139, 43, 66];
+const DISTRIBUTE_CREATOR_FEES_V2 = [255, 203, 19, 79, 244, 68, 8, 159];
 const NATIVE_SOL_MINT = "So11111111111111111111111111111111111111112";
 
 function creatorVaultAddress(deployer: string): string | null {
@@ -50,7 +51,7 @@ export type CompiledTransaction = {
 };
 
 export type SignPolicy = {
-  kind: IntentKind;
+  kind: IntentKind | "child_distribute";
   scope: RewardScope;
   parentMint: string;
   deployer: string;
@@ -170,11 +171,25 @@ export function inspectRewardsTransaction(
   let buy = false;
   let solClaims = 0;
   let tokenClaims = 0;
+  let distributed = false;
   for (const instruction of transaction.instructions) {
     const program = canonicalAddress(instruction.programId);
     if (!program || !ALLOWED.has(program)) return { ok: false, code: "program" };
     if (instruction.keys.some((key) => key.isSigner && canonicalAddress(key.pubkey) !== deployer)) {
       return { ok: false, code: "identity" };
+    }
+    if (policy.kind === "child_distribute") {
+      const nativeCollect =
+        sameBytes(instruction.data, COLLECT_CREATOR_FEE_DISCRIMINATOR) ||
+        sameBytes(instruction.data, COLLECT_CREATOR_FEE_V2_DISCRIMINATOR) ||
+        sameBytes(instruction.data, AMM_COLLECT_DISCRIMINATOR);
+      const buyInstruction = sameBytes(instruction.data, BUY_DISCRIMINATOR) || sameBytes(instruction.data, AMM_BUY_DISCRIMINATOR);
+      if (nativeCollect || buyInstruction) return { ok: false, code: "program" };
+      if (program === PUMP_PROGRAM_ID && sameBytes(instruction.data, DISTRIBUTE_CREATOR_FEES_V2)) {
+        distributed = true;
+        continue;
+      }
+      if (program === PUMP_PROGRAM_ID || program === PUMP_AMM_PROGRAM_ID || program === PUMP_FEE_PROGRAM_ID) continue;
     }
     if (program === COMPUTE_BUDGET_PROGRAM_ID) {
       const operation = instruction.data[0];
@@ -286,5 +301,8 @@ export function inspectRewardsTransaction(
   if (policy.kind === "claim_token" && tokenClaims !== 1) return { ok: false, code: "parent" };
   if (policy.kind === "claim_sol" && (collect || buy || tokenClaims > 0)) return { ok: false, code: "program" };
   if (policy.kind === "claim_token" && (collect || buy || solClaims > 0)) return { ok: false, code: "program" };
+  if (policy.kind === "child_distribute" && (!distributed || collect || buy || solClaims > 0 || tokenClaims > 0)) {
+    return { ok: false, code: "program" };
+  }
   return { ok: true, message };
 }
