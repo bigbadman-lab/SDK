@@ -1,26 +1,31 @@
 import { NextResponse } from "next/server";
 
+import { authorizeBuilderDiagnostic } from "@/lib/launch/builder-diagnostic";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
+import { readOptionalEnv } from "@/lib/server/env";
 import { probeTransactionBuilder } from "@/lib/server/launch/unsigned";
 import { isProvisionedOperator } from "@/lib/server/operator";
-import { trustedOrigin } from "@/lib/server/origin";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<NextResponse> {
-  if (!trustedOrigin(request)) {
-    return NextResponse.json({ ok: false, code: "origin" }, { status: 400 });
-  }
   const account = await getCurrentAccount();
-  if (!account) {
+  const gate = authorizeBuilderDiagnostic({
+    origin: request.headers.get("origin"),
+    host: request.headers.get("host"),
+    secFetchSite: request.headers.get("sec-fetch-site"),
+    configuredAppUrl: readOptionalEnv("NEXT_PUBLIC_APP_URL") ?? null,
+    account,
+    operator: account ? isProvisionedOperator(account.walletAddress) : false,
+  });
+  if (!gate.ok) {
     return NextResponse.json(
-      { ok: false, error: launchMessage("unauthenticated"), code: "unauthenticated" },
-      { status: 401 },
+      gate.code === "unauthenticated"
+        ? { ok: false, error: launchMessage("unauthenticated"), code: gate.code }
+        : { ok: false, code: gate.code },
+      { status: gate.status },
     );
-  }
-  if (!isProvisionedOperator(account.walletAddress)) {
-    return NextResponse.json({ ok: false, code: "forbidden" }, { status: 403 });
   }
   const result = await probeTransactionBuilder();
   if (!result.ok) {
