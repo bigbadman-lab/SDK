@@ -4,6 +4,7 @@ const ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export const BUILD_PATH = "/v1/build";
 export const INSPECT_PATH = "/v1/inspect";
+export const DIAGNOSE_PATH = "/v1/diagnose";
 
 export type UnsignedBuildRequest = {
   launchId: string;
@@ -34,6 +35,26 @@ export function parseUnsignedBuildRequest(
     return { ok: false, code: "body" };
   }
   return { ok: true, value: { launchId, idempotencyKey, mintPublicKey } };
+}
+
+const LAUNCHER_KEYS = ["launchId", "mintPublicKey"] as const;
+
+export function parseLauncherBuildRequest(
+  value: unknown,
+): { ok: true; value: { launchId: string; mintPublicKey: string } } | { ok: false; code: "body" } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, code: "body" };
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== LAUNCHER_KEYS.join(",")) {
+    return { ok: false, code: "body" };
+  }
+  const { launchId, mintPublicKey } = record;
+  if (typeof launchId !== "string" || !UUID.test(launchId)) return { ok: false, code: "body" };
+  if (typeof mintPublicKey !== "string" || !ADDRESS.test(mintPublicKey)) {
+    return { ok: false, code: "body" };
+  }
+  return { ok: true, value: { launchId, mintPublicKey } };
 }
 
 export function unsignedBuildAccepted(value: unknown): boolean {

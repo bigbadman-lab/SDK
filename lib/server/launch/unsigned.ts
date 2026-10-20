@@ -2,8 +2,10 @@ import "server-only";
 
 import { randomUUID } from "node:crypto";
 
+import { builderFailureCode, readBuilderLinkReport, type BuilderLinkReport } from "@/lib/launch/builder-probe";
 import {
   BUILD_PATH,
+  DIAGNOSE_PATH,
   parseUnsignedBuildRequest,
   unsignedBuildAccepted,
   type UnsignedBuildRequest,
@@ -77,13 +79,49 @@ export async function requestUnsignedBuild(input: {
     });
     const payload: unknown = await response.json();
     if (!response.ok || !unsignedBuildAccepted(payload)) {
-      const code =
-        payload && typeof payload === "object" && "code" in payload && typeof payload.code === "string"
-          ? payload.code
-          : "builder_rejected";
-      return { ok: false, code };
+      return { ok: false, code: builderFailureCode(payload) };
     }
     return { ok: true, body: payload };
+  } catch {
+    return { ok: false, code: "builder_rejected" };
+  }
+}
+
+export async function probeTransactionBuilder(): Promise<
+  { ok: true; report: BuilderLinkReport } | { ok: false; code: "builder_unconfigured" | "builder_rejected" }
+> {
+  let config: { url: string; secret: string };
+  try {
+    config = requireTransactionBuilder();
+  } catch {
+    return { ok: false, code: "builder_unconfigured" };
+  }
+  const body = "{}";
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const nonce = randomUUID().replaceAll("-", "");
+  const signature = signServiceRequest({
+    secret: config.secret,
+    timestamp,
+    nonce,
+    method: "POST",
+    path: DIAGNOSE_PATH,
+    body,
+  });
+  try {
+    const response = await fetch(new URL(DIAGNOSE_PATH, config.url), {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-sdk-timestamp": timestamp,
+        "x-sdk-nonce": nonce,
+        "x-sdk-signature": signature,
+      },
+      body,
+      signal: AbortSignal.timeout(8_000),
+    });
+    const payload: unknown = await response.json();
+    if (!response.ok) return { ok: false, code: "builder_rejected" };
+    return readBuilderLinkReport(payload);
   } catch {
     return { ok: false, code: "builder_rejected" };
   }

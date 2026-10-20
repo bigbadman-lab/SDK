@@ -3,6 +3,7 @@
 import { useAppKit, useAppKitAccount, useDisconnect } from "@reown/appkit/react";
 import { ProviderController } from "@reown/appkit-controllers";
 import bs58 from "bs58";
+import { X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -35,6 +36,7 @@ type SessionState =
 
 const buttonClass =
   "inline-flex min-h-8.5 items-center justify-center gap-2 rounded-lg border border-solid px-3 py-2 font-mono text-[11px] leading-[1.4] font-medium tracking-[0.015em] uppercase";
+const headerActionClass = `${buttonClass} w-[9.75rem] shrink-0 px-2`;
 
 function shorten(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
@@ -234,23 +236,15 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
     address === session.walletAddress;
   const awaitingSignature = isConnected && !signedIn;
   const hintId = useId();
-  const rowClass =
-    compact || !awaitingSignature ? "contents" : "flex items-center gap-2";
+  const actionClass = compact ? buttonClass : headerActionClass;
+  const hint = pending ? "Check your wallet." : "Approve once more in your wallet.";
 
   return (
-    <div
-      className={
-        compact
-          ? "grid gap-3"
-          : awaitingSignature
-            ? "grid justify-items-end gap-1.5"
-            : "flex items-center gap-2"
-      }
-    >
-      <div className={rowClass}>
+    <div className={compact ? "grid gap-3" : "grid w-full justify-items-end gap-1"}>
+      <div className={compact ? "grid gap-2" : "flex w-full items-center justify-end gap-1.5"}>
         {!isConnected ? (
           <button
-            className={`${buttonClass} border-accent bg-accent text-accent-foreground`}
+            className={`${actionClass} border-accent bg-accent text-accent-foreground`}
             type="button"
             onClick={() => void open()}
           >
@@ -258,51 +252,68 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
           </button>
         ) : (
           <>
-            <span
-              className={`font-mono text-[11px] text-muted-foreground ${
-                !compact && awaitingSignature ? "max-[960px]:hidden" : ""
-              }`}
-            >
-              {address ? shorten(address) : "Connected"}
-            </span>
+            {compact ? (
+              <span className="font-mono text-[11px] text-muted-foreground">
+                {address ? shorten(address) : "Connected"}
+              </span>
+            ) : null}
             {signedIn ? (
-              <a className={`${buttonClass} border-border bg-card`} href="/account">
+              <a
+                className={`${actionClass} border-border bg-card`}
+                href="/account"
+                title={address ?? undefined}
+              >
                 Account
               </a>
             ) : (
               <button
-                className={`${buttonClass} border-accent bg-accent text-accent-foreground disabled:opacity-60`}
+                className={`${actionClass} border-accent bg-accent text-accent-foreground disabled:opacity-60`}
                 type="button"
                 disabled={pending || session.status === "loading"}
                 onClick={() => void signIn()}
-                {...(awaitingSignature ? { "aria-describedby": hintId } : {})}
+                aria-describedby={hintId}
               >
                 Sign in wallet
               </button>
             )}
-            <button
-              className={`${buttonClass} border-border bg-card`}
-              type="button"
-              disabled={pending}
-              onClick={() => void disconnectWallet()}
-            >
-              Disconnect
-            </button>
+            {compact ? (
+              <button
+                className={`${buttonClass} border-border bg-card`}
+                type="button"
+                disabled={pending}
+                onClick={() => void disconnectWallet()}
+              >
+                Disconnect
+              </button>
+            ) : (
+              <button
+                className="grid h-8.5 w-8.5 shrink-0 place-items-center rounded-lg border border-solid border-border bg-card text-foreground disabled:opacity-60"
+                type="button"
+                disabled={pending}
+                aria-label="Disconnect"
+                title="Disconnect"
+                onClick={() => void disconnectWallet()}
+              >
+                <X size={14} />
+              </button>
+            )}
           </>
         )}
       </div>
       {awaitingSignature ? (
         <p
           id={hintId}
-          className="font-mono text-[10px] leading-[1.45] text-muted-foreground"
+          className={
+            compact
+              ? "font-mono text-[10px] leading-[1.45] text-muted-foreground"
+              : "sr-only"
+          }
         >
-          {pending
-            ? "Check your wallet."
-            : "Approve once more in your wallet."}
+          {hint}
         </p>
       ) : null}
       {notice ? (
-        <p className="font-mono text-[10px] text-muted-foreground">{notice}</p>
+        <p className="max-w-full font-mono text-[10px] leading-[1.45] break-words text-muted-foreground">{notice}</p>
       ) : null}
     </div>
   );

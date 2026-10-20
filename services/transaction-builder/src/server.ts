@@ -1,8 +1,9 @@
 // Unsigned Pump transaction builder.
-// Render root directory: the repository root.
-// Build: npm install --prefix services/transaction-builder && npm run typecheck --prefix services/transaction-builder
+// Render root directory: the repository root. The service imports lib/launch.
+// Node: 22.18 or newer. Set Render NODE_VERSION=22.21.0.
+// Build: npm ci --include=dev --prefix services/transaction-builder && npm run typecheck --prefix services/transaction-builder
 // Start: node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/server.ts
-// Environment names: DATABASE_URL, HELIUS_RPC_URL, TX_BUILDER_SECRET, SDK_PLATFORM_FEE_WALLET.
+// Environment names: DATABASE_URL, HELIUS_RPC_URL, TX_BUILDER_SECRET, SDK_PLATFORM_FEE_WALLET, PORT.
 // This process does not sign, broadcast, or read a deployer key.
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -13,6 +14,35 @@ import { handle, type HandlerPorts } from "./handle.ts";
 import { createLiveProducer } from "./live.ts";
 import { simulateUnsignedTransaction } from "./simulate.ts";
 import { createSql, postgresStores } from "./store.ts";
+
+const unconfiguredStatus = {
+  ok: true,
+  configured: false,
+  database: "unchecked",
+  rpc: "unchecked",
+  parent: "unregistered",
+  building: false,
+  signing: false,
+  broadcast: false,
+  transactionVersion: 1,
+  addressLookupTable: "not_required",
+};
+
+async function probeRpc(rpcUrl: string): Promise<"ok" | "unavailable"> {
+  try {
+    const response = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth" }),
+      signal: AbortSignal.timeout(4_000),
+    });
+    if (!response.ok) return "unavailable";
+    const body = (await response.json()) as { error?: unknown };
+    return body.error ? "unavailable" : "ok";
+  } catch {
+    return "unavailable";
+  }
+}
 
 const BODY_LIMIT = 16_384;
 
@@ -38,8 +68,12 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
+let activeSql: ReturnType<typeof createSql> | null = null;
+
 function livePorts(databaseUrl: string, rpcUrl: string): HandlerPorts {
-  const stores = postgresStores(createSql(databaseUrl));
+  const sql = createSql(databaseUrl);
+  activeSql = sql;
+  const stores = postgresStores(sql);
   const connection = new Connection(rpcUrl, "confirmed");
   return {
     now: () => Date.now(),
@@ -58,6 +92,16 @@ function livePorts(databaseUrl: string, rpcUrl: string): HandlerPorts {
       }
     },
     resimulate: (transaction) => simulateUnsignedTransaction(connection.rpcEndpoint, transaction),
+    connectivity: async () => {
+      let database: "ok" | "unavailable" = "unavailable";
+      try {
+        await sql`select 1 as ok`;
+        database = "ok";
+      } catch {
+        database = "unavailable";
+      }
+      return { database, rpc: await probeRpc(rpcUrl) };
+    },
     produce: async (input) => {
       const row = await stores.parent.get();
       return createLiveProducer(connection)({
@@ -97,6 +141,10 @@ function start(): void {
           send(response, 200, { ok: true, service: "transaction-builder" });
           return;
         }
+        if (method === "GET" && path === "/status") {
+          send(response, 200, unconfiguredStatus);
+          return;
+        }
         send(response, 503, { ok: false, code: "config" });
         return;
       }
@@ -108,8 +156,26 @@ function start(): void {
     });
   });
   server.requestTimeout = 10_000;
+  server.headersTimeout = 10_000;
+  server.keepAliveTimeout = 5_000;
   const port = Number(process.env.PORT ?? "8080");
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    process.stderr.write("transaction-builder port is invalid\n");
+    process.exitCode = 1;
+    return;
+  }
   server.listen(port, "0.0.0.0");
+  let closing = false;
+  const shutdown = (): void => {
+    if (closing) return;
+    closing = true;
+    server.close(() => {
+      const pending = activeSql ? activeSql.end({ timeout: 5 }) : Promise.resolve();
+      void pending.finally(() => process.exit(0));
+    });
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
 
 start();

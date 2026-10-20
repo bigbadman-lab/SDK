@@ -11,6 +11,7 @@ import type { BuildRow, BuildStore, LaunchRecord, LaunchStore, NonceStore, Paren
 export const ROUTES = [
   "GET /health",
   "GET /status",
+  "POST /v1/diagnose",
   "POST /v1/build",
   "POST /v1/inspect",
 ] as const;
@@ -46,6 +47,7 @@ export type HandlerPorts = {
   }) => Promise<{ ok: true; produced: Produced } | { ok: false; code: string }>;
   confirmParent: (mint: string) => Promise<boolean>;
   resimulate: (transaction: string) => Promise<boolean>;
+  connectivity?: () => Promise<{ database: "ok" | "unavailable"; rpc: "ok" | "unavailable" }>;
 };
 
 export type HandlerResult = { status: number; body: Record<string, unknown> };
@@ -98,6 +100,45 @@ async function identityFor(
   return { ok: true, identity };
 }
 
+async function serviceStatus(ports: HandlerPorts): Promise<HandlerResult> {
+  let database: "ok" | "unavailable" | "unchecked" = "unchecked";
+  let rpc: "ok" | "unavailable" | "unchecked" = "unchecked";
+  if (ports.connectivity) {
+    try {
+      const link = await ports.connectivity();
+      database = link.database;
+      rpc = link.rpc;
+    } catch {
+      database = "unavailable";
+      rpc = "unavailable";
+    }
+  }
+  let parent: "registered" | "unregistered" = "unregistered";
+  try {
+    const row = await ports.parent.get();
+    if (!ports.connectivity) database = "ok";
+    parent = row?.mintAddress ? "registered" : "unregistered";
+  } catch {
+    database = "unavailable";
+    parent = "unregistered";
+  }
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      configured: true,
+      database,
+      rpc,
+      parent,
+      building: database === "ok" && rpc === "ok" && parent === "registered",
+      signing: false,
+      broadcast: false,
+      transactionVersion: 1,
+      addressLookupTable: "not_required",
+    },
+  };
+}
+
 function ready(launch: LaunchRecord): boolean {
   return launch.status === "ready_for_transaction" && Boolean(launch.metadataHash) && Boolean(launch.metadataUri);
 }
@@ -116,26 +157,9 @@ export async function handle(
     return { status: 200, body: { ok: true, service: "transaction-builder" } };
   }
   if (request.method === "GET" && request.path === "/status") {
-    try {
-      const parent = await ports.parent.get();
-      const mint = parent?.mintAddress ?? null;
-      return {
-        status: 200,
-        body: {
-          ok: true,
-          parent: mint ? "registered" : "unregistered",
-          transactionVersion: 1,
-          addressLookupTable: "not_required",
-          ready: false,
-          signing: false,
-          broadcast: false,
-        },
-      };
-    } catch {
-      return failure(503, "storage_unavailable");
-    }
+    return serviceStatus(ports);
   }
-  if (request.method !== "POST" || (request.path !== "/v1/build" && request.path !== "/v1/inspect")) {
+  if (request.method !== "POST" || (request.path !== "/v1/build" && request.path !== "/v1/inspect" && request.path !== "/v1/diagnose")) {
     return failure(404, "not_found");
   }
   const auth = verifyServiceRequest({
@@ -156,6 +180,13 @@ export async function handle(
     parsedBody = JSON.parse(request.body) as unknown;
   } catch {
     return failure(400, "body");
+  }
+  if (request.path === "/v1/diagnose") {
+    if (!parsedBody || typeof parsedBody !== "object" || Array.isArray(parsedBody)) {
+      return failure(400, "body");
+    }
+    if (Object.keys(parsedBody as Record<string, unknown>).length !== 0) return failure(400, "body");
+    return serviceStatus(ports);
   }
   const parsed = parseUnsignedBuildRequest(parsedBody);
   if (!parsed.ok) return failure(400, "body");

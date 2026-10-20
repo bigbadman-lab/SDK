@@ -116,7 +116,7 @@ function signed(path: string, body: Record<string, unknown>, nonce = randomBytes
 const body = { launchId: LAUNCH, idempotencyKey: KEY, mintPublicKey: MINT };
 
 test("routes expose no signing or broadcast method", () => {
-  assert.deepEqual(ROUTES, ["GET /health", "GET /status", "POST /v1/build", "POST /v1/inspect"]);
+  assert.deepEqual(ROUTES, ["GET /health", "GET /status", "POST /v1/diagnose", "POST /v1/build", "POST /v1/inspect"]);
   assert.equal(ROUTES.some((route) => /broadcast|sign/i.test(route)), false);
 });
 
@@ -213,6 +213,25 @@ test("another open launch for the same wallet conflicts", async () => {
   });
   const result = await handle(signed("/v1/build", body), bound);
   assert.equal(result.body.code, "conflict");
+});
+
+test("an authenticated diagnose reports an unregistered parent and rejects replay", async () => {
+  const { bound } = ports({ launch: launch(), parent: null });
+  const open = await handle({ method: "GET", path: "/status", headers: {}, body: "", secret: SECRET }, bound);
+  assert.equal(open.body.parent, "unregistered");
+  assert.equal(open.body.building, false);
+  assert.equal(open.body.signing, false);
+  assert.equal(open.body.broadcast, false);
+  assert.equal("transaction" in open.body, false);
+  const request = signed("/v1/diagnose", {});
+  const diagnosed = await handle(request, bound);
+  assert.equal(diagnosed.status, 200);
+  assert.equal(diagnosed.body.parent, "unregistered");
+  assert.equal(diagnosed.body.signing, false);
+  const replay = await handle(request, bound);
+  assert.equal(replay.body.code, "replay");
+  const wrong = signed("/v1/diagnose", { shareholders: [] });
+  assert.equal((await handle(wrong, bound)).body.code, "body");
 });
 
 test("execution refuses without reading a signer", async () => {
