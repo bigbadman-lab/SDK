@@ -8,12 +8,46 @@ import { boundClaimMessage, claimAuthorizationMessage, parseBoundClaim, verifyCl
 import { explainCreatorDelta, reconcileBuyback, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
 import { derivedDeployerAddress, rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
-import { bondingCurveAddress, readCreatorVaults, type Chain, type ObservedTransaction, type VaultLookup } from "./chain.ts";
+import { bondingCurveAddress, pollTransactionConfirmation, readCreatorVaults, type Chain, type ObservedTransaction, type SignatureObservation, type VaultLookup } from "./chain.ts";
 import { legacyCollectionRetired } from "./legacy-recovery.ts";
 import { buildCurveBuyback, buildSolCollection, type BuiltInstruction } from "./instructions.ts";
 import type { RegisteredParent, RewardControl, RewardsStore, StoredIntent } from "./store.ts";
 
 const RENT_CAP = "50000000";
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function validityNote(height: string | null, detail: string): string {
+  return `last_valid_block_height=${height ?? "unknown"}; ${detail}`.slice(0, 240);
+}
+
+function storedValidityHeight(detail: string | null): string | null {
+  const match = detail?.match(/last_valid_block_height=([0-9]+)/);
+  return match?.[1] ?? null;
+}
+
+async function readOrUnknown<T>(read: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await read();
+  } catch {
+    return fallback;
+  }
+}
+
+function confirmationWait(chain: Chain): (ms: number) => Promise<void> {
+  return chain.pace ?? pause;
+}
+
+async function observeSignature(chain: Chain, signature: string, lookup: VaultLookup) {
+  const readStatus = chain.signatureStatus?.bind(chain);
+  return pollTransactionConfirmation({
+    read: () => chain.transaction(signature, lookup),
+    status: () => readStatus?.(signature) ?? Promise.resolve("unknown" satisfies SignatureObservation),
+    wait: confirmationWait(chain),
+  });
+}
 
 function boundedBuyQuote(budget: string, slippageBps: number): string {
   const cap = BigInt(budget);
@@ -113,6 +147,7 @@ async function broadcast(input: {
   chain: Chain;
   store: RewardsStore;
   lookup: VaultLookup;
+  validityHeight: string | null;
 }): Promise<{ ok: true; observed: ObservedTransaction; signature: string } | { ok: false; code: CycleCode }> {
   const recorded = await input.store.recordIntent({
     idempotencyKey: input.intent.key,
@@ -147,6 +182,12 @@ async function broadcast(input: {
   if (!signed.ok) return { ok: false, code: signed.code };
   const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "submitted", signed.signature);
   if (marked !== "ok") return { ok: false, code: "uncertain" };
+  const noted = await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
+    recentBlockhash: input.transaction.recentBlockhash,
+    submissionCode: "confirmation_pending",
+    submissionDetail: validityNote(input.validityHeight, "signature stored before submission"),
+  });
+  if (noted !== "ok") return { ok: false, code: "uncertain" };
   const wire = signedTransactionWire(input.transaction, signed.signature);
   if (!wire || messageSha256(signed.message).length !== 64) return { ok: false, code: "transaction" };
   const sent = await input.chain.submit(wire);
@@ -157,25 +198,38 @@ async function broadcast(input: {
     await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
       recentBlockhash: null,
       submissionCode: sent.code,
-      submissionDetail: sent.detail,
+      submissionDetail: validityNote(input.validityHeight, sent.detail),
     });
     if (markedFailure !== "ok") return { ok: false, code: "uncertain" };
     return { ok: false, code: definitive ? "failed" : "uncertain" };
   }
-  const observed = await input.chain.transaction(signed.signature, input.lookup);
-  if (!observed || observed.status === "uncertain") {
+  const polled = await observeSignature(input.chain, signed.signature, input.lookup);
+  if (polled.kind === "pending") {
     await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "uncertain", signed.signature);
+    await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
+      recentBlockhash: null,
+      submissionCode: "confirmation_pending",
+      submissionDetail: validityNote(input.validityHeight, "confirmation not visible before the bounded wait"),
+    });
     return { ok: false, code: "uncertain" };
   }
-  if (observed.status === "failed") {
+  if (polled.kind === "failed" || polled.observed.status === "failed") {
     await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "failed", signed.signature);
     await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
       recentBlockhash: null,
       submissionCode: "onchain_failed",
-      submissionDetail: "confirmed on-chain failure",
+      submissionDetail: validityNote(input.validityHeight, "confirmed on-chain failure"),
     });
+    if (polled.kind === "failed") return { ok: false, code: "failed" };
+    return { ok: true, observed: polled.observed, signature: signed.signature };
   }
-  return { ok: true, observed, signature: signed.signature };
+  if (polled.observed.status === "uncertain") return { ok: false, code: "uncertain" };
+  await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
+    recentBlockhash: null,
+    submissionCode: "confirmed",
+    submissionDetail: validityNote(input.validityHeight, "confirmed"),
+  });
+  return { ok: true, observed: polled.observed, signature: signed.signature };
 }
 
 export async function runCycle(input: {
@@ -215,7 +269,34 @@ export async function runCycle(input: {
       scope: parent.scope,
       windowStartMs: window.startMs,
     });
-    if (!admission.ok) return { ok: false, code: admission.code === "absent" ? "rehearsal" : admission.code };
+    if (!admission.ok && admission.code === "claimed") {
+      const pendingIntents = await input.store.intents(parent.mintAddress, parent.scope);
+      const pending = pendingIntents.find((intent) => intent.idempotencyKey === `collect-${window.startMs}` && intent.signature);
+      if (!pending) {
+        await input.store.finishRehearsalWindow({
+          parentMint: parent.mintAddress,
+          scope: parent.scope,
+          windowStartMs: window.startMs,
+          outcome: "stopped",
+        });
+        return { ok: false, code: "stopped" };
+      }
+      const resumed = await execute(input, parent, control);
+      const resumedIntents = await input.store.intents(parent.mintAddress, parent.scope);
+      const resumedOutcome = rehearsalOutcome(resumed, resumedIntents, window.startMs);
+      await input.store.finishRehearsalWindow({
+        parentMint: parent.mintAddress,
+        scope: parent.scope,
+        windowStartMs: window.startMs,
+        outcome: resumedOutcome,
+      });
+      if (resumedOutcome === "stopped" && resumed.ok) return { ok: false, code: "failed" };
+      return resumed;
+    }
+    if (!admission.ok) {
+      if (admission.code === "claimed") return { ok: false, code: "uncertain" };
+      return { ok: false, code: admission.code === "absent" ? "rehearsal" : admission.code };
+    }
     try {
       const result = await execute(input, parent, control);
       const intents = await input.store.intents(parent.mintAddress, parent.scope);
@@ -268,7 +349,18 @@ async function reconcileOpenCollections(input: {
   let recovered = false;
   for (const intent of open) {
     if (!intent.signature) return { ok: false, code: "uncertain" };
-    const observed = await input.chain.transaction(intent.signature, input.lookup);
+    const polled = await observeSignature(input.chain, intent.signature, input.lookup);
+    const observed = polled.kind === "observed" ? polled.observed : null;
+    if (polled.kind === "failed") {
+      const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "failed", intent.signature);
+      if (marked !== "ok") return { ok: false, code: "uncertain" };
+      await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, {
+        recentBlockhash: null,
+        submissionCode: "onchain_failed",
+        submissionDetail: "confirmed on-chain failure",
+      });
+      continue;
+    }
     if (observed?.status === "confirmed") {
       const settled = await settleCollection({ parent: input.parent, observed, signature: intent.signature, store: input.store });
       if (!settled.ok) {
@@ -290,9 +382,23 @@ async function reconcileOpenCollections(input: {
       });
       continue;
     }
-    const absent = observed ? "present" : await input.chain.signatureState(intent.signature);
-    const expiry = !observed && absent === "absent" && intent.recentBlockhash ? await input.chain.blockhashValid(intent.recentBlockhash) : "unknown";
-    if (!observed && absent === "absent" && expiry === "expired") {
+    const signature = intent.signature;
+    let absent: "present" | "absent" | "unknown" = observed ? "present" : "unknown";
+    if (!observed && signature) {
+      absent = await readOrUnknown(() => input.chain.signatureState(signature), "unknown");
+    }
+    const blockhash = intent.recentBlockhash;
+    const blockhashState = !observed && absent === "absent" && blockhash
+      ? await readOrUnknown(() => input.chain.blockhashValid(blockhash), "unknown")
+      : "unknown";
+    const readHeight = input.chain.blockHeight;
+    const blockHeight = !observed && absent === "absent" && readHeight
+      ? await readOrUnknown(() => readHeight(), null)
+      : null;
+    const height = storedValidityHeight(intent.submissionDetail);
+    const passedHeight = height !== null && blockHeight !== null && /^[0-9]+$/.test(blockHeight) && BigInt(blockHeight) > BigInt(height);
+    const expired = blockhashState === "expired" || passedHeight;
+    if (!observed && absent === "absent" && expired) {
       const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "failed", intent.signature);
       if (marked !== "ok") return { ok: false, code: "uncertain" };
       await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, {
@@ -339,7 +445,8 @@ async function execute(
   if (!reconciled.recovered && !collectIntent?.signature && (vaults.nativeLamports !== "0" || vaults.wsolLamports !== "0")) {
     const built = await buildSolCollection({ creator: parent.deployerAddress, ammVaultExists: vaults.ammVaultExists });
     if (!built.ok) return { ok: false, code: "program" };
-    const blockhash = await input.chain.blockhash();
+    const latest = input.chain.latestBlockhash ? await input.chain.latestBlockhash() : null;
+    const blockhash = latest?.blockhash ?? await input.chain.blockhash();
     const sent = await broadcast({
       secret,
       expectedAddress: input.expectedAddress,
@@ -351,6 +458,7 @@ async function execute(
       chain: input.chain,
       store: input.store,
       lookup,
+      validityHeight: latest?.lastValidBlockHeight ?? null,
     });
     if (!sent.ok) return sent;
     if (sent.observed.status === "failed") return { ok: false, code: "failed" };
@@ -404,8 +512,10 @@ async function execute(
   if (buybackBlocked(currentIntents, parent.mintAddress, parent.scope)) return { ok: false, code: "uncertain" };
   const buyIntent = currentIntents.find((intent) => intent.idempotencyKey === buyKey);
   if (buyIntent?.signature) {
-    const observed = await input.chain.transaction(buyIntent.signature, lookup);
-    if (!observed || observed.status !== "confirmed") return { ok: false, code: observed?.status === "failed" ? "failed" : "uncertain" };
+    const polled = await observeSignature(input.chain, buyIntent.signature, lookup);
+    const observed = polled.kind === "observed" ? polled.observed : null;
+    if (polled.kind === "failed" || observed?.status === "failed") return { ok: false, code: "failed" };
+    if (!observed || observed.status !== "confirmed") return { ok: false, code: "uncertain" };
     const tokens = reconcileBuyback({ status: "confirmed", quotedTokenAmount: "1", tokenDelta: observed.tokenDelta });
     if (!tokens.ok) return { ok: false, code: "unreconciled" };
     return creditTokens(input.store, parent, key, tokens.credited);
@@ -459,7 +569,8 @@ async function execute(
     curve: market.graduated ? null : market.curve,
   });
   if (!built.ok) return { ok: false, code: built.code === "graduated_market" ? "market" : "program" };
-  const blockhash = await input.chain.blockhash();
+  const buyLatest = input.chain.latestBlockhash ? await input.chain.latestBlockhash() : null;
+  const blockhash = buyLatest?.blockhash ?? await input.chain.blockhash();
   const sent = await broadcast({
     secret,
     expectedAddress: input.expectedAddress,
@@ -471,6 +582,7 @@ async function execute(
     chain: input.chain,
     store: input.store,
     lookup,
+    validityHeight: buyLatest?.lastValidBlockHeight ?? null,
   });
   if (!sent.ok) return sent;
   if (sent.observed.status === "failed") return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0" };

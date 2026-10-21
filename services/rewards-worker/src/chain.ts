@@ -73,14 +73,23 @@ export type Chain = {
   mint(mint: string): Promise<{ decimals: number; tokenProgram: string } | null>;
   holders(mint: string, tokenProgram: string): Promise<{ observedSlot: string; accounts: { owner: string; mint: string; amount: string }[] } | null>;
   slot(): Promise<string>;
+  blockHeight?(): Promise<string | null>;
   blockTime(slot: string): Promise<number | null>;
   blockhash(): Promise<string>;
+  latestBlockhash?(): Promise<{ blockhash: string; lastValidBlockHeight: string } | null>;
   blockhashValid(blockhash: string): Promise<"valid" | "expired" | "unknown">;
   market(mint: string): Promise<MarketView | null>;
   submit(wire: Uint8Array): Promise<SubmitResult>;
   signatureState(signature: string): Promise<"absent" | "present" | "unknown">;
+  signatureStatus?(signature: string): Promise<SignatureObservation>;
   transaction(signature: string, lookup: VaultLookup): Promise<ObservedTransaction | null>;
+  collectionIdentity?(signature: string): Promise<{ instruction: string; programId: string; accounts: string[] } | null>;
+  pace?(ms: number): Promise<void>;
 };
+
+export type SignatureObservation = "finalized" | "confirmed" | "failed" | "processed" | "absent" | "unknown";
+
+export const CONFIRMATION_BACKOFF_MS = [0, 400, 800, 1600, 3200] as const;
 
 export type SubmitResult =
   | { status: "accepted" }
@@ -292,6 +301,40 @@ function signed(value: bigint): string {
   return value < BigInt(0) ? `-${(-value).toString()}` : value.toString();
 }
 
+export function classifySignatureStatus(value: unknown): SignatureObservation {
+  if (!value || typeof value !== "object" || !("value" in value) || !Array.isArray((value as { value?: unknown }).value)) return "unknown";
+  const row = (value as { value: unknown[] }).value[0];
+  if (row == null) return "absent";
+  if (typeof row !== "object") return "unknown";
+  const record = row as { err?: unknown; confirmationStatus?: unknown };
+  if (record.err) return "failed";
+  if (record.confirmationStatus === "finalized" || record.confirmationStatus === "confirmed") {
+    return record.confirmationStatus;
+  }
+  if (record.confirmationStatus === "processed") return "processed";
+  return "unknown";
+}
+
+export async function pollTransactionConfirmation(input: {
+  read: () => Promise<ObservedTransaction | null>;
+  status: () => Promise<SignatureObservation>;
+  wait: (ms: number) => Promise<void>;
+  delays?: readonly number[];
+}): Promise<{ kind: "observed"; observed: ObservedTransaction } | { kind: "failed" } | { kind: "pending" }> {
+  const delays = input.delays ?? CONFIRMATION_BACKOFF_MS;
+  let sawChainFailure = false;
+  for (const delay of delays) {
+    if (delay > 0) await input.wait(delay);
+    const [status, observed] = await Promise.all([
+      input.status().catch(() => "unknown" as const),
+      input.read().catch(() => null),
+    ]);
+    if (observed && (observed.status === "confirmed" || observed.status === "failed")) return { kind: "observed", observed };
+    if (status === "failed") sawChainFailure = true;
+  }
+  return sawChainFailure ? { kind: "failed" } : { kind: "pending" };
+}
+
 export function observeMeta(value: unknown, lookup: VaultLookup): ObservedTransaction | null {
   if (!value || typeof value !== "object") return null;
   const record = value as {
@@ -365,6 +408,48 @@ function accountFromRpc(value: unknown): ChainAccount {
 }
 
 export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
+  async function readLatestBlockhash(): Promise<{ blockhash: string; lastValidBlockHeight: string } | null> {
+    const value = await rpc("getLatestBlockhash", [{ commitment: "confirmed" }]);
+    const row = value && typeof value === "object" && "value" in value
+      ? (value as { value: { blockhash?: unknown; lastValidBlockHeight?: unknown } }).value
+      : null;
+    const height = row?.lastValidBlockHeight;
+    if (!row || typeof row.blockhash !== "string" || typeof height !== "number" || !Number.isInteger(height) || height < 0) return null;
+    return { blockhash: row.blockhash, lastValidBlockHeight: String(height) };
+  }
+  async function readSignatureStatus(signature: string): Promise<SignatureObservation> {
+    const value = await rpc("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
+    return classifySignatureStatus(value);
+  }
+  async function readBlockHeight(): Promise<string | null> {
+    const value = await rpc("getBlockHeight", [{ commitment: "confirmed" }]);
+    return typeof value === "number" && Number.isInteger(value) && value >= 0 ? String(value) : null;
+  }
+  async function readCollectionIdentity(signature: string): Promise<{ instruction: string; programId: string; accounts: string[] } | null> {
+    const value = await rpc("getTransaction", [signature, { encoding: "jsonParsed", commitment: "finalized", maxSupportedTransactionVersion: 0 }]);
+    if (!value || typeof value !== "object") return null;
+    const record = value as {
+      meta?: { logMessages?: unknown } | null;
+      transaction?: { message?: { accountKeys?: unknown[]; instructions?: unknown[] } };
+    };
+    const keys = (record.transaction?.message?.accountKeys ?? []).map(accountKey);
+    const instruction = (record.transaction?.message?.instructions ?? [])[0];
+    if (!instruction || typeof instruction !== "object") return null;
+    const row = instruction as { programId?: unknown; programIdIndex?: unknown; accounts?: unknown[] };
+    const programId = typeof row.programId === "string"
+      ? row.programId
+      : typeof row.programIdIndex === "number" ? keys[row.programIdIndex] ?? "" : "";
+    const accounts = (row.accounts ?? []).flatMap((account) => {
+      if (typeof account === "string") return [account];
+      if (typeof account === "number") return keys[account] ? [keys[account]] : [];
+      return [];
+    });
+    const logs = Array.isArray(record.meta?.logMessages) ? record.meta.logMessages : [];
+    const named = logs.find((line) => typeof line === "string" && line.includes("Instruction:"));
+    const instructionName = typeof named === "string" ? named.split("Instruction:").at(-1)?.trim() ?? "" : "";
+    if (!programId || !instructionName || accounts.length === 0) return null;
+    return { instruction: instructionName, programId, accounts };
+  }
   return {
     async account(address) {
       const value = await rpc("getAccountInfo", [address, { encoding: "base64", commitment: "confirmed" }]);
@@ -405,6 +490,7 @@ export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
       const value = await rpc("getSlot", [{ commitment: "confirmed" }]);
       return typeof value === "number" ? String(value) : "0";
     },
+    blockHeight: readBlockHeight,
     async blockTime(slot) {
       const parsed = Number(slot);
       if (!Number.isInteger(parsed) || parsed < 0) return null;
@@ -412,11 +498,11 @@ export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
       return typeof value === "number" ? value : null;
     },
     async blockhash() {
-      const value = await rpc("getLatestBlockhash", [{ commitment: "confirmed" }]);
-      const blockhash = value && typeof value === "object" && "value" in value ? (value as { value: { blockhash?: string } }).value.blockhash : null;
-      if (!blockhash) throw new Error("blockhash");
-      return blockhash;
+      const latest = await readLatestBlockhash();
+      if (!latest) throw new Error("blockhash");
+      return latest.blockhash;
     },
+    latestBlockhash: readLatestBlockhash,
     async blockhashValid(blockhash) {
       const value = await rpc("isBlockhashValid", [blockhash, { commitment: "confirmed" }]);
       if (!value || typeof value !== "object" || !("value" in value) || typeof (value as { value?: unknown }).value !== "boolean") return "unknown";
@@ -489,15 +575,16 @@ export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
       return sendSignedTransaction(rpcUrl, wire);
     },
     async signatureState(signature) {
-      const value = await rpc("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
-      if (!value || typeof value !== "object" || !("value" in value) || !Array.isArray((value as { value?: unknown }).value)) return "unknown";
-      const row = (value as { value: unknown[] }).value[0];
-      return row == null ? "absent" : "present";
+      const status = await readSignatureStatus(signature);
+      if (status === "unknown") return "unknown";
+      return status === "absent" ? "absent" : "present";
     },
+    signatureStatus: readSignatureStatus,
     async transaction(signature, lookup) {
       const value = await rpc("getTransaction", [signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
       if (!value) return null;
       return observeMeta(value, lookup);
     },
+    collectionIdentity: readCollectionIdentity,
   };
 }

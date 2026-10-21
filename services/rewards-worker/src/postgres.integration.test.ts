@@ -58,7 +58,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-11), [
+  assert.deepEqual(files.slice(-12), [
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
@@ -70,6 +70,7 @@ before(async () => {
     "20261021140000_trest07e_collection_diagnostics.sql",
     "20261021160000_trest07f_legacy_recovery.sql",
     "20261021180000_trest07i_rehearsal_windows.sql",
+    "20261021190000_trest07j_confirmation_recovery.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -325,6 +326,11 @@ test("the rewards schema applies on an isolated database and enforces recovery i
     assert.equal(admission.ok, true);
     if (!admission.ok) return;
     assert.equal(admission.admission, "execute");
+    const repeated = await store.claimRehearsalWindow({ parentMint: rehearsalMint, scope: "test", windowStartMs });
+    assert.equal(repeated.ok, false);
+    if (repeated.ok) return;
+    assert.equal(repeated.code, "claimed");
+    assert.equal((await store.rehearsalState(rehearsalMint, "test"))?.status, "open");
     assert.equal(await store.finishRehearsalWindow({
       parentMint: rehearsalMint,
       scope: "test",
@@ -347,6 +353,135 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   await assert.rejects(() => db()`update reward_rehearsals set status = 'open'`);
   await assert.rejects(() => db()`delete from reward_rehearsal_windows`);
   await assert.rejects(() => db()`delete from reward_rehearsals`);
+  await assert.rejects(() => db()`update reward_rehearsals set generation = 2`);
+  const rehearsalMintAddress = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+  const blockingSignature = "3".repeat(88);
+  await assert.rejects(() => db().begin(async (tx) => {
+    await tx`
+      insert into reward_intents (
+        parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, signature, amount_lamports
+      )
+      select id, ${rehearsalMintAddress}, 'test', 'collect', 'collect-unresolved-gen2', 'uncertain', ${blockingSignature}, 0
+      from parent_registrations
+      where mint_address = ${MINT}
+    `;
+    await tx`
+      insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
+      values (
+        ${rehearsalMintAddress}, 'test', 'open',
+        array[${START + 900_000}::bigint, ${START + 1_200_000}::bigint, ${START + 1_500_000}::bigint],
+        2
+      )
+    `;
+  }));
+  await assert.rejects(() => db().begin(async (tx) => {
+    await tx`
+      insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
+      values (
+        ${rehearsalMintAddress}, 'test', 'open',
+        array[${START}::bigint, ${START + 300_000}::bigint, ${START + 600_000}::bigint],
+        2
+      )
+    `;
+    await tx`
+      insert into reward_rehearsal_windows (rehearsal_id, window_start_ms, outcome)
+      select id, ${START}, 'claimed'
+      from reward_rehearsals
+      where generation = 2
+    `;
+  }));
+  await assert.rejects(() => db().begin(async (tx) => {
+    await tx`
+      insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
+      values (
+        ${rehearsalMintAddress}, 'test', 'open',
+        array[${START + 900_000}::bigint, ${START + 1_200_000}::bigint, ${START + 1_500_000}::bigint],
+        2
+      )
+    `;
+    await tx`
+      insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
+      values (
+        ${rehearsalMintAddress}, 'test', 'open',
+        array[${START + 1_800_000}::bigint, ${START + 2_100_000}::bigint, ${START + 2_400_000}::bigint],
+        3
+      )
+    `;
+  }));
+  await assert.rejects(() => db().begin(async (tx) => {
+    await tx`
+      insert into reward_collection_recoveries (
+        parent_mint_address, scope, idempotency_key, signature, prior_status, approval, operator_label, reason,
+        gross_lamports, fee_lamports, net_lamports, reserve_withheld_lamports, holder_lamports, buyback_lamports,
+        deployer_lamports, snapshot_status
+      ) values (
+        ${rehearsalMintAddress}, 'test', 'collect-1792603200000',
+        '3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF',
+        'uncertain', 'TREST-07J-COLLECTION-RECOVERY', 'trest-07j', 'confirmed collection had no receipt',
+        85145307, 5000, 85140307, 5000000, 24042092, 24042092, 32056123, 'historical_unavailable'
+      )
+    `;
+    await tx`update reward_collection_recoveries set reason = 'changed'`;
+  }));
+  await assert.rejects(() => db().begin(async (tx) => {
+    await tx`
+      insert into reward_collection_recoveries (
+        parent_mint_address, scope, idempotency_key, signature, prior_status, approval, operator_label, reason,
+        gross_lamports, fee_lamports, net_lamports, reserve_withheld_lamports, holder_lamports, buyback_lamports,
+        deployer_lamports, snapshot_status
+      ) values (
+        ${rehearsalMintAddress}, 'test', 'collect-1792603200000',
+        '3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF',
+        'uncertain', 'TREST-07J-COLLECTION-RECOVERY', 'trest-07j', 'confirmed collection had no receipt',
+        85145307, 5000, 1, 5000000, 24042092, 24042092, 32056123, 'historical_unavailable'
+      )
+    `;
+  }));
+  const lockedSignature = "3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF";
+  await db()`
+    insert into reward_intents (
+      parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, signature, amount_lamports
+    )
+    select id, ${rehearsalMintAddress}, 'test', 'collect', 'collect-1792603200000', 'uncertain', ${lockedSignature}, 0
+    from parent_registrations
+    where mint_address = ${MINT}
+  `;
+  assert.equal(await store.commitCollectionRecovery({
+    parentMint: rehearsalMintAddress,
+    scope: "test",
+    idempotencyKey: "collect-1792603200000",
+    signature: lockedSignature,
+    priorStatus: "uncertain",
+    approval: "TREST-07J-COLLECTION-RECOVERY",
+    operator: "trest-07j",
+    reason: "confirmed collection had no receipt",
+    grossLamports: "85145307",
+    feeLamports: "5000",
+    netLamports: "85140307",
+    reserveLamports: "5000000",
+    holderLamports: "24042092",
+    buybackLamports: "24042092",
+    deployerLamports: "32056123",
+    snapshotStatus: "historical_unavailable",
+    gross: "85145307",
+    fee: "5000",
+    native: "85140307",
+    wsolConverted: "0",
+    rentExcluded: "0",
+    slot: "459711211",
+    amountLamports: "85140307",
+  }), "rejected");
+  const rolledRecovery = await db()`
+    select
+      (select count(*)::int from reward_collection_recoveries) as audits,
+      (select count(*)::int from reward_collections where signature = ${lockedSignature}) as receipts,
+      (select status from reward_intents where idempotency_key = 'collect-1792603200000') as status
+  `;
+  assert.equal(Number(rolledRecovery[0]?.audits), 0);
+  assert.equal(Number(rolledRecovery[0]?.receipts), 0);
+  assert.equal(rolledRecovery[0]?.status, "uncertain");
+  assert.equal((await db()`select count(*)::int as n from reward_rehearsals where generation = 2`)[0]?.n, 0);
+  assert.equal((await db()`select count(*)::int as n from reward_collection_recoveries`)[0]?.n, 0);
   const controls = await db()`
     select parent_mint_address, signer_suspended
     from reward_controls
@@ -638,6 +773,44 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(await fee("F".repeat(88), "1000", PRODUCTION_MINT, "production"), "ok");
   const isolated = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_300_000), reserveLamports: "0" });
   assert.deepEqual(isolated, { ok: true, state: "empty" });
+  const deferredSignature = "3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF";
+  await assert.rejects(() => db()`
+    insert into reward_collections (
+      parent_registration_id, parent_mint_address, scope, signature, amount_lamports, slot, source, status,
+      credited, confirmed_at, gross_lamports, network_fee_lamports, net_lamports, native_lamports,
+      wsol_token_lamports, wsol_converted_lamports, rent_excluded_lamports, allocation_deferred
+    )
+    select id, ${MINT}, 'test', ${"G".repeat(88)}, 1000, 1, 'creator_vault', 'confirmed', true, now(),
+      1000, 0, 1000, 1000, 0, 0, 0, true
+    from parent_registrations
+    where mint_address = ${MINT}
+  `);
+  await db()`
+    insert into reward_collections (
+      parent_registration_id, parent_mint_address, scope, signature, amount_lamports, slot, source, status,
+      credited, confirmed_at, gross_lamports, network_fee_lamports, net_lamports, native_lamports,
+      wsol_token_lamports, wsol_converted_lamports, rent_excluded_lamports, allocation_deferred
+    )
+    select id, ${MINT}, 'test', ${deferredSignature}, 85140307, 459711211, 'creator_vault', 'confirmed', true, now(),
+      85145307, 5000, 85140307, 85140307, 0, 0, 0, true
+    from parent_registrations
+    where mint_address = ${MINT}
+  `;
+  const deferred = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_600_000), reserveLamports: "5000000" });
+  assert.deepEqual(deferred, { ok: true, state: "empty" });
+  const deferredRow = await db()`
+    select allocation_deferred, allocated_at from reward_collections where signature = ${deferredSignature}
+  `;
+  assert.equal(deferredRow[0]?.allocation_deferred, true);
+  assert.equal(deferredRow[0]?.allocated_at, null);
+  assert.equal(await fee("H".repeat(88), "1000"), "ok");
+  const ordinary = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_900_000), reserveLamports: "4000" });
+  assert.equal(ordinary.ok, true);
+  if (!ordinary.ok) return;
+  assert.equal(ordinary.state, "allocated");
+  if (ordinary.state === "allocated") assert.equal(ordinary.base, "1000");
+  const stillDeferred = await db()`select allocated_at from reward_collections where signature = ${deferredSignature}`;
+  assert.equal(stillDeferred[0]?.allocated_at, null);
   const productionReceipt = await db()`
     select allocated_at from reward_collections where signature = ${"F".repeat(88)}
   `;

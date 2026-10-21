@@ -139,7 +139,10 @@ export async function rehearsalFencePresent(sql: Database): Promise<boolean> {
       and to_regclass('public.reward_rehearsal_windows') is not null
       and exists (select 1 from pg_constraint where conname = 'reward_rehearsals_identity_check')
       and exists (select 1 from pg_constraint where conname = 'reward_rehearsals_windows_check')
-      and exists (select 1 from pg_constraint where conname = 'reward_rehearsals_parent_unique')
+      and (
+        exists (select 1 from pg_constraint where conname = 'reward_rehearsals_parent_unique')
+        or exists (select 1 from pg_constraint where conname = 'reward_rehearsals_generation_unique')
+      )
     ) as ok
   `) as { ok: boolean }[];
   return rows[0]?.ok === true;

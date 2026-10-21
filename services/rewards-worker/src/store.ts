@@ -1,5 +1,5 @@
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
-import { matchesLegacyCollection } from "./legacy-recovery.ts";
+import { legacyCollectionRetired, matchesLegacyCollection } from "./legacy-recovery.ts";
 import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, WINDOW_MS, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
 
@@ -7,7 +7,7 @@ export const TREST_REHEARSAL_MINT = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pum
 
 export type RehearsalAdmission =
   | { ok: true; admission: "execute" | "replay" }
-  | { ok: false; code: "absent" | "schedule" | "stopped" | "closed" };
+  | { ok: false; code: "absent" | "schedule" | "stopped" | "closed" | "claimed" };
 
 export type RehearsalState = {
   status: "open" | "stopped" | "closed";
@@ -23,6 +23,7 @@ export type RehearsalRegistration = {
   nowMs?: number;
   requireUpcoming?: boolean;
   blockSideWork?: boolean;
+  generation?: number;
 };
 
 export function validRehearsalStarts(starts: readonly number[]): [number, number, number] | null {
@@ -92,6 +93,27 @@ export type LegacyRecovery = {
   createdAtMs: string;
 };
 
+export type CollectionRecovery = {
+  id: string;
+  parentMint: string;
+  scope: RewardScope;
+  idempotencyKey: string;
+  signature: string;
+  priorStatus: "uncertain";
+  approval: string;
+  operator: string;
+  reason: string;
+  grossLamports: string;
+  feeLamports: string;
+  netLamports: string;
+  reserveLamports: string;
+  holderLamports: string;
+  buybackLamports: string;
+  deployerLamports: string;
+  snapshotStatus: "historical_unavailable";
+  createdAtMs: string;
+};
+
 export type SubmissionNote = {
   recentBlockhash: string | null;
   submissionCode: string | null;
@@ -148,6 +170,17 @@ export type RewardsStore = {
   recordSubmission(parentMint: string, scope: RewardScope, idempotencyKey: string, note: SubmissionNote): Promise<"ok" | "order">;
   legacyRecoveries(parentMint: string, scope: RewardScope): Promise<LegacyRecovery[]>;
   saveLegacyRecovery(input: Omit<LegacyRecovery, "id" | "createdAtMs">): Promise<{ ok: true; id: string } | { ok: false; code: "duplicate" | "rejected" }>;
+  collectionRecoveries(parentMint: string, scope: RewardScope): Promise<CollectionRecovery[]>;
+  saveCollectionRecovery(input: Omit<CollectionRecovery, "id" | "createdAtMs">): Promise<{ ok: true; id: string } | { ok: false; code: "duplicate" | "rejected" }>;
+  commitCollectionRecovery(input: Omit<CollectionRecovery, "id" | "createdAtMs"> & {
+    gross: string;
+    fee: string;
+    native: string;
+    wsolConverted: string;
+    rentExcluded: string;
+    slot: string;
+    amountLamports: string;
+  }): Promise<"ok" | "duplicate" | "rejected" | "order">;
   receipts(parentMint: string, scope: RewardScope): Promise<FeeReceipt[]>;
   saveReceipt(receipt: FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string }): Promise<"ok" | "duplicate">;
   windows(parentMint: string, scope: RewardScope): Promise<{ windowKey: string; collected: string; holders: string; buyback: string; deployer: string }[]>;
@@ -177,6 +210,29 @@ export type RewardsStore = {
 
 const LEASE_MS = 5 * 60 * 1000;
 
+export type RehearsalGenerationDecision = "ok" | "duplicate" | "overlap" | "unresolved" | "rejected";
+
+export function admitNextRehearsal(input: {
+  existing: readonly { generation: number; status: "open" | "stopped" | "closed"; starts: readonly number[] }[];
+  generation: number;
+  starts: readonly number[];
+  unresolvedIntents: number;
+  unallocatedReceipts: number;
+  claimableLiabilities: number;
+}): RehearsalGenerationDecision {
+  if (!validRehearsalStarts(input.starts)) return "rejected";
+  if (!Number.isInteger(input.generation) || input.generation < 1 || input.generation > 100) return "rejected";
+  if (input.existing.some((row) => row.status === "open")) return "overlap";
+  if (input.existing.some((row) => row.generation === input.generation)) return "duplicate";
+  const max = input.existing.reduce((highest, row) => Math.max(highest, row.generation), 0);
+  if (input.generation !== max + 1) return "rejected";
+  if (input.generation > 1) {
+    if (input.existing.some((row) => row.starts.some((start) => input.starts.includes(start)))) return "overlap";
+    if (input.unresolvedIntents > 0 || input.unallocatedReceipts > 0 || input.claimableLiabilities > 0) return "unresolved";
+  }
+  return "ok";
+}
+
 export function memoryStore(seed: {
   parent: RegisteredParent;
   control: RewardControl;
@@ -184,26 +240,31 @@ export function memoryStore(seed: {
 }): RewardsStore {
   const intents: StoredIntent[] = [];
   const legacyRecoveries: LegacyRecovery[] = [];
-  const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string; allocated: boolean; reserveWithheld: string }> = [];
+  const collectionRecoveries: CollectionRecovery[] = [];
+  const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string; allocated: boolean; reserveWithheld: string; allocationDeferred: boolean }> = [];
   const windows: Array<{ parentMint: string; scope: RewardScope; windowKey: string; collected: string; holders: string; buyback: string; deployer: string }> = [];
   const snapshots: Array<StoredSnapshot & { parentMint: string; scope: RewardScope; windowKey: string }> = [];
   const claims: StoredClaim[] = [];
   let lock: { parentMint: string; scope: RewardScope; holder: string; expiresAt: number } | null = null;
-  let rehearsal: {
+  type MemoryRehearsal = {
+    generation: number;
     status: "open" | "stopped" | "closed";
     starts: [number, number, number];
     windows: Map<number, "claimed" | "ok" | "stopped">;
     blockSideWork: boolean;
-  } | null = null;
+  };
+  const rehearsals: MemoryRehearsal[] = [];
+  const currentRehearsal = (): MemoryRehearsal | null => rehearsals.find((row) => row.status === "open") ?? rehearsals[rehearsals.length - 1] ?? null;
   if (seed.rehearsal) {
     const starts = validRehearsalStarts(seed.rehearsal.windowStartsMs);
     if (!starts || seed.parent.scope !== "test") throw new Error("rehearsal");
-    rehearsal = {
+    rehearsals.push({
+      generation: 1,
       status: "open",
       starts,
       windows: new Map(),
       blockSideWork: seed.rehearsal.blockSideWork ?? true,
-    };
+    });
   }
   const suspendControl = () => {
     seed.control.suspended = true;
@@ -252,7 +313,7 @@ export function memoryStore(seed: {
         if (existing) {
           return { ok: true, state: "duplicate", base: existing.collected, holders: existing.holders, buyback: existing.buyback, deployer: existing.deployer, withheld: "0" };
         }
-        const open = receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated);
+        const open = receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated && !receipt.allocationDeferred);
         if (open.length === 0) return { ok: true, state: "empty" };
         const allocatedSignatures = receipts.filter((receipt) => receipt.allocated).map((receipt) => receipt.signature);
         const guard = allocateWindow({
@@ -348,6 +409,72 @@ export function memoryStore(seed: {
         return { ok: true, id };
       });
     },
+    async collectionRecoveries(parentMint, scope) {
+      return collectionRecoveries.filter((row) => row.parentMint === parentMint && row.scope === scope);
+    },
+    async saveCollectionRecovery(input) {
+      return exclusive(() => {
+        if (input.priorStatus !== "uncertain" || input.snapshotStatus !== "historical_unavailable" || input.approval !== "TREST-07J-COLLECTION-RECOVERY") {
+          return { ok: false, code: "rejected" };
+        }
+        if (collectionRecoveries.some((row) => row.signature === input.signature || row.idempotencyKey === input.idempotencyKey)) {
+          return { ok: false, code: "duplicate" };
+        }
+        const id = `collection-recovery-${collectionRecoveries.length + 1}`;
+        collectionRecoveries.push({ ...input, id, createdAtMs: Date.now().toString() });
+        return { ok: true, id };
+      });
+    },
+    async commitCollectionRecovery(input) {
+      return exclusive(() => {
+        if (input.priorStatus !== "uncertain" || input.snapshotStatus !== "historical_unavailable" || input.approval !== "TREST-07J-COLLECTION-RECOVERY") return "rejected";
+        const intent = intents.find((row) => row.parentMint === input.parentMint && row.scope === input.scope && row.idempotencyKey === input.idempotencyKey);
+        const receipt = receipts.find((row) => row.signature === input.signature);
+        const audit = collectionRecoveries.find((row) => row.signature === input.signature);
+        if (intent?.status === "confirmed" && receipt && audit) return "duplicate";
+        if (!intent || intent.status !== "uncertain" || intent.signature !== input.signature) return "order";
+        if (receipt || audit) return "order";
+        collectionRecoveries.push({
+          id: `collection-recovery-${collectionRecoveries.length + 1}`,
+          parentMint: input.parentMint,
+          scope: input.scope,
+          idempotencyKey: input.idempotencyKey,
+          signature: input.signature,
+          priorStatus: input.priorStatus,
+          approval: input.approval,
+          operator: input.operator,
+          reason: input.reason,
+          grossLamports: input.grossLamports,
+          feeLamports: input.feeLamports,
+          netLamports: input.netLamports,
+          reserveLamports: input.reserveLamports,
+          holderLamports: input.holderLamports,
+          buybackLamports: input.buybackLamports,
+          deployerLamports: input.deployerLamports,
+          snapshotStatus: input.snapshotStatus,
+          createdAtMs: Date.now().toString(),
+        });
+        receipts.push({
+          signature: input.signature,
+          parentMint: input.parentMint,
+          scope: input.scope,
+          amountLamports: input.amountLamports,
+          slot: input.slot,
+          confirmed: true,
+          source: "creator_vault",
+          gross: input.gross,
+          fee: input.fee,
+          native: input.native,
+          wsolConverted: input.wsolConverted,
+          rentExcluded: input.rentExcluded,
+          allocated: false,
+          reserveWithheld: "0",
+          allocationDeferred: true,
+        });
+        intent.status = "confirmed";
+        return "ok";
+      });
+    },
     async recordSubmission(parentMint, scope, idempotencyKey, note) {
       return exclusive(() => {
         const current = intents.find((intent) => intent.parentMint === parentMint && intent.scope === scope && intent.idempotencyKey === idempotencyKey);
@@ -364,7 +491,7 @@ export function memoryStore(seed: {
     async saveReceipt(receipt) {
       return exclusive(() => {
         if (receipts.some((row) => row.signature === receipt.signature)) return "duplicate";
-        receipts.push({ ...receipt, allocated: false, reserveWithheld: "0" });
+        receipts.push({ ...receipt, allocated: false, reserveWithheld: "0", allocationDeferred: false });
         return "ok";
       });
     },
@@ -450,18 +577,36 @@ export function memoryStore(seed: {
         const starts = validRehearsalStarts(input.windowStartsMs);
         if (!starts || input.scope !== "test" || input.parentMint !== seed.parent.mintAddress) return "rejected";
         if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
-        if (rehearsal) return "duplicate";
-        rehearsal = {
+        const generation = input.generation ?? 1;
+        const unresolvedIntents = intents.filter((intent) =>
+          intent.parentMint === input.parentMint
+          && intent.scope === input.scope
+          && (intent.status === "submitted" || intent.status === "uncertain" || intent.status === "unreconciled")
+          && !legacyCollectionRetired(intent, legacyRecoveries)
+        ).length;
+        const decision = admitNextRehearsal({
+          existing: rehearsals,
+          generation,
+          starts,
+          unresolvedIntents,
+          unallocatedReceipts: receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated).length,
+          claimableLiabilities: windows.filter((row) => row.parentMint === input.parentMint && row.scope === input.scope).length,
+        });
+        if (decision === "duplicate") return "duplicate";
+        if (decision !== "ok") return "rejected";
+        rehearsals.push({
+          generation,
           status: "open",
           starts,
           windows: new Map(),
           blockSideWork: input.blockSideWork ?? true,
-        };
+        });
         return "ok";
       });
     },
     async claimRehearsalWindow(input) {
       return exclusive(() => {
+        const rehearsal = currentRehearsal();
         if (!rehearsal || input.parentMint !== seed.parent.mintAddress || input.scope !== seed.parent.scope) {
           return { ok: false, code: "absent" };
         }
@@ -470,18 +615,19 @@ export function memoryStore(seed: {
         if (!rehearsal.starts.includes(input.windowStartMs)) return { ok: false, code: "schedule" };
         const existing = rehearsal.windows.get(input.windowStartMs);
         if (existing === "ok") return { ok: true, admission: "replay" };
-        if (existing === "claimed" || existing === "stopped") {
-          rehearsal.windows.set(input.windowStartMs, "stopped");
+        if (existing === "stopped") {
           rehearsal.status = "stopped";
           suspendControl();
           return { ok: false, code: "stopped" };
         }
+        if (existing === "claimed") return { ok: false, code: "claimed" };
         rehearsal.windows.set(input.windowStartMs, "claimed");
         return { ok: true, admission: "execute" };
       });
     },
     async finishRehearsalWindow(input) {
       return exclusive(() => {
+        const rehearsal = currentRehearsal();
         if (!rehearsal || input.parentMint !== seed.parent.mintAddress || input.scope !== seed.parent.scope) return "order";
         const current = rehearsal.windows.get(input.windowStartMs);
         if (!current) return "order";
@@ -495,7 +641,7 @@ export function memoryStore(seed: {
           suspendControl();
           return "ok";
         }
-        if (rehearsal.starts.every((start) => rehearsal?.windows.get(start) === "ok")) {
+        if (rehearsal.starts.every((start) => rehearsal.windows.get(start) === "ok")) {
           rehearsal.status = "closed";
           suspendControl();
         }
@@ -503,6 +649,7 @@ export function memoryStore(seed: {
       });
     },
     async rehearsalState(parentMint, scope) {
+      const rehearsal = currentRehearsal();
       if (!rehearsal || parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope) return null;
       return {
         status: rehearsal.status,
@@ -512,8 +659,8 @@ export function memoryStore(seed: {
       };
     },
     async rehearsalBlocksSideWork(parentMint, scope) {
-      if (!rehearsal || parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope) return false;
-      return rehearsal.blockSideWork;
+      if (parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope || rehearsals.length === 0) return false;
+      return rehearsals.some((row) => row.blockSideWork);
     },
   };
 }

@@ -2,7 +2,7 @@ import postgres from "postgres";
 
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import { TREST_REHEARSAL_MINT, validRehearsalStarts, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
+import { TREST_REHEARSAL_MINT, validRehearsalStarts, type CollectionRecovery, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
 import { matchesLegacyCollection } from "./legacy-recovery.ts";
 
 type Sql = ReturnType<typeof postgres>;
@@ -144,6 +144,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
             and credited = true
             and status = 'confirmed'
             and allocated_at is null
+            and allocation_deferred = false
           order by signature
           for update
         `;
@@ -342,6 +343,111 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         returning id::text
       `;
       return rows[0] ? { ok: true, id: rows[0].id } : { ok: false, code: "duplicate" };
+    },
+    async collectionRecoveries(parentMint, scope) {
+      return sql<CollectionRecovery[]>`
+        select
+          id::text,
+          parent_mint_address as "parentMint",
+          scope,
+          idempotency_key as "idempotencyKey",
+          signature,
+          prior_status as "priorStatus",
+          approval,
+          operator_label as operator,
+          reason,
+          gross_lamports::text as "grossLamports",
+          fee_lamports::text as "feeLamports",
+          net_lamports::text as "netLamports",
+          reserve_withheld_lamports::text as "reserveLamports",
+          holder_lamports::text as "holderLamports",
+          buyback_lamports::text as "buybackLamports",
+          deployer_lamports::text as "deployerLamports",
+          snapshot_status as "snapshotStatus",
+          (extract(epoch from created_at) * 1000)::bigint::text as "createdAtMs"
+        from reward_collection_recoveries
+        where parent_mint_address = ${parentMint} and scope = ${scope}
+      `;
+    },
+    async saveCollectionRecovery(input) {
+      if (input.priorStatus !== "uncertain" || input.snapshotStatus !== "historical_unavailable" || input.approval !== "TREST-07J-COLLECTION-RECOVERY") {
+        return { ok: false, code: "rejected" };
+      }
+      const rows = await sql<{ id: string }[]>`
+        insert into reward_collection_recoveries (
+          parent_mint_address, scope, idempotency_key, signature, prior_status, approval, operator_label, reason,
+          gross_lamports, fee_lamports, net_lamports, reserve_withheld_lamports, holder_lamports, buyback_lamports,
+          deployer_lamports, snapshot_status
+        ) values (
+          ${input.parentMint}, ${input.scope}, ${input.idempotencyKey}, ${input.signature}, ${input.priorStatus},
+          ${input.approval}, ${input.operator}, ${input.reason}, ${input.grossLamports}::bigint, ${input.feeLamports}::bigint,
+          ${input.netLamports}::bigint, ${input.reserveLamports}::bigint, ${input.holderLamports}::bigint,
+          ${input.buybackLamports}::bigint, ${input.deployerLamports}::bigint, ${input.snapshotStatus}
+        )
+        on conflict (signature) do nothing
+        returning id::text
+      `;
+      return rows[0] ? { ok: true, id: rows[0].id } : { ok: false, code: "duplicate" };
+    },
+    async commitCollectionRecovery(input) {
+      if (input.priorStatus !== "uncertain" || input.snapshotStatus !== "historical_unavailable" || input.approval !== "TREST-07J-COLLECTION-RECOVERY") return "rejected";
+      try {
+        return await sql.begin(async (tx) => {
+          const intents = await tx<{ status: string; signature: string | null }[]>`
+            select status, signature
+            from reward_intents
+            where parent_mint_address = ${input.parentMint} and scope = ${input.scope} and idempotency_key = ${input.idempotencyKey}
+            for update
+          `;
+          const intent = intents[0];
+          const existingReceipt = await tx<{ signature: string }[]>`select signature from reward_collections where signature = ${input.signature}`;
+          const existingAudit = await tx<{ signature: string }[]>`select signature from reward_collection_recoveries where signature = ${input.signature}`;
+          if (intent?.status === "confirmed" && existingReceipt[0] && existingAudit[0]) return "duplicate" as const;
+          if (!intent || intent.status !== "uncertain" || intent.signature !== input.signature || existingReceipt[0] || existingAudit[0]) return "order" as const;
+          const audits = await tx<{ id: string }[]>`
+            insert into reward_collection_recoveries (
+              parent_mint_address, scope, idempotency_key, signature, prior_status, approval, operator_label, reason,
+              gross_lamports, fee_lamports, net_lamports, reserve_withheld_lamports, holder_lamports, buyback_lamports,
+              deployer_lamports, snapshot_status
+            ) values (
+              ${input.parentMint}, ${input.scope}, ${input.idempotencyKey}, ${input.signature}, ${input.priorStatus},
+              ${input.approval}, ${input.operator}, ${input.reason}, ${input.grossLamports}::bigint, ${input.feeLamports}::bigint,
+              ${input.netLamports}::bigint, ${input.reserveLamports}::bigint, ${input.holderLamports}::bigint,
+              ${input.buybackLamports}::bigint, ${input.deployerLamports}::bigint, ${input.snapshotStatus}
+            )
+            returning id::text
+          `;
+          const saved = await tx<{ id: string }[]>`
+            insert into reward_collections (
+              parent_registration_id, parent_mint_address, scope, signature, amount_lamports, slot, source, status,
+              credited, confirmed_at, gross_lamports, network_fee_lamports, net_lamports, native_lamports,
+              wsol_token_lamports, wsol_converted_lamports, rent_excluded_lamports, allocation_deferred
+            )
+            select
+              id, ${input.parentMint}, ${input.scope}, ${input.signature}, ${input.amountLamports}::bigint,
+              ${input.slot}::bigint, 'creator_vault', 'confirmed', true, now(), ${input.gross}::bigint,
+              ${input.fee}::bigint, ${input.amountLamports}::bigint, ${input.native}::bigint,
+              ${input.wsolConverted}::bigint, ${input.wsolConverted}::bigint, ${input.rentExcluded}::bigint, true
+            from parent_registrations
+            where mint_address = ${input.parentMint} and scope = ${input.scope}
+            returning id::text
+          `;
+          const marked = await tx<{ id: string }[]>`
+            update reward_intents
+            set status = 'confirmed', updated_at = now()
+            where parent_mint_address = ${input.parentMint}
+              and scope = ${input.scope}
+              and idempotency_key = ${input.idempotencyKey}
+              and status = 'uncertain'
+              and signature = ${input.signature}
+            returning id::text
+          `;
+          if (!audits[0] || !saved[0] || !marked[0]) throw new Error("incomplete collection recovery");
+          return "ok" as const;
+        });
+      } catch {
+        return "rejected";
+      }
     },
     async receipts(parentMint, scope) {
       return sql<FeeReceipt[]>`
@@ -583,16 +689,19 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
       const starts = validRehearsalStarts(input.windowStartsMs);
       if (!starts || input.scope !== "test" || input.parentMint !== TREST_REHEARSAL_MINT) return "rejected";
       if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
+      const generation = input.generation ?? 1;
+      if (!Number.isInteger(generation) || generation < 1 || generation > 100) return "rejected";
       try {
         const rows = await sql<{ id: string }[]>`
-          insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms)
+          insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
           values (
             ${input.parentMint},
             'test',
             'open',
-            array[${starts[0]}::bigint, ${starts[1]}::bigint, ${starts[2]}::bigint]
+            array[${starts[0]}::bigint, ${starts[1]}::bigint, ${starts[2]}::bigint],
+            ${generation}
           )
-          on conflict (parent_mint_address, scope) do nothing
+          on conflict (parent_mint_address, scope, generation) do nothing
           returning id::text
         `;
         return rows[0] ? "ok" : "duplicate";
@@ -606,6 +715,8 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           select id::text, status, window_start_ms::text[] as starts
           from reward_rehearsals
           where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+          order by case when status = 'open' then 0 else 1 end, generation desc
+          limit 1
           for update
         `;
         const row = rows[0];
@@ -627,6 +738,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           where rehearsal_id = ${row.id}::uuid and window_start_ms = ${input.windowStartMs}
         `;
         if (existing[0]?.outcome === "ok") return { ok: true as const, admission: "replay" as const };
+        if (existing[0]?.outcome === "claimed") return { ok: false as const, code: "claimed" as const };
         await tx`
           update reward_rehearsal_windows
           set outcome = 'stopped'
@@ -653,6 +765,8 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           select id::text, status
           from reward_rehearsals
           where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+          order by case when status = 'open' then 0 else 1 end, generation desc
+          limit 1
           for update
         `;
         const row = rows[0];
@@ -702,18 +816,19 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
       });
     },
     async rehearsalState(parentMint, scope) {
-      const rows = await sql<{ status: "open" | "stopped" | "closed"; starts: string[] }[]>`
-        select status, window_start_ms::text[] as starts
+      const rows = await sql<{ id: string; status: "open" | "stopped" | "closed"; starts: string[] }[]>`
+        select id::text, status, window_start_ms::text[] as starts
         from reward_rehearsals
         where parent_mint_address = ${parentMint} and scope = ${scope}
+        order by case when status = 'open' then 0 else 1 end, generation desc
+        limit 1
       `;
       const row = rows[0];
       if (!row) return null;
       const processed = await sql<{ windowStartMs: string; outcome: "claimed" | "ok" | "stopped" }[]>`
         select w.window_start_ms::text as "windowStartMs", w.outcome
         from reward_rehearsal_windows w
-        join reward_rehearsals r on r.id = w.rehearsal_id
-        where r.parent_mint_address = ${parentMint} and r.scope = ${scope}
+        where w.rehearsal_id = ${row.id}::uuid
       `;
       return {
         status: row.status,

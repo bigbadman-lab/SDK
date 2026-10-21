@@ -59,6 +59,9 @@ function harness(input?: {
   holders?: "fail-once";
   signatureState?: "absent" | "present" | "unknown";
   blockhashValid?: "valid" | "expired" | "unknown";
+  blockHeight?: string | null;
+  lagReads?: number;
+  collectStatus?: "confirmed" | "failed";
   parentMint?: string;
   blockSideWork?: boolean;
   vaultLamports?: string;
@@ -71,6 +74,7 @@ function harness(input?: {
   const submits: Uint8Array[] = [];
   const readSignatures: string[] = [];
   let reads = 0;
+  let observations = 0;
   let holderFailures = 0;
   const chain: Chain = {
     async account(address) {
@@ -93,6 +97,9 @@ function harness(input?: {
     },
     async slot() {
       return "44";
+    },
+    async blockHeight() {
+      return input?.blockHeight === undefined ? "44" : input.blockHeight;
     },
     async blockTime() {
       return null;
@@ -126,16 +133,20 @@ function harness(input?: {
     async blockhashValid() {
       return input?.blockhashValid ?? "unknown";
     },
+    async pace() {},
     async transaction(signature, lookup) {
       readSignatures.push(signature);
       reads += 1;
+      if (reads <= (input?.lagReads ?? 0)) return null;
+      observations += 1;
       if (input?.submit === "uncertain") return observed(key.address, { status: "uncertain" });
       if (lookup.destination !== key.address) {
         return observed(key.address, { destinationDelta: "298500", destinationTokenDelta: "40", feeLamports: "0", nativeVaultOut: "0", creatorDelta: "0" });
       }
-      if (reads > 1) {
+      if (observations > 1) {
         return observed(key.address, { status: input?.buyStatus ?? "confirmed", nativeVaultOut: "0", creatorDelta: "0", feeLamports: "0" });
       }
+      if (input?.collectStatus === "failed") return observed(key.address, { status: "failed" });
       const deposit = input?.deposit ?? "0";
       return observed(key.address, { creatorDelta: (995_000 + Number(deposit)).toString(), destinationDelta: (995_000 + Number(deposit)).toString() });
     },
@@ -1325,4 +1336,315 @@ test("claims stay unsigned while a rehearsal blocks side work", async () => {
   if (claim.ok) return;
   assert.equal(claim.code, "rehearsal");
   assert.equal(env.submits.length, before);
+});
+
+test("a delayed confirmation is observed without a second broadcast", async () => {
+  const env = harness({ lagReads: 2 });
+  const result = await cycle(env);
+  assert.equal(result.ok, true);
+  assert.equal(env.submits.length, 2);
+  assert.ok(env.readSignatures.length >= 3);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
+  assert.equal(stored?.status, "confirmed");
+  assert.match(stored?.submissionDetail ?? "", /last_valid_block_height=/);
+});
+
+test("a confirmation missing through the bounded wait stays pending and blocks the next window", async () => {
+  const env = harness({ lagReads: 20 });
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "uncertain");
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
+  assert.equal(stored?.status, "uncertain");
+  assert.equal(stored?.submissionCode, "confirmation_pending");
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, false);
+  if (later.ok) return;
+  assert.equal(later.code, "suspended");
+  assert.equal(env.submits.length, 1);
+});
+
+test("a confirmed on-chain collection failure creates no receipt", async () => {
+  const env = harness({ collectStatus: "failed" });
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "failed");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 0);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
+  assert.equal(stored?.status, "failed");
+  assert.equal(stored?.submissionCode, "onchain_failed");
+});
+
+test("an absent signature expires from the stored blockhash and is not collected again", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "expired" });
+  env.chain.transaction = async (signature) => {
+    env.readSignatures.push(signature);
+    return null;
+  };
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: `collect-${start}`,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", `collect-${start}`, "submitted", signature), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "failed");
+  assert.equal(env.submits.length, 0);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 0);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === `collect-${start}`);
+  assert.equal(stored?.status, "failed");
+  assert.equal(stored?.submissionCode, "expired");
+});
+
+test("an absent signature past its validity height expires without a chain error", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "unknown" });
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=1; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "failed");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.status, "failed");
+  assert.equal(env.submits.length, 0);
+});
+
+test("a current slot above the stored block height does not expire the signature", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "unknown", blockHeight: "40" });
+  env.chain.slot = async () => "100000000";
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=100; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "uncertain");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.status, "uncertain");
+  assert.equal(env.submits.length, 0);
+});
+
+test("block height past the stored last valid block height expires an absent signature", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "unknown", blockHeight: "200" });
+  env.chain.slot = async () => "1";
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=100; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "failed");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.submissionCode, "expired");
+  assert.equal(env.submits.length, 0);
+});
+
+test("an unavailable block height leaves an absent signature uncertain", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "unknown", blockHeight: null });
+  env.chain.slot = async () => "100000000";
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=1; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "uncertain");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.status, "uncertain");
+});
+
+test("a signature status error is not classified as expiry", async () => {
+  const env = harness({ blockhashValid: "expired", blockHeight: "100000" });
+  env.chain.signatureState = async () => {
+    throw new Error("rpc timeout");
+  };
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "uncertain");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.status, "uncertain");
+  assert.equal(env.submits.length, 0);
+});
+
+test("a confirmed collection is not expired after its block height passes", async () => {
+  const env = harness({ blockHeight: "100000" });
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal((await env.store.claimRehearsalWindow({ parentMint: TREST, scope: "test", windowStartMs: start })).ok, true);
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=1; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycleAt(env, start);
+  assert.equal(result.ok, true);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key);
+  assert.equal(stored?.status, "confirmed");
+  assert.equal(stored?.signature, signature);
+  assert.notEqual(stored?.submissionCode, "expired");
+});
+
+test("a still-valid absent signature is not treated as failed", async () => {
+  const env = harness({ signatureState: "absent", blockhashValid: "valid" });
+  env.chain.transaction = async () => null;
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  assert.equal(await env.store.recordSubmission(TREST, "test", key, {
+    recentBlockhash: null,
+    submissionCode: "confirmation_pending",
+    submissionDetail: "last_valid_block_height=100; confirmation not visible before the bounded wait",
+  }), "ok");
+  const result = await cycle(env);
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "uncertain");
+  assert.equal((await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key)?.status, "uncertain");
+  assert.equal(env.submits.length, 0);
+});
+
+test("a confirmed collection is reconciled once after a restart and is not broadcast again", async () => {
+  const env = harness();
+  const start = NOW - (NOW % WINDOW);
+  const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+  const key = `collect-${start}`;
+  const claimed = await env.store.claimRehearsalWindow({ parentMint: TREST, scope: "test", windowStartMs: start });
+  assert.equal(claimed.ok, true);
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: key,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+    recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", key, "submitted", signature), "ok");
+  const result = await cycleAt(env, start);
+  assert.equal(result.ok, true);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === key);
+  assert.equal(stored?.status, "confirmed");
+  assert.equal(stored?.signature, signature);
+  const submits = env.submits.length;
+  await cycleAt(env, start);
+  assert.equal(env.submits.length, submits);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
 });
