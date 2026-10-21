@@ -1,9 +1,19 @@
 import postgres from "postgres";
 
-import type { FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import type { RegisteredParent, RewardControl, RewardsStore, StoredClaim, StoredIntent, StoredSnapshot } from "./store.ts";
+import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
+import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
+import type { RegisteredParent, RewardControl, RewardsStore, StoredClaim, StoredIntent, StoredSnapshot, WindowAllocation } from "./store.ts";
 
 type Sql = ReturnType<typeof postgres>;
+
+class AllocationStop extends Error {
+  allocationCode: "amount" | "duplicate" | "window";
+
+  constructor(allocationCode: "amount" | "duplicate" | "window") {
+    super(allocationCode);
+    this.allocationCode = allocationCode;
+  }
+}
 
 function sslMode(url: string): "require" | false {
   try {
@@ -63,6 +73,172 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         where parent_mint_address = ${parentMint} and scope = ${scope}
       `;
       return rows[0] ?? null;
+    },
+    async solObligations(parentMint, scope) {
+      const liabilities = await sql<{ holder: string; deployer: string; buyback: string }[]>`
+        select
+          coalesce(sum(amount::bigint) filter (where kind = 'holder_sol'), 0)::text as holder,
+          coalesce(sum(amount::bigint) filter (where kind = 'deployer_retained'), 0)::text as deployer,
+          coalesce(sum(amount::bigint) filter (where kind = 'buyback_sol'), 0)::text as buyback
+        from reward_liabilities
+        where parent_mint_address = ${parentMint} and scope = ${scope} and status <> 'suspended'
+      `;
+      const paid = await sql<{ holder: string; buyback: string }[]>`
+        select
+          coalesce((
+            select sum(liability.amount::bigint)
+            from reward_claims claim
+            join reward_liabilities liability on liability.id = claim.liability_id
+            where claim.parent_mint_address = ${parentMint}
+              and claim.scope = ${scope}
+              and claim.status = 'confirmed'
+              and liability.kind = 'holder_sol'
+          ), 0)::text as holder,
+          coalesce((
+            select sum(amount_lamports)
+            from reward_intents
+            where parent_mint_address = ${parentMint} and scope = ${scope} and kind = 'buyback' and status = 'confirmed'
+          ), 0)::text as buyback
+      `;
+      return {
+        holderSol: liabilities[0]?.holder ?? "0",
+        confirmedHolderSol: paid[0]?.holder ?? "0",
+        deployerRetained: liabilities[0]?.deployer ?? "0",
+        buybackSol: liabilities[0]?.buyback ?? "0",
+        confirmedBuybackSol: paid[0]?.buyback ?? "0",
+      };
+    },
+    async allocateUnallocated(input): Promise<WindowAllocation> {
+      const startMs = Number(input.windowKey.split(":").at(-1));
+      if (!Number.isInteger(startMs) || windowKey(input.parentMint, input.scope, startMs + 1) !== input.windowKey) {
+        return { ok: false, code: "window" };
+      }
+      try {
+      return await sql.begin(async (tx) => {
+        const parents = await tx<{ id: string }[]>`
+          select id::text from parent_registrations
+          where mint_address = ${input.parentMint} and scope = ${input.scope}
+          for update
+        `;
+        if (!parents[0]) throw new AllocationStop("window");
+        const existing = await tx<{ base: string; holders: string; buyback: string; deployer: string }[]>`
+          select
+            collected_lamports::text as base,
+            holder_lamports::text as holders,
+            buyback_lamports::text as buyback,
+            deployer_retained_lamports::text as deployer
+          from reward_windows
+          where parent_mint_address = ${input.parentMint}
+            and scope = ${input.scope}
+            and window_start = to_timestamp(${startMs} / 1000.0)
+        `;
+        if (existing[0]) {
+          return { ok: true, state: "duplicate", base: existing[0].base, holders: existing[0].holders, buyback: existing[0].buyback, deployer: existing[0].deployer, withheld: "0" };
+        }
+        const open = await tx<{ id: string; signature: string; amount: string }[]>`
+          select id::text, signature, amount_lamports::text as amount
+          from reward_collections
+          where parent_mint_address = ${input.parentMint}
+            and scope = ${input.scope}
+            and credited = true
+            and status = 'confirmed'
+            and allocated_at is null
+          order by signature
+          for update
+        `;
+        if (open.length === 0) return { ok: true, state: "empty" };
+        const allocated = await tx<{ signature: string }[]>`
+          select signature from reward_collections
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope} and allocated_at is not null
+        `;
+        const gross = open.reduce((total, receipt) => total + BigInt(receipt.amount), BigInt(0));
+        const guard = allocateWindow({
+          parentMint: input.parentMint,
+          scope: input.scope,
+          timestampMs: startMs + 1,
+          netLamports: gross.toString(),
+          reserveLamports: "0",
+          receiptSignatures: open.map((receipt) => receipt.signature),
+          allocatedSignatures: allocated.map((receipt) => receipt.signature),
+          existingWindowKeys: [],
+        });
+        if (!guard.ok) throw new AllocationStop("duplicate");
+        const withheldRows = await tx<{ withheld: string }[]>`
+          select coalesce(sum(reserve_withheld_lamports), 0)::text as withheld
+          from reward_collections
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope} and allocated_at is not null
+        `;
+        const planned = planIncrementalAllocation({
+          grossLamports: gross.toString(),
+          reserveLamports: input.reserveLamports,
+          reserveWithheldLamports: withheldRows[0]?.withheld ?? "0",
+        });
+        if (!planned.ok) throw new AllocationStop("amount");
+        let remaining = BigInt(planned.withheld);
+        const shares = open.map((receipt) => {
+          const amount = BigInt(receipt.amount);
+          const take = remaining > amount ? amount : remaining;
+          remaining -= take;
+          return { id: receipt.id, withheld: take };
+        });
+        if (remaining !== BigInt(0)) throw new AllocationStop("amount");
+        let windowId: string | null = null;
+        if (planned.base !== "0") {
+          const inserted = await tx<{ id: string }[]>`
+            insert into reward_windows (
+              parent_registration_id, parent_mint_address, scope, window_start, window_end,
+              collected_lamports, holder_lamports, buyback_lamports, deployer_retained_lamports, status
+            )
+            select
+              id, ${input.parentMint}, ${input.scope}, to_timestamp(${startMs} / 1000.0), to_timestamp(${startMs + 300_000} / 1000.0),
+              ${planned.base}::bigint, ${planned.holders}::bigint, ${planned.buyback}::bigint, ${planned.deployer}::bigint, 'allocated'
+            from parent_registrations
+            where mint_address = ${input.parentMint} and scope = ${input.scope}
+            returning id::text
+          `;
+          windowId = inserted[0]?.id ?? null;
+          if (!windowId) throw new AllocationStop("window");
+          await tx`
+            insert into reward_liabilities (
+              parent_registration_id, parent_mint_address, scope, kind, amount, asset, window_id, status
+            )
+            select id, ${input.parentMint}, ${input.scope}, kind, amount, asset, ${windowId}::uuid, 'claimable'
+            from parent_registrations
+            cross join (
+              values
+                ('holder_sol', ${planned.holders}, 'sol'),
+                ('buyback_sol', ${planned.buyback}, 'sol'),
+                ('deployer_retained', ${planned.deployer}, 'sol')
+            ) as bucket(kind, amount, asset)
+            where mint_address = ${input.parentMint} and scope = ${input.scope}
+          `;
+        }
+        for (const share of shares) {
+          const updated = await tx<{ id: string }[]>`
+            update reward_collections
+            set allocated_at = now(),
+                reserve_withheld_lamports = ${share.withheld.toString()}::bigint,
+                reward_window_id = ${windowId}::uuid
+            where id = ${share.id}::uuid and allocated_at is null
+            returning id::text
+          `;
+          if (!updated[0]) throw new AllocationStop("duplicate");
+        }
+        if (planned.base === "0") return { ok: true, state: "reserved", withheld: planned.withheld };
+        return {
+          ok: true,
+          state: "allocated",
+          base: planned.base,
+          holders: planned.holders,
+          buyback: planned.buyback,
+          deployer: planned.deployer,
+          withheld: planned.withheld,
+        };
+      });
+      } catch (error) {
+        if (error instanceof AllocationStop) return { ok: false, code: error.allocationCode };
+        throw error;
+      }
     },
     async intents(parentMint, scope) {
       return sql<StoredIntent[]>`

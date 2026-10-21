@@ -3,10 +3,23 @@ import "server-only";
 import { createHash } from "node:crypto";
 
 import type { TestParentRegistration } from "@/lib/launch/parent";
+import { ensureTestParentControls } from "@/lib/rewards/ensure-controls.ts";
 import { databaseFailure, getSql } from "@/lib/server/db";
 
 function evidence(registration: TestParentRegistration): string {
   return createHash("sha256").update(JSON.stringify(registration)).digest("hex");
+}
+
+async function withControls(
+  mint: string,
+): Promise<{ ok: true; registration: "stored" } | { ok: false; code: "missing_schema" | "unavailable" }> {
+  try {
+    const ensured = await ensureTestParentControls(getSql(), mint);
+    if (ensured === "rejected") return { ok: false, code: "unavailable" };
+    return { ok: true, registration: "stored" };
+  } catch (error) {
+    return { ok: false, code: databaseFailure(error) === "missing_schema" ? "missing_schema" : "unavailable" };
+  }
 }
 
 export async function storeTestParent(input: {
@@ -57,7 +70,7 @@ export async function storeTestParent(input: {
         ${evidence(registration)}
       )
     `;
-    return { ok: true, registration: "stored" };
+    return withControls(registration.mint);
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
     if (code === "23505") {
@@ -83,7 +96,7 @@ export async function storeTestParent(input: {
           row.symbol === "TREST" &&
           row.fee_mode === "single_recipient"
         ) {
-          return { ok: true, registration: "stored" };
+          return withControls(registration.mint);
         }
       } catch (lookup) {
         return { ok: false, code: databaseFailure(lookup) === "missing_schema" ? "missing_schema" : "unavailable" };

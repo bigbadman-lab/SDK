@@ -16,7 +16,7 @@ import {
   releaseCycleLock,
   windowKey,
 } from "./cycle.ts";
-import { WINDOW_MS, authoriseBucketSpend } from "./ledger.ts";
+import { WINDOW_MS, authoriseBucketSpend, buybackSpendAllowed, planIncrementalAllocation } from "./ledger.ts";
 import { PUMP_PROGRAM_ID } from "./collect.ts";
 import { snapshotHolders } from "./holders.ts";
 import { reconcileBuyback, reconcileCreatorFee } from "./reconcile.ts";
@@ -468,4 +468,65 @@ test("wrapped SOL is credited only after a verified close and rent is excluded",
   assert.equal(unconverted.ok, false);
   if (unconverted.ok) return;
   assert.equal(unconverted.code, "wsol");
+});
+
+test("incremental windows split only new fees and withhold the reserve once", () => {
+  const first = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "0", reserveWithheldLamports: "0" });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  assert.deepEqual([first.holders, first.buyback, first.deployer], ["30", "30", "40"]);
+  const second = planIncrementalAllocation({ grossLamports: "50", reserveLamports: "0", reserveWithheldLamports: "0" });
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.deepEqual([second.holders, second.buyback, second.deployer], ["15", "15", "20"]);
+  const opening = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "90", reserveWithheldLamports: "0" });
+  assert.equal(opening.ok, true);
+  if (!opening.ok) return;
+  assert.equal(opening.withheld, "90");
+  assert.deepEqual([opening.holders, opening.buyback, opening.deployer], ["3", "3", "4"]);
+  const later = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "90", reserveWithheldLamports: "90" });
+  assert.equal(later.ok, true);
+  if (!later.ok) return;
+  assert.equal(later.withheld, "0");
+  assert.deepEqual([later.holders, later.buyback, later.deployer], ["30", "30", "40"]);
+  const dust = planIncrementalAllocation({ grossLamports: "10", reserveLamports: "0", reserveWithheldLamports: "0" });
+  assert.equal(dust.ok, true);
+  if (!dust.ok) return;
+  assert.deepEqual([dust.holders, dust.buyback, dust.deployer], ["3", "3", "4"]);
+  const empty = planIncrementalAllocation({ grossLamports: "0", reserveLamports: "0", reserveWithheldLamports: "0" });
+  assert.equal(empty.ok, true);
+  if (!empty.ok) return;
+  assert.deepEqual([empty.base, empty.holders, empty.buyback, empty.deployer], ["0", "0", "0", "0"]);
+});
+
+test("a buyback cannot spend SOL reserved for holders, the deployer, or an earlier buyback", () => {
+  const covered = buybackSpendAllowed({
+    walletLamports: "100",
+    buybackLamports: "30",
+    reserveLamports: "0",
+    unpaidHolderLamports: "30",
+    deployerRetainedLamports: "40",
+    unspentPriorBuybackLamports: "0",
+  });
+  assert.equal(covered.ok, true);
+  const short = buybackSpendAllowed({
+    walletLamports: "60",
+    buybackLamports: "30",
+    reserveLamports: "0",
+    unpaidHolderLamports: "30",
+    deployerRetainedLamports: "40",
+    unspentPriorBuybackLamports: "0",
+  });
+  assert.equal(short.ok, false);
+  if (short.ok) return;
+  assert.equal(short.code, "unfunded");
+  const reserved = buybackSpendAllowed({
+    walletLamports: "100",
+    buybackLamports: "30",
+    reserveLamports: "5",
+    unpaidHolderLamports: "30",
+    deployerRetainedLamports: "40",
+    unspentPriorBuybackLamports: "0",
+  });
+  assert.equal(reserved.ok, false);
 });

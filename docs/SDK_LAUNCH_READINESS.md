@@ -33,7 +33,7 @@ The worker asks Pump SDK 4.2.0 for the full child-fee transaction: curve `sweepC
 
 ## Gate F — Native holder rewards — BLOCKED
 
-The five-minute cycle, 30/30/40 split, buyback, snapshot, and SOL, parent-token, and Claim All paths exist and are fixture-tested. Account claims call the worker through `POST /v1/claims` when `REWARDS_WORKER_URL` and `REWARDS_WORKER_SECRET` are set. A suspended or unauthorised worker returns inactive and does not sign. The worker is suspended: signer suspended, signing false, broadcasts false, loop false, execution unauthorised. No TREST creator fee has been collected, no buyback has been confirmed, and no holder has been paid.
+The five-minute cycle, 30/30/40 split, buyback, snapshot, and SOL, parent-token, and Claim All paths exist and are fixture-tested. Each confirmed creator-fee receipt is allocated to one window; a later window uses only receipts that are still unallocated, and an empty window creates no entitlement. Registering TREST inserts a suspended `reward_controls` row. The rehearsal reserve is 0.005 SOL withheld once, the cycle cap is 0.1 SOL, and slippage is 1%. Creating that row does not authorise execution. Account claims call the worker through `POST /v1/claims` when `REWARDS_WORKER_URL` and `REWARDS_WORKER_SECRET` are set. A suspended or unauthorised worker returns inactive and does not sign. The worker is suspended: signer suspended, signing false, broadcasts false, loop false, execution unauthorised. No TREST creator fee has been collected, no buyback has been confirmed, and no holder has been paid.
 
 ## Gate G — Emergency control — PARTIAL
 

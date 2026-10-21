@@ -6,6 +6,8 @@ import test, { after, before } from "node:test";
 
 import EmbeddedPostgres from "embedded-postgres";
 
+import { windowKey as rewardWindowKey } from "../../../lib/rewards/cycle.ts";
+import { ensureTestParentControls } from "../../../lib/rewards/ensure-controls.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
 
 const MINT = "GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse";
@@ -18,6 +20,7 @@ const START = Date.UTC(2026, 9, 20, 16, 0, 0);
 
 let database: EmbeddedPostgres | null = null;
 let directory = "";
+let databaseUrl = "";
 let sql: ReturnType<typeof createSql> | null = null;
 
 before(async () => {
@@ -37,7 +40,8 @@ before(async () => {
   const url = new URL("postgres://sdk_rewards:sdk_rewards_local@127.0.0.1:55432/rewards");
   assert.equal(url.hostname, "127.0.0.1");
   assert.notEqual(url.toString(), process.env.DATABASE_URL);
-  sql = createSql(url.toString());
+  databaseUrl = url.toString();
+  sql = createSql(databaseUrl);
   await sql.unsafe(`
     do $$ begin
       if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
@@ -54,7 +58,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-8), [
+  assert.deepEqual(files.slice(-9), [
     "20261020140000_phase_05d1_signing_attempt.sql",
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
@@ -63,6 +67,7 @@ before(async () => {
     "20261020240000_phase_05d2_launch_submission.sql",
     "20261020250000_phase_05d2b_launch_approval.sql",
     "20261020260000_trest04_claims_child_fees_emergency.sql",
+    "20261021100000_trest04d_window_allocation.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -340,4 +345,184 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   } finally {
     await db()`reset role`;
   }
+
+  await db()`
+    update reward_collections
+    set allocated_at = now(),
+        reserve_withheld_lamports = 0,
+        reward_window_id = (
+          select id from reward_windows
+          where parent_mint_address = ${MINT} and scope = 'test' and window_start = to_timestamp(${START} / 1000.0)
+        )
+    where signature = ${SIGNATURE.replaceAll("2", "5")}
+  `;
+  const fee = (signature: string, amount: string, mint = MINT, scope: "test" | "production" = "test") => store.saveReceipt({
+    signature,
+    parentMint: mint,
+    scope,
+    amountLamports: amount,
+    slot: "45",
+    confirmed: true,
+    source: "creator_vault",
+    gross: amount,
+    fee: "0",
+    native: amount,
+    wsolConverted: "0",
+    rentExcluded: "0",
+  });
+  const at = (offset: number) => {
+    const key = rewardWindowKey(MINT, "test", START + offset + 1);
+    if (!key) throw new Error("window");
+    return key;
+  };
+  assert.equal(await fee("3".repeat(88), "1000"), "ok");
+  const first = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(600_000), reserveLamports: "0" });
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  assert.equal(first.state, "allocated");
+  if (first.state !== "allocated") return;
+  assert.deepEqual([first.holders, first.buyback, first.deployer, first.base], ["300", "300", "400", "1000"]);
+  assert.equal(await fee("4".repeat(88), "2000"), "ok");
+  const second = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(900_000), reserveLamports: "0" });
+  assert.equal(second.ok, true);
+  if (!second.ok || second.state !== "allocated") return;
+  assert.deepEqual([second.holders, second.buyback, second.deployer], ["600", "600", "800"]);
+  const beforeEmpty = (await store.windows(MINT, "test")).length;
+  const third = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_200_000), reserveLamports: "0" });
+  assert.deepEqual(third, { ok: true, state: "empty" });
+  assert.equal((await store.windows(MINT, "test")).length, beforeEmpty);
+  const linked = await db()`
+    select signature, reward_window_id::text as window
+    from reward_collections
+    where signature in (${"3".repeat(88)}, ${"4".repeat(88)})
+    order by signature
+  `;
+  assert.equal(linked.length, 2);
+  assert.notEqual(linked[0]?.window, linked[1]?.window);
+  assert.equal(await fee("6".repeat(88), "1000"), "ok");
+  assert.equal(await fee("7".repeat(88), "2000"), "ok");
+  const many = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_500_000), reserveLamports: "0" });
+  assert.equal(many.ok, true);
+  if (!many.ok || many.state !== "allocated") return;
+  assert.deepEqual([many.base, many.holders, many.buyback, many.deployer], ["3000", "900", "900", "1200"]);
+  const shared = await db()`
+    select count(distinct reward_window_id)::int as windows
+    from reward_collections
+    where signature in (${"6".repeat(88)}, ${"7".repeat(88)})
+  `;
+  assert.equal(Number(shared[0]?.windows), 1);
+  assert.equal(await fee("8".repeat(88), "5000"), "ok");
+  const repeated = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_500_000), reserveLamports: "0" });
+  assert.equal(repeated.ok, true);
+  if (!repeated.ok) return;
+  assert.equal(repeated.state, "duplicate");
+  const stillOpen = await db()`
+    select count(*)::int as count from reward_collections
+    where signature = ${"8".repeat(88)} and allocated_at is null
+  `;
+  assert.equal(Number(stillOpen[0]?.count), 1);
+  const replay = await postgresRewardsStore(db()).allocateUnallocated({
+    parentMint: MINT, scope: "test", windowKey: at(1_500_000), reserveLamports: "0",
+  });
+  assert.equal(replay.ok, true);
+  if (!replay.ok) return;
+  assert.equal(replay.state, "duplicate");
+  const carried = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_800_000), reserveLamports: "0" });
+  assert.equal(carried.ok, true);
+  if (!carried.ok || carried.state !== "allocated") return;
+  assert.equal(carried.base, "5000");
+  assert.equal(await fee("9".repeat(88), "1000"), "ok");
+  await db()`
+    create function public.trest04d_fail_window() returns trigger language plpgsql as $$
+    begin
+      raise exception 'allocation persistence failed';
+    end $$
+  `;
+  await db()`
+    create trigger trest04d_fail_window before insert on public.reward_windows
+    for each row execute function public.trest04d_fail_window()
+  `;
+  await assert.rejects(() => store.allocateUnallocated({
+    parentMint: MINT, scope: "test", windowKey: at(2_100_000), reserveLamports: "0",
+  }));
+  const rolled = await db()`
+    select count(*)::int as count from reward_collections
+    where signature = ${"9".repeat(88)} and allocated_at is null
+  `;
+  assert.equal(Number(rolled[0]?.count), 1);
+  await db()`drop trigger trest04d_fail_window on public.reward_windows`;
+  await db()`drop function public.trest04d_fail_window()`;
+  const retried = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(2_100_000), reserveLamports: "0" });
+  assert.equal(retried.ok, true);
+  if (!retried.ok) return;
+  assert.equal(retried.state, "allocated");
+  assert.equal(await fee("B".repeat(88), "1000"), "ok");
+  assert.equal(await fee("C".repeat(88), "1000"), "ok");
+  const left = createSql(databaseUrl);
+  const right = createSql(databaseUrl);
+  const allocationRace = await Promise.all([
+    postgresRewardsStore(left).allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(2_400_000), reserveLamports: "0" }),
+    postgresRewardsStore(right).allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(2_400_000), reserveLamports: "0" }),
+  ]).finally(async () => {
+    await left.end({ timeout: 5 });
+    await right.end({ timeout: 5 });
+  });
+  assert.deepEqual(allocationRace.map((row) => row.ok && row.state).sort(), ["allocated", "duplicate"]);
+  const once = await db()`
+    select count(*)::int as receipts, count(distinct reward_window_id)::int as windows
+    from reward_collections
+    where signature in (${"B".repeat(88)}, ${"C".repeat(88)})
+  `;
+  assert.equal(Number(once[0]?.receipts), 2);
+  assert.equal(Number(once[0]?.windows), 1);
+  const raceLiabilities = await db()`
+    select count(*)::int as count
+    from reward_liabilities liability
+    join reward_windows window_row on window_row.id = liability.window_id
+    where window_row.window_start = to_timestamp(${START + 2_400_000} / 1000.0)
+  `;
+  assert.equal(Number(raceLiabilities[0]?.count), 3);
+  assert.equal(await fee("D".repeat(88), "1000"), "ok");
+  const reserved = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(2_700_000), reserveLamports: "4000" });
+  assert.deepEqual(reserved, { ok: true, state: "reserved", withheld: "1000" });
+  assert.equal(await fee("E".repeat(88), "10000"), "ok");
+  const afterReserve = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_000_000), reserveLamports: "4000" });
+  assert.equal(afterReserve.ok, true);
+  if (!afterReserve.ok || afterReserve.state !== "allocated") return;
+  assert.equal(afterReserve.withheld, "3000");
+  assert.deepEqual([afterReserve.base, afterReserve.holders, afterReserve.buyback, afterReserve.deployer], ["7000", "2100", "2100", "2800"]);
+  assert.equal(await fee("F".repeat(88), "1000", PRODUCTION_MINT, "production"), "ok");
+  const isolated = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_300_000), reserveLamports: "0" });
+  assert.deepEqual(isolated, { ok: true, state: "empty" });
+  const productionReceipt = await db()`
+    select allocated_at from reward_collections where signature = ${"F".repeat(88)}
+  `;
+  assert.equal(productionReceipt[0]?.allocated_at, null);
+  await db()`delete from reward_controls where parent_mint_address = ${MINT}`;
+  assert.equal(await ensureTestParentControls(db(), MINT), "created");
+  const created = await db()`
+    select signer_suspended, reserve_lamports::text as reserve, cycle_cap_lamports::text as cap, slippage_bps
+    from reward_controls where parent_mint_address = ${MINT}
+  `;
+  assert.equal(created[0]?.signer_suspended, true);
+  assert.equal(created[0]?.reserve, "5000000");
+  assert.equal(created[0]?.cap, "100000000");
+  assert.equal(Number(created[0]?.slippage_bps), 100);
+  await db()`
+    update reward_controls
+    set signer_suspended = false, reserve_lamports = 1
+    where parent_mint_address = ${MINT}
+  `;
+  assert.equal(await ensureTestParentControls(db(), MINT), "preserved");
+  const preserved = await db()`
+    select signer_suspended, reserve_lamports::text as reserve
+    from reward_controls where parent_mint_address = ${MINT}
+  `;
+  assert.equal(preserved[0]?.signer_suspended, false);
+  assert.equal(preserved[0]?.reserve, "1");
+  assert.equal(await ensureTestParentControls(db(), PRODUCTION_MINT), "rejected");
+  const productionControl = await db()`
+    select reserve_lamports::text as reserve from reward_controls where parent_mint_address = ${PRODUCTION_MINT}
+  `;
+  assert.equal(productionControl[0]?.reserve, "0");
 });

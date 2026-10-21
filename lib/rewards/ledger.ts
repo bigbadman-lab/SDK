@@ -67,6 +67,53 @@ export function creditedLamports(receipts: readonly FeeReceipt[], parentMint: st
     .toString();
 }
 
+// The reserve is a standing solvency floor against lifetime creator fees.
+// It is withheld once. Later windows pass the amount already withheld and do not
+// subtract the full reserve again.
+export function planIncrementalAllocation(input: {
+  grossLamports: string;
+  reserveLamports: string;
+  reserveWithheldLamports: string;
+}): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
+  const gross = parseAmount(input.grossLamports);
+  const reserve = parseAmount(input.reserveLamports);
+  const withheldAlready = parseAmount(input.reserveWithheldLamports);
+  if (gross === null || reserve === null || withheldAlready === null || withheldAlready > reserve) {
+    return { ok: false, code: "amount" };
+  }
+  const remaining = reserve - withheldAlready;
+  const withheld = gross < remaining ? gross : remaining;
+  const base = gross - withheld;
+  if (base === BigInt(0)) {
+    return { ok: true, withheld: withheld.toString(), base: "0", holders: "0", buyback: "0", deployer: "0" };
+  }
+  const split = splitCreatorFees(base.toString());
+  if (!split.ok) return split;
+  return { ok: true, withheld: withheld.toString(), base: base.toString(), holders: split.holders, buyback: split.buyback, deployer: split.deployer };
+}
+
+export function buybackSpendAllowed(input: {
+  walletLamports: string;
+  buybackLamports: string;
+  reserveLamports: string;
+  unpaidHolderLamports: string;
+  deployerRetainedLamports: string;
+  unspentPriorBuybackLamports: string;
+}): { ok: true } | { ok: false; code: "amount" | "unfunded" } {
+  const wallet = parseAmount(input.walletLamports);
+  const buyback = parseAmount(input.buybackLamports);
+  const reserve = parseAmount(input.reserveLamports);
+  const holders = parseAmount(input.unpaidHolderLamports);
+  const deployer = parseAmount(input.deployerRetainedLamports);
+  const prior = parseAmount(input.unspentPriorBuybackLamports);
+  if (wallet === null || buyback === null || reserve === null || holders === null || deployer === null || prior === null) {
+    return { ok: false, code: "amount" };
+  }
+  if (buyback <= BigInt(0) || wallet < BigInt(0)) return { ok: false, code: "amount" };
+  if (wallet < buyback + reserve + holders + deployer + prior) return { ok: false, code: "unfunded" };
+  return { ok: true };
+}
+
 export function rewardBase(credited: string, reserveLamports: string): { ok: true; base: string } | { ok: false; code: "amount" } {
   const collected = parseAmount(credited);
   const reserve = parseAmount(reserveLamports);

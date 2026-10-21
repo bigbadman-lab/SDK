@@ -1,5 +1,6 @@
+import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.ts";
-import type { FeeReceipt, RewardScope } from "../../../lib/rewards/ledger.ts";
+import { planIncrementalAllocation, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
 
 export type RegisteredParent = {
   id: string;
@@ -49,9 +50,30 @@ export type StoredClaim = {
   proofHash: string;
 };
 
+export type SolObligations = {
+  holderSol: string;
+  confirmedHolderSol: string;
+  deployerRetained: string;
+  buybackSol: string;
+  confirmedBuybackSol: string;
+};
+
+export type WindowAllocation =
+  | { ok: true; state: "empty" }
+  | { ok: true; state: "reserved"; withheld: string }
+  | { ok: true; state: "allocated" | "duplicate"; base: string; holders: string; buyback: string; deployer: string; withheld: string }
+  | { ok: false; code: "amount" | "duplicate" | "window" };
+
 export type RewardsStore = {
   parent(scope: RewardScope): Promise<RegisteredParent | null>;
   control(parentMint: string, scope: RewardScope): Promise<RewardControl | null>;
+  solObligations(parentMint: string, scope: RewardScope): Promise<SolObligations>;
+  allocateUnallocated(input: {
+    parentMint: string;
+    scope: RewardScope;
+    windowKey: string;
+    reserveLamports: string;
+  }): Promise<WindowAllocation>;
   intents(parentMint: string, scope: RewardScope): Promise<StoredIntent[]>;
   recordIntent(intent: Omit<StoredIntent, "status" | "signature"> & { amountLamports: string | null }): Promise<"ok" | "duplicate">;
   markIntent(parentMint: string, scope: RewardScope, idempotencyKey: string, status: IntentStatus, signature: string | null): Promise<"ok" | "order" | "duplicate">;
@@ -81,7 +103,7 @@ const LEASE_MS = 5 * 60 * 1000;
 
 export function memoryStore(seed: { parent: RegisteredParent; control: RewardControl }): RewardsStore {
   const intents: StoredIntent[] = [];
-  const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string }> = [];
+  const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string; allocated: boolean; reserveWithheld: string }> = [];
   const windows: Array<{ parentMint: string; scope: RewardScope; windowKey: string; collected: string; holders: string; buyback: string; deployer: string }> = [];
   const snapshots: Array<StoredSnapshot & { parentMint: string; scope: RewardScope; windowKey: string }> = [];
   const claims: StoredClaim[] = [];
@@ -102,6 +124,83 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
     async control(parentMint, scope) {
       if (seed.parent.mintAddress !== parentMint || seed.parent.scope !== scope) return null;
       return seed.control;
+    },
+    async solObligations(parentMint, scope) {
+      const rows = windows.filter((row) => row.parentMint === parentMint && row.scope === scope);
+      const sum = (pick: (row: (typeof rows)[number]) => string) => rows.reduce((total, row) => total + BigInt(pick(row)), BigInt(0)).toString();
+      const confirmedHolder = claims
+        .filter((claim) => claim.parentMint === parentMint && claim.scope === scope && claim.asset === "sol" && claim.status === "confirmed")
+        .reduce((total, claim) => total + BigInt(claim.amount), BigInt(0));
+      const confirmedBuyback = intents
+        .filter((intent) => intent.parentMint === parentMint && intent.scope === scope && intent.kind === "buyback" && intent.status === "confirmed")
+        .reduce((total, intent) => total + BigInt(intent.amountLamports ?? "0"), BigInt(0));
+      return {
+        holderSol: sum((row) => row.holders),
+        confirmedHolderSol: confirmedHolder.toString(),
+        deployerRetained: sum((row) => row.deployer),
+        buybackSol: sum((row) => row.buyback),
+        confirmedBuybackSol: confirmedBuyback.toString(),
+      };
+    },
+    async allocateUnallocated(input) {
+      return exclusive(() => {
+        const startMs = Number(input.windowKey.split(":").at(-1));
+        if (!Number.isInteger(startMs) || windowKey(input.parentMint, input.scope, startMs + 1) !== input.windowKey) {
+          return { ok: false, code: "window" };
+        }
+        const existing = windows.find((row) => row.parentMint === input.parentMint && row.scope === input.scope && row.windowKey === input.windowKey);
+        if (existing) {
+          return { ok: true, state: "duplicate", base: existing.collected, holders: existing.holders, buyback: existing.buyback, deployer: existing.deployer, withheld: "0" };
+        }
+        const open = receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated);
+        if (open.length === 0) return { ok: true, state: "empty" };
+        const allocatedSignatures = receipts.filter((receipt) => receipt.allocated).map((receipt) => receipt.signature);
+        const guard = allocateWindow({
+          parentMint: input.parentMint,
+          scope: input.scope,
+          timestampMs: startMs + 1,
+          netLamports: open.reduce((total, receipt) => total + BigInt(receipt.amountLamports), BigInt(0)).toString(),
+          reserveLamports: "0",
+          receiptSignatures: open.map((receipt) => receipt.signature),
+          allocatedSignatures,
+          existingWindowKeys: [],
+        });
+        if (!guard.ok) return { ok: false, code: "duplicate" };
+        const withheldAlready = receipts
+          .filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && receipt.allocated)
+          .reduce((total, receipt) => total + BigInt(receipt.reserveWithheld), BigInt(0));
+        const planned = planIncrementalAllocation({
+          grossLamports: open.reduce((total, receipt) => total + BigInt(receipt.amountLamports), BigInt(0)).toString(),
+          reserveLamports: input.reserveLamports,
+          reserveWithheldLamports: withheldAlready.toString(),
+        });
+        if (!planned.ok) return { ok: false, code: "amount" };
+        let remaining = BigInt(planned.withheld);
+        const shares = [...open]
+          .sort((left, right) => (left.signature < right.signature ? -1 : 1))
+          .map((receipt) => {
+            const amount = BigInt(receipt.amountLamports);
+            const take = remaining > amount ? amount : remaining;
+            remaining -= take;
+            return { receipt, withheld: take.toString() };
+          });
+        if (remaining !== BigInt(0)) return { ok: false, code: "amount" };
+        for (const share of shares) {
+          share.receipt.allocated = true;
+          share.receipt.reserveWithheld = share.withheld;
+        }
+        if (planned.base === "0") return { ok: true, state: "reserved", withheld: planned.withheld };
+        windows.push({
+          parentMint: input.parentMint,
+          scope: input.scope,
+          windowKey: input.windowKey,
+          collected: planned.base,
+          holders: planned.holders,
+          buyback: planned.buyback,
+          deployer: planned.deployer,
+        });
+        return { ok: true, state: "allocated", base: planned.base, holders: planned.holders, buyback: planned.buyback, deployer: planned.deployer, withheld: planned.withheld };
+      });
     },
     async intents(parentMint, scope) {
       return intents.filter((intent) => intent.parentMint === parentMint && intent.scope === scope);
@@ -134,7 +233,7 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
     async saveReceipt(receipt) {
       return exclusive(() => {
         if (receipts.some((row) => row.signature === receipt.signature)) return "duplicate";
-        receipts.push(receipt);
+        receipts.push({ ...receipt, allocated: false, reserveWithheld: "0" });
         return "ok";
       });
     },

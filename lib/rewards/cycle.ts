@@ -121,6 +121,9 @@ export function allocateWindow(input: {
   if (input.existingWindowKeys.includes(key)) {
     return { ok: true, duplicate: true, windowKey: key, holders: "0", buyback: "0", deployer: "0", base: "0" };
   }
+  // A receipt signature that is already allocated must stay rejected.
+  // Callers pass only signatures persisted as allocated. They must not mark
+  // every historical receipt allocated merely because an earlier window exists.
   if (input.receiptSignatures.some((signature) => input.allocatedSignatures.includes(signature))) {
     return { ok: false, code: "duplicate" };
   }

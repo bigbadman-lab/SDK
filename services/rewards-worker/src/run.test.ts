@@ -43,7 +43,7 @@ function observed(feePayer: string, patch: Partial<ObservedTransaction> = {}): O
   };
 }
 
-function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; buyStatus?: "confirmed" | "failed"; deposit?: string }) {
+function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; buyStatus?: "confirmed" | "failed"; deposit?: string; holders?: "fail-once" }) {
   const key = signer();
   const holder = signer();
   const vault = creatorVaultAddress(key.address);
@@ -52,6 +52,7 @@ function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; 
   const submits: Uint8Array[] = [];
   const readSignatures: string[] = [];
   let reads = 0;
+  let holderFailures = 0;
   const chain: Chain = {
     async account(address) {
       if (address === key.address) return { lamports: input?.wallet ?? "5000000000", owner: SYSTEM, data: new Uint8Array() };
@@ -65,6 +66,10 @@ function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; 
       return { decimals: 6, tokenProgram: TOKEN_2022_PROGRAM_ID };
     },
     async holders() {
+      if (input?.holders === "fail-once" && holderFailures === 0) {
+        holderFailures += 1;
+        return null;
+      }
       return { observedSlot: "44", accounts: [{ owner: holder.address, mint: TREST, amount: "50000000000" }] };
     },
     async slot() {
@@ -167,6 +172,76 @@ test("a confirmed creator-vault receipt funds a 30/30/40 window and a reconciled
   assert.equal(env.submits.length, 2);
   const again = await cycle(env);
   assert.equal(again.ok, true);
+  assert.equal(env.submits.length, 2);
+});
+
+test("missing signing credentials do not broadcast", async () => {
+  const env = harness();
+  const result = await runCycle({
+    nowMs: NOW,
+    holder: "worker-a",
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: null,
+    expectedAddress: env.key.address,
+    store: env.store,
+    chain: env.chain,
+  });
+  assert.equal(result.ok, false);
+  if (result.ok) return;
+  assert.equal(result.code, "signer_mismatch");
+  assert.equal(env.submits.length, 0);
+});
+
+test("a snapshot failure retries without allocating the receipt twice", async () => {
+  const env = harness({ holders: "fail-once" });
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "unreconciled");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.windows(TREST, "test")).length, 1);
+  const second = await cycle(env);
+  assert.equal(second.ok, true);
+  if (!second.ok) return;
+  assert.equal(second.stage, "bought");
+  assert.equal(env.submits.length, 2);
+  assert.equal((await env.store.windows(TREST, "test")).length, 1);
+});
+
+test("buyback spending leaves holder, deployer, and reserve balances in the wallet", async () => {
+  const short = harness({ wallet: "298500" });
+  const blocked = await cycle(short);
+  assert.equal(blocked.ok, false);
+  if (blocked.ok) return;
+  assert.equal(blocked.code, "unfunded");
+  assert.equal(short.submits.length, 1);
+  const covered = harness({ wallet: "995000" });
+  const bought = await cycle(covered);
+  assert.equal(bought.ok, true);
+  if (!bought.ok) return;
+  assert.equal(bought.stage, "bought");
+});
+
+test("the reserve is withheld once and a later pass does not allocate the same receipt", async () => {
+  const env = harness();
+  env.store = memoryStore({
+    parent: env.parent,
+    control: { suspended: false, reserveLamports: "4000", cycleCapLamports: "1000000000", slippageBps: 100 },
+  });
+  const first = await cycle(env);
+  assert.equal(first.ok, true);
+  if (!first.ok) return;
+  const windows = await env.store.windows(TREST, "test");
+  assert.equal(windows.length, 1);
+  assert.equal(windows[0]?.collected, "991000");
+  assert.equal(windows[0]?.holders, "297300");
+  assert.equal(windows[0]?.buyback, "297300");
+  assert.equal(windows[0]?.deployer, "396400");
+  const second = await cycle(env);
+  assert.equal(second.ok, true);
+  assert.equal((await env.store.windows(TREST, "test")).length, 1);
   assert.equal(env.submits.length, 2);
 });
 
