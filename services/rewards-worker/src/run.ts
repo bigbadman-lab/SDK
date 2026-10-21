@@ -35,6 +35,10 @@ type CycleCode =
   | "market"
   | "parent"
   | "program"
+  | "rehearsal"
+  | "schedule"
+  | "closed"
+  | "stopped"
   | "signer_malformed"
   | "signer_mismatch"
   | "signer_unbound"
@@ -201,13 +205,51 @@ export async function runCycle(input: {
   const control = await input.store.control(parent.mintAddress, parent.scope);
   if (!control) return { ok: false, code: "control" };
   if (control.suspended) return { ok: false, code: "suspended" };
+  const window = accountingWindow(input.nowMs);
+  if (!window) return { ok: false, code: "schedule" };
   const lease = await input.store.tryLock(parent.mintAddress, parent.scope, input.holder, input.nowMs);
   if (lease === "locked") return { ok: false, code: "locked" };
   try {
-    return await execute(input, parent, control);
+    const admission = await input.store.claimRehearsalWindow({
+      parentMint: parent.mintAddress,
+      scope: parent.scope,
+      windowStartMs: window.startMs,
+    });
+    if (!admission.ok) return { ok: false, code: admission.code === "absent" ? "rehearsal" : admission.code };
+    try {
+      const result = await execute(input, parent, control);
+      const intents = await input.store.intents(parent.mintAddress, parent.scope);
+      const outcome = rehearsalOutcome(result, intents, window.startMs);
+      await input.store.finishRehearsalWindow({
+        parentMint: parent.mintAddress,
+        scope: parent.scope,
+        windowStartMs: window.startMs,
+        outcome,
+      });
+      if (outcome === "stopped" && result.ok) return { ok: false, code: "failed" };
+      return result;
+    } catch (error) {
+      await input.store.finishRehearsalWindow({
+        parentMint: parent.mintAddress,
+        scope: parent.scope,
+        windowStartMs: window.startMs,
+        outcome: "stopped",
+      });
+      throw error;
+    }
   } finally {
     await input.store.unlock(parent.mintAddress, parent.scope, input.holder);
   }
+}
+
+function rehearsalOutcome(result: CycleResult, intents: StoredIntent[], windowStartMs: number): "ok" | "stopped" {
+  if (!result.ok) return "stopped";
+  const keys = new Set([`collect-${windowStartMs}`, `buyback-${windowStartMs}`]);
+  const unsafe = intents.some((intent) =>
+    keys.has(intent.idempotencyKey)
+    && (intent.status === "failed" || intent.status === "uncertain" || intent.status === "unreconciled")
+  );
+  return unsafe ? "stopped" : "ok";
 }
 
 async function reconcileOpenCollections(input: {
@@ -477,6 +519,10 @@ export async function submitClaim(input: {
     suspended: input.suspended,
   })) {
     return { ok: false, code: "inactive" };
+  }
+  if (input.scope === "test") {
+    const rehearsal = await input.store.rehearsalState(input.parentMint, input.scope);
+    if (!rehearsal || rehearsal.blocksSideWork) return { ok: false, code: "rehearsal" };
   }
   const bound = parseBoundClaim(input.message);
   const expected = bound

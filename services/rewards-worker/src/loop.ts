@@ -91,6 +91,8 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       claims: async () => {
       const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
       if (!parent.ok) return;
+      const rehearsal = await store.rehearsalState(parent.mintAddress, "test");
+      if (!rehearsal || rehearsal.blocksSideWork) return;
       const challenges = await sql<
         {
           wallet_address: string;
@@ -155,6 +157,8 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       children: async () => {
       const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
       if (!parent.ok) return;
+      const rehearsal = await store.rehearsalState(parent.mintAddress, "test");
+      if (!rehearsal || rehearsal.blocksSideWork) return;
       const children = selectTrestChildren(parent, await discover(sql, parent.mintAddress));
       const open = selectTrestOpenIntents(parent, children, await sql<
         { idempotencyKey: string; childMint: string; quoteMint: string; signature: string; scope: "production" | "test" }[]

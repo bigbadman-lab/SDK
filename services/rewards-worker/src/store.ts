@@ -1,7 +1,38 @@
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { matchesLegacyCollection } from "./legacy-recovery.ts";
 import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.ts";
-import { planIncrementalAllocation, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
+import { planIncrementalAllocation, WINDOW_MS, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
+
+export const TREST_REHEARSAL_MINT = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+
+export type RehearsalAdmission =
+  | { ok: true; admission: "execute" | "replay" }
+  | { ok: false; code: "absent" | "schedule" | "stopped" | "closed" };
+
+export type RehearsalState = {
+  status: "open" | "stopped" | "closed";
+  windowStartsMs: number[];
+  processed: { windowStartMs: number; outcome: "claimed" | "ok" | "stopped" }[];
+  blocksSideWork: boolean;
+};
+
+export type RehearsalRegistration = {
+  parentMint: string;
+  scope: RewardScope;
+  windowStartsMs: readonly number[];
+  nowMs?: number;
+  requireUpcoming?: boolean;
+  blockSideWork?: boolean;
+};
+
+export function validRehearsalStarts(starts: readonly number[]): [number, number, number] | null {
+  if (starts.length !== 3) return null;
+  const [first, second, third] = starts;
+  if (first === undefined || second === undefined || third === undefined) return null;
+  if (![first, second, third].every((value) => Number.isInteger(value) && value > 0 && value % WINDOW_MS === 0)) return null;
+  if (second !== first + WINDOW_MS || third !== second + WINDOW_MS) return null;
+  return [first, second, third];
+}
 
 export type RegisteredParent = {
   id: string;
@@ -137,11 +168,20 @@ export type RewardsStore = {
   markClaim(parentMint: string, scope: RewardScope, idempotencyKey: string, status: IntentStatus, signature: string | null): Promise<"ok" | "order">;
   tryLock(parentMint: string, scope: RewardScope, holder: string, nowMs: number): Promise<"ok" | "locked">;
   unlock(parentMint: string, scope: RewardScope, holder: string): Promise<void>;
+  registerRehearsal(input: RehearsalRegistration): Promise<"ok" | "rejected" | "duplicate">;
+  claimRehearsalWindow(input: { parentMint: string; scope: RewardScope; windowStartMs: number }): Promise<RehearsalAdmission>;
+  finishRehearsalWindow(input: { parentMint: string; scope: RewardScope; windowStartMs: number; outcome: "ok" | "stopped" }): Promise<"ok" | "order">;
+  rehearsalState(parentMint: string, scope: RewardScope): Promise<RehearsalState | null>;
+  rehearsalBlocksSideWork(parentMint: string, scope: RewardScope): Promise<boolean>;
 };
 
 const LEASE_MS = 5 * 60 * 1000;
 
-export function memoryStore(seed: { parent: RegisteredParent; control: RewardControl }): RewardsStore {
+export function memoryStore(seed: {
+  parent: RegisteredParent;
+  control: RewardControl;
+  rehearsal?: { windowStartsMs: readonly number[]; blockSideWork?: boolean };
+}): RewardsStore {
   const intents: StoredIntent[] = [];
   const legacyRecoveries: LegacyRecovery[] = [];
   const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string; allocated: boolean; reserveWithheld: string }> = [];
@@ -149,6 +189,25 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
   const snapshots: Array<StoredSnapshot & { parentMint: string; scope: RewardScope; windowKey: string }> = [];
   const claims: StoredClaim[] = [];
   let lock: { parentMint: string; scope: RewardScope; holder: string; expiresAt: number } | null = null;
+  let rehearsal: {
+    status: "open" | "stopped" | "closed";
+    starts: [number, number, number];
+    windows: Map<number, "claimed" | "ok" | "stopped">;
+    blockSideWork: boolean;
+  } | null = null;
+  if (seed.rehearsal) {
+    const starts = validRehearsalStarts(seed.rehearsal.windowStartsMs);
+    if (!starts || seed.parent.scope !== "test") throw new Error("rehearsal");
+    rehearsal = {
+      status: "open",
+      starts,
+      windows: new Map(),
+      blockSideWork: seed.rehearsal.blockSideWork ?? true,
+    };
+  }
+  const suspendControl = () => {
+    seed.control.suspended = true;
+  };
   let tail = Promise.resolve();
   const exclusive = <T>(work: () => Promise<T> | T): Promise<T> => {
     const run = tail.then(work, work);
@@ -385,6 +444,76 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
       await exclusive(() => {
         if (lock && lock.parentMint === parentMint && lock.scope === scope && lock.holder === holder) lock = null;
       });
+    },
+    async registerRehearsal(input) {
+      return exclusive(() => {
+        const starts = validRehearsalStarts(input.windowStartsMs);
+        if (!starts || input.scope !== "test" || input.parentMint !== seed.parent.mintAddress) return "rejected";
+        if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
+        if (rehearsal) return "duplicate";
+        rehearsal = {
+          status: "open",
+          starts,
+          windows: new Map(),
+          blockSideWork: input.blockSideWork ?? true,
+        };
+        return "ok";
+      });
+    },
+    async claimRehearsalWindow(input) {
+      return exclusive(() => {
+        if (!rehearsal || input.parentMint !== seed.parent.mintAddress || input.scope !== seed.parent.scope) {
+          return { ok: false, code: "absent" };
+        }
+        if (rehearsal.status === "stopped") return { ok: false, code: "stopped" };
+        if (rehearsal.status === "closed") return { ok: false, code: "closed" };
+        if (!rehearsal.starts.includes(input.windowStartMs)) return { ok: false, code: "schedule" };
+        const existing = rehearsal.windows.get(input.windowStartMs);
+        if (existing === "ok") return { ok: true, admission: "replay" };
+        if (existing === "claimed" || existing === "stopped") {
+          rehearsal.windows.set(input.windowStartMs, "stopped");
+          rehearsal.status = "stopped";
+          suspendControl();
+          return { ok: false, code: "stopped" };
+        }
+        rehearsal.windows.set(input.windowStartMs, "claimed");
+        return { ok: true, admission: "execute" };
+      });
+    },
+    async finishRehearsalWindow(input) {
+      return exclusive(() => {
+        if (!rehearsal || input.parentMint !== seed.parent.mintAddress || input.scope !== seed.parent.scope) return "order";
+        const current = rehearsal.windows.get(input.windowStartMs);
+        if (!current) return "order";
+        if (rehearsal.status !== "open") {
+          suspendControl();
+          return "ok";
+        }
+        if (current === "claimed") rehearsal.windows.set(input.windowStartMs, input.outcome);
+        if (input.outcome === "stopped") {
+          rehearsal.status = "stopped";
+          suspendControl();
+          return "ok";
+        }
+        if (rehearsal.starts.every((start) => rehearsal?.windows.get(start) === "ok")) {
+          rehearsal.status = "closed";
+          suspendControl();
+        }
+        return "ok";
+      });
+    },
+    async rehearsalState(parentMint, scope) {
+      if (!rehearsal || parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope) return null;
+      return {
+        status: rehearsal.status,
+        windowStartsMs: [...rehearsal.starts],
+        processed: [...rehearsal.windows].map(([windowStartMs, outcome]) => ({ windowStartMs, outcome })),
+        blocksSideWork: rehearsal.blockSideWork,
+      };
+    },
+    async rehearsalBlocksSideWork(parentMint, scope) {
+      if (!rehearsal || parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope) return false;
+      return rehearsal.blockSideWork;
     },
   };
 }

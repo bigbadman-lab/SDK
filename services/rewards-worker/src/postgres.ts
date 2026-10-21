@@ -2,7 +2,7 @@ import postgres from "postgres";
 
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import type { LegacyRecovery, RegisteredParent, RewardControl, RewardsStore, StoredClaim, StoredIntent, StoredSnapshot, WindowAllocation } from "./store.ts";
+import { TREST_REHEARSAL_MINT, validRehearsalStarts, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
 import { matchesLegacyCollection } from "./legacy-recovery.ts";
 
 type Sql = ReturnType<typeof postgres>;
@@ -578,6 +578,158 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         delete from reward_cycle_locks
         where parent_mint_address = ${parentMint} and scope = ${scope} and holder = ${holder}
       `;
+    },
+    async registerRehearsal(input) {
+      const starts = validRehearsalStarts(input.windowStartsMs);
+      if (!starts || input.scope !== "test" || input.parentMint !== TREST_REHEARSAL_MINT) return "rejected";
+      if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
+      try {
+        const rows = await sql<{ id: string }[]>`
+          insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms)
+          values (
+            ${input.parentMint},
+            'test',
+            'open',
+            array[${starts[0]}::bigint, ${starts[1]}::bigint, ${starts[2]}::bigint]
+          )
+          on conflict (parent_mint_address, scope) do nothing
+          returning id::text
+        `;
+        return rows[0] ? "ok" : "duplicate";
+      } catch {
+        return "rejected";
+      }
+    },
+    async claimRehearsalWindow(input) {
+      return sql.begin(async (tx) => {
+        const rows = await tx<{ id: string; status: "open" | "stopped" | "closed"; starts: string[] }[]>`
+          select id::text, status, window_start_ms::text[] as starts
+          from reward_rehearsals
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+          for update
+        `;
+        const row = rows[0];
+        if (!row) return { ok: false as const, code: "absent" as const };
+        if (row.status === "stopped") return { ok: false as const, code: "stopped" as const };
+        if (row.status === "closed") return { ok: false as const, code: "closed" as const };
+        const starts = row.starts.map((value) => Number(value));
+        if (!starts.includes(input.windowStartMs)) return { ok: false as const, code: "schedule" as const };
+        const inserted = await tx<{ outcome: string }[]>`
+          insert into reward_rehearsal_windows (rehearsal_id, window_start_ms, outcome)
+          values (${row.id}::uuid, ${input.windowStartMs}, 'claimed')
+          on conflict (rehearsal_id, window_start_ms) do nothing
+          returning outcome
+        `;
+        if (inserted[0]) return { ok: true as const, admission: "execute" as const };
+        const existing = await tx<{ outcome: "claimed" | "ok" | "stopped" }[]>`
+          select outcome
+          from reward_rehearsal_windows
+          where rehearsal_id = ${row.id}::uuid and window_start_ms = ${input.windowStartMs}
+        `;
+        if (existing[0]?.outcome === "ok") return { ok: true as const, admission: "replay" as const };
+        await tx`
+          update reward_rehearsal_windows
+          set outcome = 'stopped'
+          where rehearsal_id = ${row.id}::uuid
+            and window_start_ms = ${input.windowStartMs}
+            and outcome = 'claimed'
+        `;
+        await tx`
+          update reward_rehearsals
+          set status = 'stopped', closed_at = coalesce(closed_at, now())
+          where id = ${row.id}::uuid and status = 'open'
+        `;
+        await tx`
+          update reward_controls
+          set signer_suspended = true, updated_at = now()
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+        `;
+        return { ok: false as const, code: "stopped" as const };
+      });
+    },
+    async finishRehearsalWindow(input) {
+      return sql.begin(async (tx) => {
+        const rows = await tx<{ id: string; status: "open" | "stopped" | "closed" }[]>`
+          select id::text, status
+          from reward_rehearsals
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+          for update
+        `;
+        const row = rows[0];
+        if (!row) return "order" as const;
+        if (row.status === "open" && (input.outcome === "ok" || input.outcome === "stopped")) {
+          await tx`
+            update reward_rehearsal_windows
+            set outcome = ${input.outcome}
+            where rehearsal_id = ${row.id}::uuid
+              and window_start_ms = ${input.windowStartMs}
+              and outcome = 'claimed'
+          `;
+          if (input.outcome === "stopped") {
+            await tx`
+              update reward_rehearsals
+              set status = 'stopped', closed_at = coalesce(closed_at, now())
+              where id = ${row.id}::uuid and status = 'open'
+            `;
+          } else {
+            const done = await tx<{ ready: boolean }[]>`
+              select (
+                select count(*)::int
+                from reward_rehearsal_windows
+                where rehearsal_id = ${row.id}::uuid and outcome = 'ok'
+              ) = 3 as ready
+            `;
+            if (done[0]?.ready) {
+              await tx`
+                update reward_rehearsals
+                set status = 'closed', closed_at = coalesce(closed_at, now())
+                where id = ${row.id}::uuid and status = 'open'
+              `;
+            }
+          }
+        }
+        const after = await tx<{ status: "open" | "stopped" | "closed" }[]>`
+          select status from reward_rehearsals where id = ${row.id}::uuid
+        `;
+        if (after[0]?.status === "stopped" || after[0]?.status === "closed") {
+          await tx`
+            update reward_controls
+            set signer_suspended = true, updated_at = now()
+            where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+          `;
+        }
+        return "ok" as const;
+      });
+    },
+    async rehearsalState(parentMint, scope) {
+      const rows = await sql<{ status: "open" | "stopped" | "closed"; starts: string[] }[]>`
+        select status, window_start_ms::text[] as starts
+        from reward_rehearsals
+        where parent_mint_address = ${parentMint} and scope = ${scope}
+      `;
+      const row = rows[0];
+      if (!row) return null;
+      const processed = await sql<{ windowStartMs: string; outcome: "claimed" | "ok" | "stopped" }[]>`
+        select w.window_start_ms::text as "windowStartMs", w.outcome
+        from reward_rehearsal_windows w
+        join reward_rehearsals r on r.id = w.rehearsal_id
+        where r.parent_mint_address = ${parentMint} and r.scope = ${scope}
+      `;
+      return {
+        status: row.status,
+        windowStartsMs: row.starts.map((value) => Number(value)),
+        processed: processed.map((item) => ({ windowStartMs: Number(item.windowStartMs), outcome: item.outcome })),
+        blocksSideWork: true,
+      };
+    },
+    async rehearsalBlocksSideWork(parentMint, scope) {
+      const rows = await sql<{ id: string }[]>`
+        select id::text
+        from reward_rehearsals
+        where parent_mint_address = ${parentMint} and scope = ${scope}
+        limit 1
+      `;
+      return Boolean(rows[0]);
     },
   };
 }

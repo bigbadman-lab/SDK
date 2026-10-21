@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import { rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
@@ -54,4 +55,12 @@ test("a suspended tick performs no claim or child signing", async () => {
   assert.equal(suspended.ordinary, false);
   assert.equal(signed, 0);
   assert.equal(rewardsExecutionEnabled({ loopEnabled: "true", executionAuthorised: "true", suspended: true }), false);
+});
+
+test("the rewards loop fences claims and child distributions and does not sweep", async () => {
+  const source = await readFile(new URL("./loop.ts", import.meta.url), "utf8");
+  assert.equal(source.split("rehearsalState").length - 1, 2);
+  assert.equal(source.split("blocksSideWork").length - 1, 2);
+  assert.equal(source.includes("kill-wallet"), false);
+  assert.equal(source.includes("emergency_sweeps"), false);
 });

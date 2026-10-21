@@ -58,7 +58,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-10), [
+  assert.deepEqual(files.slice(-11), [
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
@@ -69,6 +69,7 @@ before(async () => {
     "20261021100000_trest04d_window_allocation.sql",
     "20261021140000_trest07e_collection_diagnostics.sql",
     "20261021160000_trest07f_legacy_recovery.sql",
+    "20261021180000_trest07i_rehearsal_windows.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -277,6 +278,83 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   await assert.rejects(() => db()`update reward_legacy_recoveries set reason = 'changed'`);
   await assert.rejects(() => db()`delete from reward_legacy_recoveries`);
 
+  const rehearsalMint = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+  const rehearsalStarts = [START, START + 300_000, START + 600_000];
+  assert.equal(await store.registerRehearsal({
+    parentMint: MINT,
+    scope: "test",
+    windowStartsMs: rehearsalStarts,
+    requireUpcoming: false,
+  }), "rejected");
+  assert.equal(await store.registerRehearsal({
+    parentMint: rehearsalMint,
+    scope: "test",
+    windowStartsMs: [START, START + 300_000, START + 900_000],
+    requireUpcoming: false,
+  }), "rejected");
+  assert.equal(await store.registerRehearsal({
+    parentMint: rehearsalMint,
+    scope: "test",
+    windowStartsMs: rehearsalStarts,
+    nowMs: START,
+    requireUpcoming: true,
+  }), "rejected");
+  assert.equal(await store.rehearsalState(rehearsalMint, "test"), null);
+  assert.equal(await store.registerRehearsal({
+    parentMint: rehearsalMint,
+    scope: "test",
+    windowStartsMs: rehearsalStarts,
+    requireUpcoming: false,
+  }), "ok");
+  assert.equal(await store.registerRehearsal({
+    parentMint: rehearsalMint,
+    scope: "test",
+    windowStartsMs: rehearsalStarts,
+    requireUpcoming: false,
+  }), "duplicate");
+  assert.equal((await store.claimRehearsalWindow({
+    parentMint: rehearsalMint,
+    scope: "test",
+    windowStartMs: START - 300_000,
+  })).ok, false);
+  assert.equal((await store.rehearsalState(rehearsalMint, "test"))?.processed.length, 0);
+  assert.equal(await store.rehearsalBlocksSideWork(rehearsalMint, "test"), true);
+  assert.equal(await store.rehearsalBlocksSideWork(MINT, "test"), false);
+  for (const windowStartMs of rehearsalStarts) {
+    const admission = await store.claimRehearsalWindow({ parentMint: rehearsalMint, scope: "test", windowStartMs });
+    assert.equal(admission.ok, true);
+    if (!admission.ok) return;
+    assert.equal(admission.admission, "execute");
+    assert.equal(await store.finishRehearsalWindow({
+      parentMint: rehearsalMint,
+      scope: "test",
+      windowStartMs,
+      outcome: "ok",
+    }), "ok");
+  }
+  const closed = await store.rehearsalState(rehearsalMint, "test");
+  assert.equal(closed?.status, "closed");
+  assert.equal(closed?.processed.length, 3);
+  assert.equal(closed?.blocksSideWork, true);
+  const afterClose = await store.claimRehearsalWindow({ parentMint: rehearsalMint, scope: "test", windowStartMs: START });
+  assert.equal(afterClose.ok, false);
+  if (afterClose.ok) return;
+  assert.equal(afterClose.code, "closed");
+  await assert.rejects(() => db()`
+    insert into reward_rehearsal_windows (rehearsal_id, window_start_ms, outcome)
+    select id, ${START + 900_000}, 'claimed' from reward_rehearsals
+  `);
+  await assert.rejects(() => db()`update reward_rehearsals set status = 'open'`);
+  await assert.rejects(() => db()`delete from reward_rehearsal_windows`);
+  await assert.rejects(() => db()`delete from reward_rehearsals`);
+  const controls = await db()`
+    select parent_mint_address, signer_suspended
+    from reward_controls
+    order by parent_mint_address
+  `;
+  assert.equal(controls.length, 2);
+  assert.equal(controls.every((row) => row.signer_suspended === true), true);
+
   const now = Date.now();
   assert.equal(await store.tryLock(MINT, "test", "worker-a", now), "ok");
   assert.equal(await store.tryLock(MINT, "test", "worker-b", now), "locked");
@@ -406,6 +484,8 @@ test("the rewards schema applies on an isolated database and enforces recovery i
     await assert.rejects(() => db()`select id from launch_approvals`);
     await assert.rejects(() => db()`select id from reward_claim_challenges`);
     await assert.rejects(() => db()`select id from emergency_sweeps`);
+    await assert.rejects(() => db()`select id from reward_rehearsals`);
+    await assert.rejects(() => db()`select rehearsal_id from reward_rehearsal_windows`);
   } finally {
     await db()`reset role`;
   }
