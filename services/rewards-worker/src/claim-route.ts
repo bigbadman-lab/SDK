@@ -49,6 +49,7 @@ export async function settleClaimHttp(input: {
   }
   const parsed = parseClaimBody(input.raw);
   if (!parsed.ok) return { status: 400, body: { ok: false, code: "invalid" } };
+  if (parsed.claim.scope !== "test") return { status: 409, body: { ok: false, code: "parent" } };
   const result = await input.execute(parsed.claim);
   if (!result.ok || !result.signature) {
     const code = result.code ?? "inactive";

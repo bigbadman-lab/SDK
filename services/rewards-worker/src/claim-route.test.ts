@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { claimsRouteDecision, parseClaimBody } from "./claim-route.ts";
+import { claimsRouteDecision, parseClaimBody, settleClaimHttp } from "./claim-route.ts";
 
 const claim = {
   scope: "test",
@@ -23,4 +23,29 @@ test("the claim route rejects unsigned callers, inactive runtimes, and instructi
   assert.equal(parseClaimBody(JSON.stringify({ ...claim, instructions: [] })).ok, false);
   assert.equal(parseClaimBody(JSON.stringify({ ...claim, transaction: "wire" })).ok, false);
   assert.equal(parseClaimBody(JSON.stringify({ ...claim, asset: "all" })).ok, false);
+});
+
+test("the claim route rejects a production claim before execution and still accepts a test claim", async () => {
+  let executed = 0;
+  const execute = async () => {
+    executed += 1;
+    return { ok: true, signature: "signature" };
+  };
+  const production = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    raw: JSON.stringify({ ...claim, scope: "production" }),
+    execute,
+  });
+  assert.equal(production.status, 409);
+  assert.equal(production.body.code, "parent");
+  assert.equal(executed, 0);
+  const testClaim = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    raw: JSON.stringify(claim),
+    execute,
+  });
+  assert.equal(testClaim.status, 200);
+  assert.equal(executed, 1);
 });

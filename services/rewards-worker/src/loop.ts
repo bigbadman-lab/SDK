@@ -1,3 +1,4 @@
+import { canonicalAddress } from "../../../lib/auth/solana.ts";
 import { boundClaimMessage } from "../../../lib/rewards/ownership.ts";
 import { inspectRewardsTransaction, signedTransactionWire } from "../../../lib/rewards/inspect.ts";
 import { nextUtcWindowDelay, ordinaryWorkAllowed } from "../../../lib/rewards/schedule.ts";
@@ -8,10 +9,11 @@ import { serviceChildFees, type ChildCandidate } from "./child-fees.ts";
 import { buildDistribution, readQuoteDeltas, readSharing } from "./child-distribution.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
 import { runCycle, submitClaim } from "./run.ts";
+import { loadVerifiedTrestParent, selectTrestChildren, selectTrestClaims, selectTrestOpenIntents } from "./trest-scope.ts";
 
 type Sql = ReturnType<typeof createSql>;
 
-async function discover(sql: Sql): Promise<ChildCandidate[]> {
+async function discover(sql: Sql, parentMint: string): Promise<ChildCandidate[]> {
   try {
     const rows = await sql<ChildCandidate[]>`
       select l.attempt_mint_address as mint,
@@ -24,10 +26,10 @@ async function discover(sql: Sql): Promise<ChildCandidate[]> {
       left join accounts o on o.id = l.originator_account_id
       where l.attempt_status = 'verified'
         and l.attempt_mint_address is not null
-        and l.parent_mint_address is not null
-        and l.parent_scope in ('test', 'production')
+        and l.parent_mint_address = ${parentMint}
+        and l.parent_scope = 'test'
     `;
-    return rows.filter((row) => row.mint && row.quoteMint && (row.scope === "test" || row.scope === "production"));
+    return rows.filter((row) => row.mint && row.quoteMint && row.scope === "test");
   } catch {
     return [];
   }
@@ -87,6 +89,8 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
         chain,
       }),
       claims: async () => {
+      const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
+      if (!parent.ok) return;
       const challenges = await sql<
         {
           wallet_address: string;
@@ -102,9 +106,14 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       >`
         select wallet_address, parent_mint_address, scope, asset, amount, nonce, domain, signature, expires_at
         from reward_claim_challenges
-        where signature is not null and consumed_at is null and expires_at > now()
+        where signature is not null
+          and consumed_at is null
+          and expires_at > now()
+          and scope = 'test'
+          and parent_mint_address = ${parent.mintAddress}
       `.catch(() => []);
-      for (const challenge of challenges) {
+      for (const challenge of selectTrestClaims(parent, challenges.map((row) => ({ ...row, parentMint: row.parent_mint_address })))) {
+        if (challenge.scope !== "test" || canonicalAddress(challenge.parent_mint_address) !== parent.mintAddress) continue;
         const expiresAt = new Date(challenge.expires_at).getTime();
         const asset = challenge.asset === "sol" ? "sol" : "trest";
         const message = boundClaimMessage({
@@ -144,39 +153,49 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       }
       },
       children: async () => {
-      const children = await discover(sql);
-      const open = await sql<
-        { idempotency_key: string; child_mint_address: string; quote_mint_address: string; signature: string; scope: "production" | "test" }[]
+      const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
+      if (!parent.ok) return;
+      const children = selectTrestChildren(parent, await discover(sql, parent.mintAddress));
+      const open = selectTrestOpenIntents(parent, children, await sql<
+        { idempotencyKey: string; childMint: string; quoteMint: string; signature: string; scope: "production" | "test" }[]
       >`
-        select idempotency_key, child_mint_address, quote_mint_address, signature, scope
+        select idempotency_key as "idempotencyKey",
+               child_mint_address as "childMint",
+               quote_mint_address as "quoteMint",
+               signature,
+               scope
         from child_fee_distributions
-        where status in ('submitted', 'uncertain', 'unreconciled') and signature is not null
-      `.catch(() => []);
+        where status in ('submitted', 'uncertain', 'unreconciled')
+          and signature is not null
+          and scope = 'test'
+          and quote_mint_address = ${parent.mintAddress}
+      `.catch(() => []));
       for (const row of open) {
-        const child = children.find((candidate) => candidate.mint === row.child_mint_address && candidate.scope === row.scope);
-        const sharing = child ? await readSharing(rpcUrl, child.mint) : null;
-        const deltas = await readQuoteDeltas(rpcUrl, row.signature, row.quote_mint_address);
+        const child = children.find((candidate) => candidate.mint === row.childMint && candidate.scope === row.scope);
+        if (!child || child.scope !== "test") continue;
+        const sharing = await readSharing(rpcUrl, child.mint);
+        const deltas = await readQuoteDeltas(rpcUrl, row.signature, row.quoteMint);
         const credits = (deltas ?? []).filter((delta) => delta.sign === "credit");
         const distributed = credits.reduce((sum, delta) => sum + BigInt(delta.amount), BigInt(0)).toString();
-        const matched = child && sharing && deltas
-          ? matchShareholderReceipts({ quoteMint: row.quote_mint_address, shareholders: sharing.shareholders, distributed, deltas })
+        const matched = sharing && deltas
+          ? matchShareholderReceipts({ quoteMint: row.quoteMint, shareholders: sharing.shareholders, distributed, deltas })
           : { ok: false as const, code: "unconfirmed" as const };
         if (!matched.ok) continue;
-        const ids = await sql<{ id: string }[]>`select id from child_fee_distributions where idempotency_key = ${row.idempotency_key}`;
+        const ids = await sql<{ id: string }[]>`select id from child_fee_distributions where idempotency_key = ${row.idempotencyKey}`;
         const distributionId = ids[0]?.id;
-        if (!distributionId || !child) continue;
+        if (!distributionId) continue;
         for (const receipt of matched.receipts) {
           const role = receipt.address === child.launcher ? "launcher" : receipt.address === child.originator ? "developer" : "platform";
           await sql`
             insert into child_fee_receipts (
               distribution_id, recipient_address, quote_mint_address, amount, role, signature, slot
             ) values (
-              ${distributionId}::uuid, ${receipt.address}, ${row.quote_mint_address}, ${receipt.amount}, ${role}, ${row.signature}, null
+              ${distributionId}::uuid, ${receipt.address}, ${row.quoteMint}, ${receipt.amount}, ${role}, ${row.signature}, null
             )
             on conflict (distribution_id, recipient_address) do nothing
           `;
         }
-        await sql`update child_fee_distributions set status = 'confirmed', amount = ${distributed} where idempotency_key = ${row.idempotency_key} and status in ('submitted', 'uncertain', 'unreconciled')`;
+        await sql`update child_fee_distributions set status = 'confirmed', amount = ${distributed} where idempotency_key = ${row.idempotencyKey} and status in ('submitted', 'uncertain', 'unreconciled')`;
       }
       await serviceChildFees({
         nowMs: Date.now(),
@@ -188,6 +207,7 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
         readConfig: async (child) => readSharing(rpcUrl, child.mint),
         prepare: async (child) => buildDistribution(rpcUrl, child, input.expectedAddress),
         submit: async (child, key, instructions, shareholders) => {
+          if (child.scope !== "test" || canonicalAddress(child.quoteMint) !== parent.mintAddress) return { status: "failed" as const };
           const transaction = {
             feePayer: input.expectedAddress,
             recentBlockhash: await chain.blockhash(),
