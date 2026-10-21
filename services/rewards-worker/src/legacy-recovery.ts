@@ -21,6 +21,10 @@ const LEGACY = [
   },
 ] as const;
 
+export function legacyCollectionByKey(idempotencyKey: string): (typeof LEGACY)[number] | null {
+  return LEGACY.find((row) => row.idempotencyKey === idempotencyKey) ?? null;
+}
+
 const OPERATOR = /^[A-Za-z0-9_-]{1,80}$/;
 
 export type LegacyRecoveryCode = "approval" | "confirmed" | "duplicate" | "evidence" | "intent" | "legacy" | "parent" | "signature";

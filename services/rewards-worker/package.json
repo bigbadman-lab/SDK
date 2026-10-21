@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/**/*.test.ts",
     "start": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/server.ts",
-    "kill-wallet": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/kill-wallet.ts"
+    "kill-wallet": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/kill-wallet.ts",
+    "recover-legacy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/legacy-recovery-cli.ts"
   },
   "dependencies": {
     "@pump-fun/pump-sdk": "4.2.0",
