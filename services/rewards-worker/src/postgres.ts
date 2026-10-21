@@ -251,7 +251,10 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           signature,
           amount_lamports::text as "amountLamports",
           token_amount as "tokenAmount",
-          message_sha256 as "messageSha256"
+          message_sha256 as "messageSha256",
+          recent_blockhash as "recentBlockhash",
+          submission_code as "submissionCode",
+          submission_detail as "submissionDetail"
         from reward_intents
         where parent_mint_address = ${parentMint} and scope = ${scope}
       `;
@@ -259,9 +262,9 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
     async recordIntent(intent) {
       const rows = await sql<{ id: string }[]>`
         insert into reward_intents (
-          parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, amount_lamports, message_sha256
+          parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, amount_lamports, message_sha256, recent_blockhash
         )
-        select id, ${intent.parentMint}, ${intent.scope}, ${intent.kind}, ${intent.idempotencyKey}, 'recorded', ${intent.amountLamports}::bigint, ${intent.messageSha256}
+        select id, ${intent.parentMint}, ${intent.scope}, ${intent.kind}, ${intent.idempotencyKey}, 'recorded', ${intent.amountLamports}::bigint, ${intent.messageSha256}, ${intent.recentBlockhash ?? null}
         from parent_registrations
         where mint_address = ${intent.parentMint} and scope = ${intent.scope}
         on conflict (parent_mint_address, scope, idempotency_key) do nothing
@@ -277,13 +280,28 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           and scope = ${scope}
           and idempotency_key = ${idempotencyKey}
           and (
-            (status = 'recorded' and ${signature}::text is not null)
+            (status = 'recorded' and ${signature}::text is not null and ${status}::text = 'submitted')
             or status in ('submitted', 'uncertain')
+            or (status = 'unreconciled' and ${status}::text in ('confirmed', 'failed'))
           )
           and not exists (
             select 1 from reward_intents other
             where other.signature = ${signature} and other.idempotency_key <> ${idempotencyKey}
           )
+        returning id::text
+      `;
+      return rows[0] ? "ok" : "order";
+    },
+    async recordSubmission(parentMint, scope, idempotencyKey, note) {
+      const rows = await sql<{ id: string }[]>`
+        update reward_intents
+        set
+          recent_blockhash = coalesce(${note.recentBlockhash}, recent_blockhash),
+          submission_code = coalesce(${note.submissionCode === null ? null : note.submissionCode.slice(0, 40)}, submission_code),
+          submission_detail = coalesce(${note.submissionDetail === null ? null : note.submissionDetail.slice(0, 240)}, submission_detail)
+        where parent_mint_address = ${parentMint}
+          and scope = ${scope}
+          and idempotency_key = ${idempotencyKey}
         returning id::text
       `;
       return rows[0] ? "ok" : "order";

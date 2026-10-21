@@ -117,6 +117,7 @@ async function broadcast(input: {
     amountLamports: input.intent.amount,
     tokenAmount: null,
     messageSha256: null,
+    recentBlockhash: input.transaction.recentBlockhash,
   });
   if (recorded === "duplicate") {
     const existing = (await input.store.intents(input.parent.mintAddress, input.parent.scope)).find((intent) => intent.idempotencyKey === input.intent.key);
@@ -144,9 +145,17 @@ async function broadcast(input: {
   const wire = signedTransactionWire(input.transaction, signed.signature);
   if (!wire || messageSha256(signed.message).length !== 64) return { ok: false, code: "transaction" };
   const sent = await input.chain.submit(wire);
-  if (sent === "uncertain") {
-    await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "uncertain", signed.signature);
-    return { ok: false, code: "uncertain" };
+  if (sent.status !== "accepted") {
+    const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";
+    const status = definitive ? "failed" : "uncertain";
+    const markedFailure = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, status, signed.signature);
+    await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
+      recentBlockhash: null,
+      submissionCode: sent.code,
+      submissionDetail: sent.detail,
+    });
+    if (markedFailure !== "ok") return { ok: false, code: "uncertain" };
+    return { ok: false, code: definitive ? "failed" : "uncertain" };
   }
   const observed = await input.chain.transaction(signed.signature, input.lookup);
   if (!observed || observed.status === "uncertain") {
@@ -155,6 +164,11 @@ async function broadcast(input: {
   }
   if (observed.status === "failed") {
     await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "failed", signed.signature);
+    await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, input.intent.key, {
+      recentBlockhash: null,
+      submissionCode: "onchain_failed",
+      submissionDetail: "confirmed on-chain failure",
+    });
   }
   return { ok: true, observed, signature: signed.signature };
 }
@@ -195,6 +209,59 @@ export async function runCycle(input: {
   }
 }
 
+async function reconcileOpenCollections(input: {
+  parent: RegisteredParent;
+  store: RewardsStore;
+  chain: Chain;
+  lookup: VaultLookup;
+}): Promise<{ ok: true; recovered: boolean } | { ok: false; code: CycleCode }> {
+  const intents = await input.store.intents(input.parent.mintAddress, input.parent.scope);
+  const open = intents.filter((intent) => intent.kind === "collect" && (intent.status === "submitted" || intent.status === "uncertain" || intent.status === "unreconciled"));
+  let recovered = false;
+  for (const intent of open) {
+    if (!intent.signature) return { ok: false, code: "uncertain" };
+    const observed = await input.chain.transaction(intent.signature, input.lookup);
+    if (observed?.status === "confirmed") {
+      const settled = await settleCollection({ parent: input.parent, observed, signature: intent.signature, store: input.store });
+      if (!settled.ok) {
+        await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "unreconciled", intent.signature);
+        return settled;
+      }
+      const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "confirmed", intent.signature);
+      if (marked !== "ok") return { ok: false, code: "uncertain" };
+      recovered = true;
+      continue;
+    }
+    if (observed?.status === "failed") {
+      const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "failed", intent.signature);
+      if (marked !== "ok") return { ok: false, code: "uncertain" };
+      await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, {
+        recentBlockhash: null,
+        submissionCode: "onchain_failed",
+        submissionDetail: "confirmed on-chain failure",
+      });
+      continue;
+    }
+    const absent = observed ? "present" : await input.chain.signatureState(intent.signature);
+    const expiry = !observed && absent === "absent" && intent.recentBlockhash ? await input.chain.blockhashValid(intent.recentBlockhash) : "unknown";
+    if (!observed && absent === "absent" && expiry === "expired") {
+      const marked = await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "failed", intent.signature);
+      if (marked !== "ok") return { ok: false, code: "uncertain" };
+      await input.store.recordSubmission(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, {
+        recentBlockhash: null,
+        submissionCode: "expired",
+        submissionDetail: "signature absent after the stored blockhash expired",
+      });
+      continue;
+    }
+    if (intent.status !== "unreconciled") {
+      await input.store.markIntent(input.parent.mintAddress, input.parent.scope, intent.idempotencyKey, "uncertain", intent.signature);
+    }
+    return { ok: false, code: "uncertain" };
+  }
+  return { ok: true, recovered };
+}
+
 async function execute(
   input: { nowMs: number; secret: string | null; expectedAddress: string; suspended: boolean; store: RewardsStore; chain: Chain },
   parent: RegisteredParent,
@@ -217,26 +284,11 @@ async function execute(
     parentMint: parent.mintAddress,
     destination: parent.deployerAddress,
   };
+  const reconciled = await reconcileOpenCollections({ parent, store: input.store, chain: input.chain, lookup });
+  if (!reconciled.ok) return reconciled;
   const intents = await input.store.intents(parent.mintAddress, parent.scope);
   const collectIntent = intents.find((intent) => intent.idempotencyKey === collectKey);
-  if (collectIntent?.signature) {
-    const observed = await input.chain.transaction(collectIntent.signature, lookup);
-    if (!observed || observed.status === "uncertain") {
-      await input.store.markIntent(parent.mintAddress, parent.scope, collectKey, "uncertain", collectIntent.signature);
-      return { ok: false, code: "uncertain" };
-    }
-    if (observed.status === "confirmed" && collectIntent.status !== "confirmed") {
-      const settled = await settleCollection({ parent, observed, signature: collectIntent.signature, store: input.store });
-      if (!settled.ok) {
-        await input.store.markIntent(parent.mintAddress, parent.scope, collectKey, "unreconciled", collectIntent.signature);
-        return settled;
-      }
-      await input.store.markIntent(parent.mintAddress, parent.scope, collectKey, "confirmed", collectIntent.signature);
-    }
-    if (observed.status === "failed") {
-      await input.store.markIntent(parent.mintAddress, parent.scope, collectKey, "failed", collectIntent.signature);
-    }
-  } else if ((!collectIntent || !collectIntent.signature) && (vaults.nativeLamports !== "0" || vaults.wsolLamports !== "0")) {
+  if (!reconciled.recovered && !collectIntent?.signature && (vaults.nativeLamports !== "0" || vaults.wsolLamports !== "0")) {
     const built = await buildSolCollection({ creator: parent.deployerAddress, ammVaultExists: vaults.ammVaultExists });
     if (!built.ok) return { ok: false, code: "program" };
     const blockhash = await input.chain.blockhash();
@@ -563,9 +615,10 @@ export async function submitClaim(input: {
     parentMint: parent.mintAddress,
     destination: input.claimant,
   };
-  if (sent === "uncertain") {
-    await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "uncertain", signed.signature);
-    return { ok: false, code: "uncertain" };
+  if (sent.status !== "accepted") {
+    const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";
+    await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, definitive ? "failed" : "uncertain", signed.signature);
+    return { ok: false, code: definitive ? "failed" : "uncertain" };
   }
   const observed = await input.chain.transaction(signed.signature, lookup);
   if (!observed || observed.status !== "confirmed") {

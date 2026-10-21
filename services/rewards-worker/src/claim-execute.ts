@@ -16,7 +16,7 @@ export async function executeClaim(
   const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
   if (!trestClaimAllowed(parent, claim)) return { ok: false, code: "parent" };
   const store = postgresRewardsStore(sql);
-  const chain = heliusChain((method, params) => heliusRpc(rpcUrl, method, params));
+  const chain = heliusChain((method, params) => heliusRpc(rpcUrl, method, params), rpcUrl);
   const result = await submitClaim({
     loopEnabled: true,
     authorised: true,

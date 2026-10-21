@@ -28,6 +28,15 @@ export type StoredIntent = ExecutionIntent & {
   amountLamports: string | null;
   tokenAmount: string | null;
   messageSha256: string | null;
+  recentBlockhash: string | null;
+  submissionCode: string | null;
+  submissionDetail: string | null;
+};
+
+export type SubmissionNote = {
+  recentBlockhash: string | null;
+  submissionCode: string | null;
+  submissionDetail: string | null;
 };
 
 export type StoredSnapshot = {
@@ -75,8 +84,9 @@ export type RewardsStore = {
     reserveLamports: string;
   }): Promise<WindowAllocation>;
   intents(parentMint: string, scope: RewardScope): Promise<StoredIntent[]>;
-  recordIntent(intent: Omit<StoredIntent, "status" | "signature"> & { amountLamports: string | null }): Promise<"ok" | "duplicate">;
+  recordIntent(intent: Omit<StoredIntent, "status" | "signature" | "recentBlockhash" | "submissionCode" | "submissionDetail"> & { amountLamports: string | null; recentBlockhash?: string | null }): Promise<"ok" | "duplicate">;
   markIntent(parentMint: string, scope: RewardScope, idempotencyKey: string, status: IntentStatus, signature: string | null): Promise<"ok" | "order" | "duplicate">;
+  recordSubmission(parentMint: string, scope: RewardScope, idempotencyKey: string, note: SubmissionNote): Promise<"ok" | "order">;
   receipts(parentMint: string, scope: RewardScope): Promise<FeeReceipt[]>;
   saveReceipt(receipt: FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string }): Promise<"ok" | "duplicate">;
   windows(parentMint: string, scope: RewardScope): Promise<{ windowKey: string; collected: string; holders: string; buyback: string; deployer: string }[]>;
@@ -210,7 +220,14 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
         if (intents.some((row) => row.parentMint === intent.parentMint && row.scope === intent.scope && row.idempotencyKey === intent.idempotencyKey)) {
           return "duplicate";
         }
-        intents.push({ ...intent, status: "recorded", signature: null });
+        intents.push({
+          ...intent,
+          status: "recorded",
+          signature: null,
+          recentBlockhash: intent.recentBlockhash ?? null,
+          submissionCode: null,
+          submissionDetail: null,
+        });
         return "ok";
       });
     },
@@ -219,11 +236,22 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
         const current = intents.find((intent) => intent.parentMint === parentMint && intent.scope === scope && intent.idempotencyKey === idempotencyKey);
         if (!current) return "order";
         if (status === "recorded") return "order";
-        if (current.status === "recorded" && !signature) return "order";
-        if (current.status !== "recorded" && current.status !== "submitted" && current.status !== "uncertain") return "order";
+        if (current.status === "recorded" && (!signature || status !== "submitted")) return "order";
+        if (current.status === "unreconciled" && status !== "confirmed" && status !== "failed") return "order";
+        if (current.status !== "recorded" && current.status !== "submitted" && current.status !== "uncertain" && current.status !== "unreconciled") return "order";
         if (signature && intents.some((intent) => intent.signature === signature && intent.idempotencyKey !== idempotencyKey)) return "duplicate";
         current.status = status;
         current.signature = signature ?? current.signature;
+        return "ok";
+      });
+    },
+    async recordSubmission(parentMint, scope, idempotencyKey, note) {
+      return exclusive(() => {
+        const current = intents.find((intent) => intent.parentMint === parentMint && intent.scope === scope && intent.idempotencyKey === idempotencyKey);
+        if (!current) return "order";
+        if (note.recentBlockhash) current.recentBlockhash = note.recentBlockhash;
+        if (note.submissionCode) current.submissionCode = note.submissionCode.slice(0, 40);
+        if (note.submissionDetail) current.submissionDetail = note.submissionDetail.slice(0, 240);
         return "ok";
       });
     },

@@ -186,7 +186,7 @@ async function broadcastControlledSweep(
   const { signedTransactionWire } = await import("../../../lib/rewards/inspect.ts");
   const { signInspected } = await import("../../../lib/rewards/signer.ts");
   const { heliusChain, heliusRpc } = await import("./chain.ts");
-  const chain = heliusChain((method, params) => heliusRpc(rpc, method, params));
+  const chain = heliusChain((method, params) => heliusRpc(rpc, method, params), rpc);
   const blockhash = await chain.blockhash();
   const legs: { kind: "claim_sol" | "claim_token"; amount: string; instruction: { programId: string; keys: { pubkey: string; isSigner: boolean; isWritable: boolean }[]; data: number[] } }[] = [];
   if (plan.solLamports !== "0") {
@@ -246,7 +246,8 @@ async function broadcastControlledSweep(
     if (!wire) return { status: "failed", signature };
     signature = signed.signature;
     const sent = await chain.submit(wire);
-    if (sent === "uncertain") return { status: "uncertain", signature };
+    if (sent.status === "uncertain") return { status: "uncertain", signature };
+    if (sent.status !== "accepted") return { status: "failed", signature };
     const observed = await chain.transaction(signed.signature, {
       creator: plan.signer,
       solVault: plan.signer,

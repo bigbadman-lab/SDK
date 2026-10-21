@@ -59,7 +59,6 @@ before(async () => {
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
   assert.deepEqual(files.slice(-9), [
-    "20261020140000_phase_05d1_signing_attempt.sql",
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
@@ -68,6 +67,7 @@ before(async () => {
     "20261020250000_phase_05d2b_launch_approval.sql",
     "20261020260000_trest04_claims_child_fees_emergency.sql",
     "20261021100000_trest04d_window_allocation.sql",
+    "20261021140000_trest07e_collection_diagnostics.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -211,6 +211,19 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(intents.length, 1);
   assert.equal(intents[0]?.signature, SIGNATURE.replaceAll("2", "4"));
   assert.equal(await store.markIntent(MINT, "test", "collect-window-000001", "uncertain", null), "ok");
+  const blockhash = "2".repeat(43);
+  assert.equal(await store.recordSubmission(MINT, "test", "collect-window-000001", {
+    recentBlockhash: blockhash,
+    submissionCode: "rpc:-32002",
+    submissionDetail: "Transaction simulation failed",
+  }), "ok");
+  assert.equal(await store.markIntent(MINT, "test", "collect-window-000001", "unreconciled", null), "ok");
+  assert.equal(await store.markIntent(MINT, "test", "collect-window-000001", "confirmed", null), "ok");
+  const diagnosed = await store.intents(MINT, "test");
+  assert.equal(diagnosed[0]?.status, "confirmed");
+  assert.equal(diagnosed[0]?.recentBlockhash, blockhash);
+  assert.equal(diagnosed[0]?.submissionCode, "rpc:-32002");
+  assert.equal(diagnosed[0]?.signature, SIGNATURE.replaceAll("2", "4"));
   await assert.rejects(() => db()`update reward_intents set kind = 'buyback' where idempotency_key = 'collect-window-000001'`);
 
   const now = Date.now();

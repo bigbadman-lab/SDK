@@ -9,7 +9,7 @@ import { TOKEN_2022_PROGRAM_ID } from "../../../lib/rewards/claim.ts";
 import { PUMP_PROGRAM_ID } from "../../../lib/rewards/collect.ts";
 import { claimAuthorizationMessage } from "../../../lib/rewards/ownership.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
-import { creatorVaultAddress, heliusChain, observeMeta, readCreatorVaults, type Chain, type ObservedTransaction } from "./chain.ts";
+import { creatorVaultAddress, heliusChain, observeMeta, readCreatorVaults, type Chain, type ObservedTransaction, type SubmitResult } from "./chain.ts";
 import { buildSolCollection } from "./instructions.ts";
 import { settleClaimHttp, type ClaimBody } from "./claim-route.ts";
 import { runCycle, submitClaim } from "./run.ts";
@@ -43,12 +43,19 @@ function observed(feePayer: string, patch: Partial<ObservedTransaction> = {}): O
   };
 }
 
-function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; buyStatus?: "confirmed" | "failed"; deposit?: string; holders?: "fail-once" }) {
+function harness(input?: {
+  wallet?: string;
+  submit?: "submitted" | "uncertain" | "preflight" | "timeout";
+  buyStatus?: "confirmed" | "failed";
+  deposit?: string;
+  holders?: "fail-once";
+  signatureState?: "absent" | "present" | "unknown";
+  blockhashValid?: "valid" | "expired" | "unknown";
+}) {
   const key = signer();
   const holder = signer();
   const vault = creatorVaultAddress(key.address);
   assert.ok(vault);
-  const blockhash = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
   const submits: Uint8Array[] = [];
   const readSignatures: string[] = [];
   let reads = 0;
@@ -76,7 +83,7 @@ function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; 
       return "44";
     },
     async blockhash() {
-      return blockhash;
+      return new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
     },
     async market() {
       return {
@@ -92,9 +99,17 @@ function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; 
         },
       };
     },
-    async submit(wire) {
+    async submit(wire): Promise<SubmitResult> {
       submits.push(wire);
-      return input?.submit ?? "submitted";
+      if (input?.submit === "preflight") return { status: "preflight", code: "rpc:-32002", detail: "Transaction simulation failed: custom program error: 0x1" };
+      if (input?.submit === "uncertain" || input?.submit === "timeout") return { status: "uncertain", code: "timeout", detail: "timeout" };
+      return { status: "accepted" };
+    },
+    async signatureState() {
+      return input?.signatureState ?? "unknown";
+    },
+    async blockhashValid() {
+      return input?.blockhashValid ?? "unknown";
     },
     async transaction(signature, lookup) {
       readSignatures.push(signature);
@@ -129,6 +144,20 @@ function harness(input?: { wallet?: string; submit?: "submitted" | "uncertain"; 
     control: { suspended: false, reserveLamports: "0", cycleCapLamports: "1000000000", slippageBps: 100 },
   });
   return { key, holder, chain, store, submits, readSignatures, parent };
+}
+
+function cycleAt(env: ReturnType<typeof harness>, nowMs: number) {
+  return runCycle({
+    nowMs,
+    holder: "worker-a",
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    store: env.store,
+    chain: env.chain,
+  });
 }
 
 function cycle(env: ReturnType<typeof harness>, patch?: { suspended?: boolean; authorised?: boolean; loopEnabled?: boolean }) {
@@ -271,7 +300,7 @@ test("an uncertain broadcast is not retried after a restart", async () => {
 
 test("a second worker cannot enter a locked cycle", async () => {
   const env = harness();
-  let release: (value: "submitted" | "uncertain") => void = () => undefined;
+  let release: (value: SubmitResult) => void = () => undefined;
   env.chain.submit = (wire) => new Promise((resolve) => {
     env.submits.push(wire);
     release = resolve;
@@ -292,7 +321,8 @@ test("a second worker cannot enter a locked cycle", async () => {
   assert.equal(second.ok, false);
   if (second.ok) return;
   assert.equal(second.code, "locked");
-  release("uncertain");
+  assert.equal(env.submits.length, 1);
+  release({ status: "uncertain", code: "timeout", detail: "timeout" });
   await first;
 });
 
@@ -726,4 +756,170 @@ test("the signer rejects an inserted transfer and an altered collection account"
     };
   });
   assert.equal(sign(signerFlip).ok, false);
+});
+
+const NEXT_WINDOW = NOW + 5 * 60 * 1000;
+
+test("an earlier uncertain collection blocks the next window after a restart", async () => {
+  const env = harness({ submit: "uncertain" });
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "uncertain");
+  const restarted = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(restarted.ok, false);
+  if (restarted.ok) return;
+  assert.equal(restarted.code, "uncertain");
+  assert.equal(env.submits.length, 1);
+  const collects = (await env.store.intents(TREST, "test")).filter((intent) => intent.kind === "collect");
+  assert.equal(collects.length, 1);
+  assert.equal(collects[0]?.status, "uncertain");
+  assert.equal(collects[0]?.submissionCode, "timeout");
+  assert.ok(collects[0]?.recentBlockhash);
+});
+
+test("an earlier submitted or unreconciled collection blocks a new collection", async () => {
+  for (const status of ["submitted", "unreconciled"] as const) {
+    const env = harness();
+    env.chain.transaction = async (signature) => {
+      env.readSignatures.push(signature);
+      return null;
+    };
+    const signature = new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
+    assert.equal(await env.store.recordIntent({
+      idempotencyKey: "collect-earlier-window",
+      parentMint: TREST,
+      scope: "test",
+      kind: "collect",
+      amountLamports: "0",
+      tokenAmount: null,
+      messageSha256: null,
+      recentBlockhash: new PublicKey(nacl.sign.keyPair().publicKey).toBase58(),
+    }), "ok");
+    assert.equal(await env.store.markIntent(TREST, "test", "collect-earlier-window", "submitted", signature), "ok");
+    if (status === "unreconciled") {
+      assert.equal(await env.store.markIntent(TREST, "test", "collect-earlier-window", "unreconciled", signature), "ok");
+    }
+    const blocked = await cycle(env);
+    assert.equal(blocked.ok, false);
+    if (blocked.ok) return;
+    assert.equal(blocked.code, "uncertain");
+    assert.equal(env.submits.length, 0);
+    const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.idempotencyKey === "collect-earlier-window");
+    assert.equal(stored?.signature, signature);
+    assert.equal(stored?.status, status === "unreconciled" ? "unreconciled" : "uncertain");
+  }
+});
+
+test("a missing signature and missing blockhash do not expire an uncertain collection", async () => {
+  const env = harness({ submit: "uncertain", signatureState: "absent", blockhashValid: "expired" });
+  env.chain.transaction = async (signature) => {
+    env.readSignatures.push(signature);
+    return null;
+  };
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
+  assert.ok(stored);
+  stored.recentBlockhash = null;
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, false);
+  if (later.ok) return;
+  assert.equal(later.code, "uncertain");
+  assert.equal(env.submits.length, 1);
+  assert.equal(stored.status, "uncertain");
+});
+
+test("an expired collection can be retried only after it is reconciled", async () => {
+  const env = harness({ submit: "uncertain", signatureState: "absent", blockhashValid: "expired" });
+  env.chain.transaction = async (signature) => {
+    env.readSignatures.push(signature);
+    return null;
+  };
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, false);
+  assert.equal(env.submits.length, 2);
+  const collects = (await env.store.intents(TREST, "test")).filter((intent) => intent.kind === "collect");
+  assert.equal(collects.length, 2);
+  assert.equal(collects.filter((intent) => intent.status === "failed" && intent.submissionCode === "expired").length, 1);
+  assert.equal(collects.filter((intent) => intent.status === "uncertain").length, 1);
+});
+
+test("a preflight rejection is stored and becomes retryable in the next window", async () => {
+  const env = harness({ submit: "preflight" });
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "failed");
+  const failed = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
+  assert.equal(failed?.status, "failed");
+  assert.equal(failed?.submissionCode, "rpc:-32002");
+  assert.equal(failed?.submissionDetail?.includes("custom program error"), true);
+  assert.equal(failed?.submissionDetail?.includes("http://"), false);
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, false);
+  assert.equal(env.submits.length, 2);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 0);
+});
+
+test("a confirmed on-chain collection failure can be retried in a later window", async () => {
+  const env = harness();
+  let reads = 0;
+  env.chain.transaction = async (signature) => {
+    env.readSignatures.push(signature);
+    reads += 1;
+    return observed(env.key.address, { status: reads === 1 ? "failed" : "confirmed" });
+  };
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "failed");
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, true);
+  const collects = (await env.store.intents(TREST, "test")).filter((intent) => intent.kind === "collect");
+  assert.equal(collects.length, 2);
+  assert.equal(collects.filter((intent) => intent.status === "failed" && intent.submissionCode === "onchain_failed").length, 1);
+  assert.equal(collects.filter((intent) => intent.status === "confirmed").length, 1);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
+});
+
+test("a later window credits an earlier confirmed collection once", async () => {
+  const env = harness();
+  let landed = false;
+  env.chain.transaction = async (signature) => {
+    env.readSignatures.push(signature);
+    if (!landed) return null;
+    return observed(env.key.address);
+  };
+  env.chain.signatureState = async () => "unknown";
+  const first = await cycle(env);
+  assert.equal(first.ok, false);
+  assert.equal(env.submits.length, 1);
+  const signature = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect")?.signature;
+  landed = true;
+  const later = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(later.ok, true);
+  const receipts = await env.store.receipts(TREST, "test");
+  assert.equal(receipts.filter((receipt) => receipt.signature === signature).length, 1);
+  assert.equal((await env.store.windows(TREST, "test")).length, 1);
+  const collects = (await env.store.intents(TREST, "test")).filter((intent) => intent.kind === "collect");
+  assert.equal(collects.length, 1);
+  assert.equal(collects[0]?.status, "confirmed");
+});
+
+test("a failed intent write cannot broadcast", async () => {
+  const env = harness();
+  env.store.markIntent = async () => "order";
+  const blocked = await cycle(env);
+  assert.equal(blocked.ok, false);
+  if (blocked.ok) return;
+  assert.equal(blocked.code, "uncertain");
+  assert.equal(env.submits.length, 0);
+  env.store.markIntent = async () => {
+    throw new Error("database unavailable");
+  };
+  await assert.rejects(() => cycleAt(env, NEXT_WINDOW));
+  assert.equal(env.submits.length, 0);
 });

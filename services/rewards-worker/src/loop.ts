@@ -70,7 +70,7 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
   }
   const sql = createSql(databaseUrl);
   const store = postgresRewardsStore(sql);
-  const chain = heliusChain((method, params) => heliusRpc(rpcUrl, method, params));
+  const chain = heliusChain((method, params) => heliusRpc(rpcUrl, method, params), rpcUrl);
   const run = (): void => {
     const suspended = input.suspended || process.env.TREST_SIGNER_SUSPENDED === "true";
     const emergencyFence = process.env.EMERGENCY_FENCE === "true";
@@ -249,9 +249,10 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
           `;
           if (reserved.length === 0) return { status: "uncertain" as const };
           const sent = await chain.submit(wire);
-          if (sent === "uncertain") {
-            await sql`update child_fee_distributions set status = 'uncertain' where idempotency_key = ${key}`;
-            return { status: "uncertain" as const };
+          if (sent.status !== "accepted") {
+            const status = sent.status === "uncertain" ? "uncertain" : "failed";
+            await sql`update child_fee_distributions set status = ${status} where idempotency_key = ${key}`;
+            return { status };
           }
           const observed = await chain.transaction(signed.signature, {
             creator: input.expectedAddress,

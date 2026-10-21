@@ -74,9 +74,22 @@ export type Chain = {
   holders(mint: string, tokenProgram: string): Promise<{ observedSlot: string; accounts: { owner: string; mint: string; amount: string }[] } | null>;
   slot(): Promise<string>;
   blockhash(): Promise<string>;
+  blockhashValid(blockhash: string): Promise<"valid" | "expired" | "unknown">;
   market(mint: string): Promise<MarketView | null>;
-  submit(wire: Uint8Array): Promise<"submitted" | "uncertain">;
+  submit(wire: Uint8Array): Promise<SubmitResult>;
+  signatureState(signature: string): Promise<"absent" | "present" | "unknown">;
   transaction(signature: string, lookup: VaultLookup): Promise<ObservedTransaction | null>;
+};
+
+export type SubmitResult =
+  | { status: "accepted" }
+  | { status: "preflight" | "rejected" | "expired" | "uncertain"; code: string; detail: string };
+
+export type SendFailure = {
+  kind: "http" | "transport" | "rpc";
+  code: number | null;
+  message: string;
+  logs: string[];
 };
 
 export type VaultLookup = {
@@ -194,6 +207,80 @@ export async function heliusRpc(url: string, method: string, params: unknown[]):
   return null;
 }
 
+export function sanitiseRpcDetail(message: string, logs: readonly string[]): string {
+  const excerpt = logs.slice(0, 4).map((line) => line.slice(0, 80)).join(" | ");
+  const combined = excerpt ? `${message} | ${excerpt}` : message;
+  return combined
+    .replace(/https?:\/\/\S+/gi, "[redacted-url]")
+    .replace(/(api[-_]?key|authorization|bearer|private[-_]?key)[=:\s]+\S+/gi, "[redacted]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+export function classifySendFailure(failure: SendFailure): Exclude<SubmitResult, { status: "accepted" }> {
+  const detail = sanitiseRpcDetail(failure.message, failure.logs);
+  const code = failure.message === "timeout" ? "timeout" : failure.code === null ? failure.kind : `rpc:${failure.code}`.slice(0, 40);
+  if (failure.kind !== "rpc") return { status: "uncertain", code, detail };
+  const text = `${failure.message}\n${failure.logs.join("\n")}`.toLowerCase();
+  if (text.includes("blockhash not found") || text.includes("blockhash expired")) return { status: "expired", code, detail };
+  if (text.includes("simulation failed") || text.includes("instruction error") || text.includes("instructionerror")) {
+    return { status: "preflight", code, detail };
+  }
+  if (text.includes("invalid") || text.includes("signature verification") || text.includes("sanitize")) {
+    return { status: "rejected", code, detail };
+  }
+  return { status: "uncertain", code, detail };
+}
+
+async function postJson(url: string, body: string): Promise<{ ok: true; result: unknown } | { ok: false; failure: SendFailure }> {
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body,
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) return { ok: false, failure: { kind: "http", code: response.status, message: "http", logs: [] } };
+    const payload = (await response.json()) as { result?: unknown; error?: { code?: unknown; message?: unknown; data?: { logs?: unknown } } };
+    if (payload.error) {
+      const logs = Array.isArray(payload.error.data?.logs)
+        ? payload.error.data.logs.filter((line): line is string => typeof line === "string").slice(0, 8)
+        : [];
+      return {
+        ok: false,
+        failure: {
+          kind: "rpc",
+          code: typeof payload.error.code === "number" ? payload.error.code : null,
+          message: typeof payload.error.message === "string" ? payload.error.message.slice(0, 300) : "rpc",
+          logs,
+        },
+      };
+    }
+    return { ok: true, result: payload.result ?? null };
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    return { ok: false, failure: { kind: "transport", code: null, message: timedOut ? "timeout" : "transport", logs: [] } };
+  }
+}
+
+export async function sendSignedTransaction(url: string, wire: Uint8Array): Promise<SubmitResult> {
+  const body = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "sendTransaction",
+    params: [Buffer.from(wire).toString("base64"), { encoding: "base64", skipPreflight: false }],
+  });
+  let transport: SendFailure = { kind: "transport", code: null, message: "transport", logs: [] };
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const outcome = await postJson(url, body);
+    if (outcome.ok) return typeof outcome.result === "string" ? { status: "accepted" } : { status: "uncertain", code: "unknown", detail: "empty rpc result" };
+    if (outcome.failure.kind === "rpc") return classifySendFailure(outcome.failure);
+    transport = outcome.failure;
+  }
+  return classifySendFailure(transport);
+}
+
 function accountKey(value: unknown): string | null {
   if (typeof value === "string") return value;
   if (value && typeof value === "object" && "pubkey" in value && typeof value.pubkey === "string") return value.pubkey;
@@ -276,7 +363,7 @@ function accountFromRpc(value: unknown): ChainAccount {
   return { lamports: String(record.lamports), owner: record.owner, data: Buffer.from(data, "base64") };
 }
 
-export function heliusChain(rpc: Rpc): Chain {
+export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
   return {
     async account(address) {
       const value = await rpc("getAccountInfo", [address, { encoding: "base64", commitment: "confirmed" }]);
@@ -322,6 +409,11 @@ export function heliusChain(rpc: Rpc): Chain {
       const blockhash = value && typeof value === "object" && "value" in value ? (value as { value: { blockhash?: string } }).value.blockhash : null;
       if (!blockhash) throw new Error("blockhash");
       return blockhash;
+    },
+    async blockhashValid(blockhash) {
+      const value = await rpc("isBlockhashValid", [blockhash, { commitment: "confirmed" }]);
+      if (!value || typeof value !== "object" || !("value" in value) || typeof (value as { value?: unknown }).value !== "boolean") return "unknown";
+      return (value as { value: boolean }).value ? "valid" : "expired";
     },
     async market(mint) {
       try {
@@ -386,12 +478,14 @@ export function heliusChain(rpc: Rpc): Chain {
       }
     },
     async submit(wire) {
-      try {
-        const value = await rpc("sendTransaction", [Buffer.from(wire).toString("base64"), { encoding: "base64", skipPreflight: false }]);
-        return typeof value === "string" ? "submitted" : "uncertain";
-      } catch {
-        return "uncertain";
-      }
+      if (!rpcUrl) return { status: "uncertain", code: "transport", detail: "transport" };
+      return sendSignedTransaction(rpcUrl, wire);
+    },
+    async signatureState(signature) {
+      const value = await rpc("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]);
+      if (!value || typeof value !== "object" || !("value" in value) || !Array.isArray((value as { value?: unknown }).value)) return "unknown";
+      const row = (value as { value: unknown[] }).value[0];
+      return row == null ? "absent" : "present";
     },
     async transaction(signature, lookup) {
       const value = await rpc("getTransaction", [signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
