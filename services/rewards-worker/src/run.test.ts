@@ -10,6 +10,7 @@ import { PUMP_PROGRAM_ID } from "../../../lib/rewards/collect.ts";
 import { claimAuthorizationMessage } from "../../../lib/rewards/ownership.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
 import { creatorVaultAddress, heliusChain, observeMeta, readCreatorVaults, type Chain, type ObservedTransaction, type SubmitResult } from "./chain.ts";
+import { reconcileLegacyCollection } from "./legacy-recovery.ts";
 import { buildSolCollection } from "./instructions.ts";
 import { settleClaimHttp, type ClaimBody } from "./claim-route.ts";
 import { runCycle, submitClaim } from "./run.ts";
@@ -51,6 +52,7 @@ function harness(input?: {
   holders?: "fail-once";
   signatureState?: "absent" | "present" | "unknown";
   blockhashValid?: "valid" | "expired" | "unknown";
+  parentMint?: string;
 }) {
   const key = signer();
   const holder = signer();
@@ -81,6 +83,9 @@ function harness(input?: {
     },
     async slot() {
       return "44";
+    },
+    async blockTime() {
+      return null;
     },
     async blockhash() {
       return new PublicKey(nacl.sign.keyPair().publicKey).toBase58();
@@ -129,7 +134,7 @@ function harness(input?: {
     id: "00000000-0000-4000-8000-000000000001",
     scope: "test",
     symbol: "TREST",
-    mintAddress: TREST,
+    mintAddress: input?.parentMint ?? TREST,
     deployerAddress: key.address,
     feeRecipientAddress: key.address,
     feeMode: "single_recipient",
@@ -922,4 +927,99 @@ test("a failed intent write cannot broadcast", async () => {
   };
   await assert.rejects(() => cycleAt(env, NEXT_WINDOW));
   assert.equal(env.submits.length, 0);
+});
+
+test("legacy recovery unblocks only the two approved intents and leaves them uncertain", async () => {
+  const mint = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+  const rows = [
+    { idempotencyKey: "collect-1792587300000", signature: "3QkoLCoC9xNnesUMksjxrEVx6UEvdMcZPo9NM8DZZBu4FXUUuqiAZvBvPGMjaZuHyNxyrjbdbLPSVDzbL3Ggi84m" },
+    { idempotencyKey: "collect-1792587600000", signature: "Rh18WpUe1wkT8bV8eVev7uTg1SY4jf1tRqdjo6c6Zufmtqbs5n99Yq6kJ3HzLLnxXKdtcKuwjKhWPpQx5E3Cqu6" },
+  ];
+  const env = harness({ parentMint: mint, submit: "uncertain" });
+  const proof: Chain = {
+    ...env.chain,
+    async account() {
+      return { lamports: "280727692", owner: SYSTEM, data: new Uint8Array() };
+    },
+    async slot() {
+      return "5000";
+    },
+    async blockTime(slot) {
+      return 1_000_000 + Number(slot);
+    },
+    async signatureState() {
+      return "absent";
+    },
+    async transaction() {
+      return null;
+    },
+    async submit() {
+      throw new Error("legacy recovery must not broadcast");
+    },
+  };
+  for (const row of rows) {
+    assert.equal(await env.store.recordIntent({
+      idempotencyKey: row.idempotencyKey,
+      parentMint: mint,
+      scope: "test",
+      kind: "collect",
+      amountLamports: "0",
+      tokenAmount: null,
+      messageSha256: null,
+      recentBlockhash: null,
+      createdAtMs: String((1_000_000 + 1000) * 1000),
+    }), "ok");
+    assert.equal(await env.store.markIntent(mint, "test", row.idempotencyKey, "submitted", row.signature), "ok");
+    assert.equal(await env.store.markIntent(mint, "test", row.idempotencyKey, "uncertain", row.signature), "ok");
+  }
+  const blocked = await cycle(env);
+  assert.equal(blocked.ok, false);
+  if (blocked.ok) return;
+  assert.equal(blocked.code, "uncertain");
+  assert.equal(env.submits.length, 0);
+  const suspended = await cycle(env, { loopEnabled: false, authorised: false });
+  assert.equal(suspended.ok, false);
+  if (suspended.ok) return;
+  assert.equal(suspended.code, "inactive");
+  assert.equal(env.submits.length, 0);
+  const first = await reconcileLegacyCollection({
+    authorised: true,
+    parentMint: mint,
+    scope: "test",
+    idempotencyKey: rows[0]?.idempotencyKey ?? "",
+    signature: rows[0]?.signature ?? "",
+    approval: "TREST-07F-LEGACY-RECOVERY",
+    operator: "operator-1",
+    reason: "First historical collection can no longer land.",
+    deployer: env.key.address,
+    store: env.store,
+    chain: proof,
+  });
+  assert.equal(first.ok, true);
+  const stillBlocked = await cycleAt(env, NEXT_WINDOW);
+  assert.equal(stillBlocked.ok, false);
+  assert.equal(env.submits.length, 0);
+  const second = await reconcileLegacyCollection({
+    authorised: true,
+    parentMint: mint,
+    scope: "test",
+    idempotencyKey: rows[1]?.idempotencyKey ?? "",
+    signature: rows[1]?.signature ?? "",
+    approval: "TREST-07F-LEGACY-RECOVERY",
+    operator: "operator-1",
+    reason: "Second historical collection can no longer land.",
+    deployer: env.key.address,
+    store: env.store,
+    chain: proof,
+  });
+  assert.equal(second.ok, true);
+  const opened = await cycleAt(env, NEXT_WINDOW + 5 * 60 * 1000);
+  assert.equal(opened.ok, false);
+  if (opened.ok) return;
+  assert.equal(opened.code, "uncertain");
+  assert.equal(env.submits.length, 1);
+  const collects = (await env.store.intents(mint, "test")).filter((intent) => rows.some((row) => row.idempotencyKey === intent.idempotencyKey));
+  assert.equal(collects.every((intent) => intent.status === "uncertain"), true);
+  assert.equal((await env.store.legacyRecoveries(mint, "test")).length, 2);
+  assert.equal((await env.store.receipts(mint, "test")).length, 0);
 });

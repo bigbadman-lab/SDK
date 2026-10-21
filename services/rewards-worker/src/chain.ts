@@ -73,6 +73,7 @@ export type Chain = {
   mint(mint: string): Promise<{ decimals: number; tokenProgram: string } | null>;
   holders(mint: string, tokenProgram: string): Promise<{ observedSlot: string; accounts: { owner: string; mint: string; amount: string }[] } | null>;
   slot(): Promise<string>;
+  blockTime(slot: string): Promise<number | null>;
   blockhash(): Promise<string>;
   blockhashValid(blockhash: string): Promise<"valid" | "expired" | "unknown">;
   market(mint: string): Promise<MarketView | null>;
@@ -403,6 +404,12 @@ export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
     async slot() {
       const value = await rpc("getSlot", [{ commitment: "confirmed" }]);
       return typeof value === "number" ? String(value) : "0";
+    },
+    async blockTime(slot) {
+      const parsed = Number(slot);
+      if (!Number.isInteger(parsed) || parsed < 0) return null;
+      const value = await rpc("getBlockTime", [parsed]);
+      return typeof value === "number" ? value : null;
     },
     async blockhash() {
       const value = await rpc("getLatestBlockhash", [{ commitment: "confirmed" }]);

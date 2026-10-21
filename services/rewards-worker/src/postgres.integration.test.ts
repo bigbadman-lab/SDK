@@ -58,7 +58,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-9), [
+  assert.deepEqual(files.slice(-10), [
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
@@ -68,6 +68,7 @@ before(async () => {
     "20261020260000_trest04_claims_child_fees_emergency.sql",
     "20261021100000_trest04d_window_allocation.sql",
     "20261021140000_trest07e_collection_diagnostics.sql",
+    "20261021160000_trest07f_legacy_recovery.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -225,6 +226,56 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(diagnosed[0]?.submissionCode, "rpc:-32002");
   assert.equal(diagnosed[0]?.signature, SIGNATURE.replaceAll("2", "4"));
   await assert.rejects(() => db()`update reward_intents set kind = 'buyback' where idempotency_key = 'collect-window-000001'`);
+  const legacyEvidence = {
+    signatureState: "absent" as const,
+    transaction: "absent" as const,
+    currentSlot: "459645473",
+    submissionSlot: "459637647",
+    slotsElapsed: "7826",
+    blockhashSlots: "150" as const,
+    createdAtMs: "1792587543925",
+    deployerLamports: "280727692",
+    vaultLamports: "84559054",
+  };
+  const legacy = await store.saveLegacyRecovery({
+    parentMint: "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump",
+    scope: "test",
+    idempotencyKey: "collect-1792587300000",
+    signature: "3QkoLCoC9xNnesUMksjxrEVx6UEvdMcZPo9NM8DZZBu4FXUUuqiAZvBvPGMjaZuHyNxyrjbdbLPSVDzbL3Ggi84m",
+    priorStatus: "uncertain",
+    operatorId: "operator-1",
+    approval: "TREST-07F-LEGACY-RECOVERY",
+    reason: "blockhash window elapsed and signature absent",
+    evidence: legacyEvidence,
+  });
+  assert.equal(legacy.ok, true);
+  assert.equal((await store.saveLegacyRecovery({
+    parentMint: "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump",
+    scope: "test",
+    idempotencyKey: "collect-1792587300000",
+    signature: "3QkoLCoC9xNnesUMksjxrEVx6UEvdMcZPo9NM8DZZBu4FXUUuqiAZvBvPGMjaZuHyNxyrjbdbLPSVDzbL3Ggi84m",
+    priorStatus: "uncertain",
+    operatorId: "operator-1",
+    approval: "TREST-07F-LEGACY-RECOVERY",
+    reason: "again",
+    evidence: legacyEvidence,
+  })).ok, false);
+  assert.equal((await store.saveLegacyRecovery({
+    parentMint: MINT,
+    scope: "test",
+    idempotencyKey: "collect-window-000001",
+    signature: SIGNATURE,
+    priorStatus: "uncertain",
+    operatorId: "operator-1",
+    approval: "TREST-07F-LEGACY-RECOVERY",
+    reason: "wrong intent",
+    evidence: legacyEvidence,
+  })).ok, false);
+  const savedRecovery = (await store.legacyRecoveries("BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump", "test"))[0];
+  assert.equal(savedRecovery?.evidence.slotsElapsed, "7826");
+  assert.equal(savedRecovery?.priorStatus, "uncertain");
+  await assert.rejects(() => db()`update reward_legacy_recoveries set reason = 'changed'`);
+  await assert.rejects(() => db()`delete from reward_legacy_recoveries`);
 
   const now = Date.now();
   assert.equal(await store.tryLock(MINT, "test", "worker-a", now), "ok");

@@ -9,6 +9,7 @@ import { explainCreatorDelta, reconcileBuyback, reconcileCreatorFee } from "../.
 import { derivedDeployerAddress, rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
 import { bondingCurveAddress, readCreatorVaults, type Chain, type ObservedTransaction, type VaultLookup } from "./chain.ts";
+import { legacyCollectionRetired } from "./legacy-recovery.ts";
 import { buildCurveBuyback, buildSolCollection, type BuiltInstruction } from "./instructions.ts";
 import type { RegisteredParent, RewardControl, RewardsStore, StoredIntent } from "./store.ts";
 
@@ -216,7 +217,12 @@ async function reconcileOpenCollections(input: {
   lookup: VaultLookup;
 }): Promise<{ ok: true; recovered: boolean } | { ok: false; code: CycleCode }> {
   const intents = await input.store.intents(input.parent.mintAddress, input.parent.scope);
-  const open = intents.filter((intent) => intent.kind === "collect" && (intent.status === "submitted" || intent.status === "uncertain" || intent.status === "unreconciled"));
+  const retired = await input.store.legacyRecoveries(input.parent.mintAddress, input.parent.scope);
+  const open = intents.filter((intent) =>
+    intent.kind === "collect"
+    && (intent.status === "submitted" || intent.status === "uncertain" || intent.status === "unreconciled")
+    && !legacyCollectionRetired(intent, retired)
+  );
   let recovered = false;
   for (const intent of open) {
     if (!intent.signature) return { ok: false, code: "uncertain" };

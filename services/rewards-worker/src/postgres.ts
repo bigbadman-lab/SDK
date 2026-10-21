@@ -2,7 +2,8 @@ import postgres from "postgres";
 
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import type { RegisteredParent, RewardControl, RewardsStore, StoredClaim, StoredIntent, StoredSnapshot, WindowAllocation } from "./store.ts";
+import type { LegacyRecovery, RegisteredParent, RewardControl, RewardsStore, StoredClaim, StoredIntent, StoredSnapshot, WindowAllocation } from "./store.ts";
+import { matchesLegacyCollection } from "./legacy-recovery.ts";
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -254,7 +255,8 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           message_sha256 as "messageSha256",
           recent_blockhash as "recentBlockhash",
           submission_code as "submissionCode",
-          submission_detail as "submissionDetail"
+          submission_detail as "submissionDetail",
+          (extract(epoch from created_at) * 1000)::bigint::text as "createdAtMs"
         from reward_intents
         where parent_mint_address = ${parentMint} and scope = ${scope}
       `;
@@ -305,6 +307,41 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         returning id::text
       `;
       return rows[0] ? "ok" : "order";
+    },
+    async legacyRecoveries(parentMint, scope) {
+      const rows = await sql<LegacyRecovery[]>`
+        select
+          id::text,
+          parent_mint_address as "parentMint",
+          scope,
+          idempotency_key as "idempotencyKey",
+          signature,
+          prior_status as "priorStatus",
+          operator_id as "operatorId",
+          approval,
+          reason,
+          evidence,
+          (extract(epoch from created_at) * 1000)::bigint::text as "createdAtMs"
+        from reward_legacy_recoveries
+        where parent_mint_address = ${parentMint} and scope = ${scope}
+      `;
+      return rows;
+    },
+    async saveLegacyRecovery(input) {
+      if (!matchesLegacyCollection(input) || input.priorStatus !== "uncertain" || input.approval !== "TREST-07F-LEGACY-RECOVERY") {
+        return { ok: false, code: "rejected" };
+      }
+      const rows = await sql<{ id: string }[]>`
+        insert into reward_legacy_recoveries (
+          parent_mint_address, scope, idempotency_key, signature, prior_status, operator_id, approval, reason, evidence
+        ) values (
+          ${input.parentMint}, ${input.scope}, ${input.idempotencyKey}, ${input.signature}, ${input.priorStatus},
+          ${input.operatorId}, ${input.approval}, ${input.reason}, ${sql.json(input.evidence)}
+        )
+        on conflict do nothing
+        returning id::text
+      `;
+      return rows[0] ? { ok: true, id: rows[0].id } : { ok: false, code: "duplicate" };
     },
     async receipts(parentMint, scope) {
       return sql<FeeReceipt[]>`

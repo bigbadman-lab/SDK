@@ -1,4 +1,5 @@
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
+import { matchesLegacyCollection } from "./legacy-recovery.ts";
 import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
 
@@ -31,6 +32,33 @@ export type StoredIntent = ExecutionIntent & {
   recentBlockhash: string | null;
   submissionCode: string | null;
   submissionDetail: string | null;
+  createdAtMs: string;
+};
+
+export type LegacyEvidence = {
+  signatureState: "absent";
+  transaction: "absent";
+  currentSlot: string;
+  submissionSlot: string;
+  slotsElapsed: string;
+  blockhashSlots: "150";
+  createdAtMs: string;
+  deployerLamports: string;
+  vaultLamports: string;
+};
+
+export type LegacyRecovery = {
+  id: string;
+  parentMint: string;
+  scope: RewardScope;
+  idempotencyKey: string;
+  signature: string;
+  priorStatus: "uncertain";
+  operatorId: string;
+  approval: string;
+  reason: string;
+  evidence: LegacyEvidence;
+  createdAtMs: string;
 };
 
 export type SubmissionNote = {
@@ -84,9 +112,11 @@ export type RewardsStore = {
     reserveLamports: string;
   }): Promise<WindowAllocation>;
   intents(parentMint: string, scope: RewardScope): Promise<StoredIntent[]>;
-  recordIntent(intent: Omit<StoredIntent, "status" | "signature" | "recentBlockhash" | "submissionCode" | "submissionDetail"> & { amountLamports: string | null; recentBlockhash?: string | null }): Promise<"ok" | "duplicate">;
+  recordIntent(intent: Omit<StoredIntent, "status" | "signature" | "recentBlockhash" | "submissionCode" | "submissionDetail" | "createdAtMs"> & { amountLamports: string | null; recentBlockhash?: string | null; createdAtMs?: string }): Promise<"ok" | "duplicate">;
   markIntent(parentMint: string, scope: RewardScope, idempotencyKey: string, status: IntentStatus, signature: string | null): Promise<"ok" | "order" | "duplicate">;
   recordSubmission(parentMint: string, scope: RewardScope, idempotencyKey: string, note: SubmissionNote): Promise<"ok" | "order">;
+  legacyRecoveries(parentMint: string, scope: RewardScope): Promise<LegacyRecovery[]>;
+  saveLegacyRecovery(input: Omit<LegacyRecovery, "id" | "createdAtMs">): Promise<{ ok: true; id: string } | { ok: false; code: "duplicate" | "rejected" }>;
   receipts(parentMint: string, scope: RewardScope): Promise<FeeReceipt[]>;
   saveReceipt(receipt: FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string }): Promise<"ok" | "duplicate">;
   windows(parentMint: string, scope: RewardScope): Promise<{ windowKey: string; collected: string; holders: string; buyback: string; deployer: string }[]>;
@@ -113,6 +143,7 @@ const LEASE_MS = 5 * 60 * 1000;
 
 export function memoryStore(seed: { parent: RegisteredParent; control: RewardControl }): RewardsStore {
   const intents: StoredIntent[] = [];
+  const legacyRecoveries: LegacyRecovery[] = [];
   const receipts: Array<FeeReceipt & { gross: string; fee: string; native: string; wsolConverted: string; rentExcluded: string; allocated: boolean; reserveWithheld: string }> = [];
   const windows: Array<{ parentMint: string; scope: RewardScope; windowKey: string; collected: string; holders: string; buyback: string; deployer: string }> = [];
   const snapshots: Array<StoredSnapshot & { parentMint: string; scope: RewardScope; windowKey: string }> = [];
@@ -227,6 +258,7 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
           recentBlockhash: intent.recentBlockhash ?? null,
           submissionCode: null,
           submissionDetail: null,
+          createdAtMs: intent.createdAtMs ?? Date.now().toString(),
         });
         return "ok";
       });
@@ -243,6 +275,18 @@ export function memoryStore(seed: { parent: RegisteredParent; control: RewardCon
         current.status = status;
         current.signature = signature ?? current.signature;
         return "ok";
+      });
+    },
+    async legacyRecoveries(parentMint, scope) {
+      return legacyRecoveries.filter((row) => row.parentMint === parentMint && row.scope === scope);
+    },
+    async saveLegacyRecovery(input) {
+      return exclusive(() => {
+        if (!matchesLegacyCollection(input) || input.priorStatus !== "uncertain" || input.approval !== "TREST-07F-LEGACY-RECOVERY") return { ok: false, code: "rejected" };
+        if (legacyRecoveries.some((row) => row.idempotencyKey === input.idempotencyKey || row.signature === input.signature)) return { ok: false, code: "duplicate" };
+        const id = `recovery-${legacyRecoveries.length + 1}`;
+        legacyRecoveries.push({ ...input, id, createdAtMs: Date.now().toString() });
+        return { ok: true, id };
       });
     },
     async recordSubmission(parentMint, scope, idempotencyKey, note) {
