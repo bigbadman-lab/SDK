@@ -7,6 +7,7 @@ import { audiencePair, verificationStamp } from "./verified-launch.ts";
 import {
   CONFIRMATION_LIMIT_MS,
   blocksNewLaunch,
+  confirmationObservation,
   confirmationStatus,
   failureExplanation,
   launchWatchCopy,
@@ -105,7 +106,27 @@ test("a later confirmation verifies once and does not broadcast again", () => {
     wireRetained: true,
   });
   assert.equal(expired.ok && expired.action, "hold");
+  assert.equal(expired.ok && expired.intent.status, "failed");
   assert.equal(expired.ok && expired.intent.signature, submitted.signature);
+  const unresolved = confirmationObservation({ chain: "missing", signature: "unknown" });
+  assert.equal(unresolved.blockhashExpired, false);
+  assert.equal(confirmationStatus({ status: "uncertain", observed: "missing", blockhashExpired: false }), "uncertain");
+  const dead = confirmationObservation({ chain: null, signature: "absent" });
+  assert.equal(dead.blockhashExpired, true);
+  assert.equal(dead.observed, "missing");
+  const closed = planRecovery({
+    existing: intent("uncertain"),
+    observed: dead.observed,
+    blockhashExpired: dead.blockhashExpired,
+    approvalMatches: true,
+    wireRetained: true,
+  });
+  assert.equal(closed.ok && closed.action, "hold");
+  assert.equal(closed.ok && closed.intent.status, "failed");
+  assert.equal(closed.ok && blocksNewLaunch(closed.intent.status), false);
+  const seen = confirmationObservation({ chain: "missing", signature: "confirmed" });
+  assert.equal(seen.observed, "confirmed");
+  assert.equal(seen.blockhashExpired, false);
   const again = beginSubmission(submitted, draft());
   assert.equal(again.ok && again.broadcast, "hold");
   assert.equal(again.ok && again.intent.signature, submitted.signature);

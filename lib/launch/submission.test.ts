@@ -88,7 +88,11 @@ test("a signed attempt can be submitted once and an uncertain result keeps the m
   const changed = beginSubmission(stored, draft({ signature: "3".repeat(88) }));
   assert.equal(changed.ok, false);
   assert.equal(markExpired({ ...signed, status: "uncertain" }).status, "uncertain");
-  assert.equal(noteChain(stored, "missing", true).status, "uncertain");
+  const expired = noteChain(stored, "missing", true);
+  assert.equal(expired.status, "failed");
+  assert.equal(expired.childMint, stored.childMint);
+  assert.equal(expired.signature, stored.signature);
+  assert.equal(noteChain(stored, "missing", false).status, "uncertain");
   assert.equal(noteChain(stored, "confirmed", true).status, "verifying");
 });
 

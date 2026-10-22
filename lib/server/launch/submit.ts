@@ -1,6 +1,7 @@
 import "server-only";
 
 import { writeSubmission } from "@/lib/launch/registry";
+import { confirmationObservation } from "@/lib/launch/post-launch";
 import { noteBroadcast, noteVerification, type SubmissionIntent } from "@/lib/launch/submission";
 import { verificationStamp, type VerificationStamp } from "@/lib/launch/verified-launch";
 import { openWire, sealWire } from "@/lib/launch/wire";
@@ -205,6 +206,39 @@ async function saveSubmission(
   return writeSubmission(sql, { intent, accountId, ciphertext, stamp });
 }
 
+async function rpcValue(method: string, params: unknown[]): Promise<unknown | null> {
+  const url = process.env.HELIUS_RPC_URL?.trim();
+  if (!url) return null;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { error?: unknown; result?: unknown };
+    if (body.error || !("result" in body)) return null;
+    return body.result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function signatureProof(signature: string, blockhash: string): Promise<"confirmed" | "failed" | "absent" | "unknown"> {
+  const [status, hash] = await Promise.all([
+    rpcValue("getSignatureStatuses", [[signature], { searchTransactionHistory: true }]),
+    rpcValue("isBlockhashValid", [blockhash, { commitment: "finalized" }]),
+  ]);
+  const rows = status && typeof status === "object" && "value" in status ? (status as { value: unknown }).value : null;
+  if (!Array.isArray(rows)) return "unknown";
+  const row = rows[0];
+  if (row && typeof row === "object") return (row as { err?: unknown }).err ? "failed" : "confirmed";
+  if (row !== null) return "unknown";
+  const valid = hash && typeof hash === "object" && "value" in hash ? (hash as { value: unknown }).value : null;
+  return valid === false ? "absent" : "unknown";
+}
+
 async function rpcSend(wire: Uint8Array): Promise<BroadcastOutcome> {
   const url = process.env.HELIUS_RPC_URL?.trim();
   if (!url) return "unknown";
@@ -346,11 +380,14 @@ export async function recoverSignedLaunch(input: {
   }
   if (!existing || !build) return { ok: false, code: "not_found" };
   const chain = await readChain(existing.signature, existing.childMint);
+  const terminal = existing.status === "verified" || existing.status === "page_ready" || existing.status === "failed";
+  const proof = terminal ? "unknown" : await signatureProof(existing.signature, build.blockhash);
+  const decision = confirmationObservation({ chain: chain.observed, signature: proof });
   const approval = await loadApproval(sql, existing.launchId, existing.buildId).catch(() => null);
   const recovery = planRecovery({
     existing,
-    observed: chain.observed,
-    blockhashExpired: false,
+    observed: decision.observed,
+    blockhashExpired: decision.blockhashExpired,
     approvalMatches: approvalMatches(build, approval),
     wireRetained: existing.wireRetained,
   });

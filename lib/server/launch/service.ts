@@ -19,12 +19,13 @@ import {
   type LaunchSourceView,
   type PrepareRequest,
 } from "@/lib/launch/prepare";
-import { UNRESOLVED_SUBMISSIONS } from "@/lib/launch/post-launch";
+import { blocksNewLaunch, UNRESOLVED_SUBMISSIONS } from "@/lib/launch/post-launch";
 import { developerLabel, trustedOriginator } from "@/lib/library/submission";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { readOptionalEnv } from "@/lib/server/env";
 import { pinArtwork, pinMetadata } from "@/lib/server/launch/pinata";
+import { recoverSignedLaunch } from "@/lib/server/launch/submit";
 import {
   deleteArtwork,
   downloadArtwork,
@@ -201,6 +202,7 @@ export async function prepareLaunch(
       slippageBps: request.slippageBps,
     })
   );
+  await settleOpenLaunch(account.id);
   const row = await claim(account, request, resolved, asset.id, payloadHash);
   if (
     row.status === "ready_for_transaction" &&
@@ -244,6 +246,27 @@ export async function prepareLaunch(
     return review(resolved.view, again, asset);
   }
   throw new LaunchFlowError(409, "stale_revision");
+}
+
+async function settleOpenLaunch(accountId: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let launchId: string | undefined;
+    try {
+      const rows = await getSql()<{ launch_id: string }[]>`
+        select launch_id from launch_submissions
+        where account_id = ${accountId}
+          and status = any(${UNRESOLVED_SUBMISSIONS})
+        order by created_at desc
+        limit 1
+      `;
+      launchId = rows[0]?.launch_id;
+    } catch {
+      return;
+    }
+    if (!launchId) return;
+    const recovered = await recoverSignedLaunch({ accountId, launchId }).catch(() => null);
+    if (!recovered?.ok || blocksNewLaunch(recovered.status)) return;
+  }
 }
 
 async function claim(

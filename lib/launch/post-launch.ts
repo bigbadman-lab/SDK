@@ -55,12 +55,27 @@ export function confirmationStatus(input: {
   if (input.status === "verified" || input.status === "page_ready" || input.status === "failed") return input.status;
   if (input.observed === "confirmed") return "verifying";
   if (input.observed === "failed") return "failed";
+  if (input.blockhashExpired && input.observed === "missing") return "failed";
   if (ACCEPTED.has(input.status) && !input.blockhashExpired) {
     if (input.status === "submitted" || input.status === "pending_confirmation" || input.status === "verifying") {
       return input.status;
     }
   }
   return "uncertain";
+}
+
+export function confirmationObservation(input: {
+  chain: "confirmed" | "failed" | "missing" | "uncertain" | null;
+  signature: "confirmed" | "failed" | "absent" | "unknown";
+}): { observed: "confirmed" | "failed" | "missing" | "uncertain" | null; blockhashExpired: boolean } {
+  if (input.chain === "confirmed" || input.signature === "confirmed") {
+    return { observed: "confirmed", blockhashExpired: false };
+  }
+  if (input.chain === "failed" || input.signature === "failed") {
+    return { observed: "failed", blockhashExpired: false };
+  }
+  if (input.signature === "absent") return { observed: "missing", blockhashExpired: true };
+  return { observed: input.chain, blockhashExpired: false };
 }
 
 export function recoveryBroadcast(prior: string, next: string): "hold" | "rebroadcast" {
