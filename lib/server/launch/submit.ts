@@ -52,7 +52,7 @@ function shareholdersOf(value: unknown): StoredLaunchBuild["shareholders"] | nul
   return rows as StoredLaunchBuild["shareholders"];
 }
 
-async function loadBuild(sql: Sql, accountId: string, launchId: string, buildId: string): Promise<StoredLaunchBuild | null> {
+async function loadBuild(sql: Sql, accountId: string, launchId: string, buildId: string): Promise<(StoredLaunchBuild & { unsignedTransaction: Uint8Array }) | null> {
   const rows = await sql<{
     launch_id: string;
     build_id: string;
@@ -71,6 +71,7 @@ async function loadBuild(sql: Sql, accountId: string, launchId: string, buildId:
     fee_category: StoredLaunchBuild["category"];
     originator_wallet: string | null;
     status: StoredLaunchBuild["status"];
+    unsigned_transaction: string;
   }[]>`
     select
       b.launch_id,
@@ -89,7 +90,8 @@ async function loadBuild(sql: Sql, accountId: string, launchId: string, buildId:
       b.shareholders,
       b.fee_category,
       o.wallet_address as originator_wallet,
-      b.status
+      b.status,
+      b.transaction as unsigned_transaction
     from launch_builds b
     join token_launches l on l.id = b.launch_id
     left join accounts o on o.id = l.originator_account_id
@@ -120,6 +122,7 @@ async function loadBuild(sql: Sql, accountId: string, launchId: string, buildId:
     originatorWallet: row.originator_wallet,
     productionParentRegistered: registered !== null && registered === row.parent_mint_address,
     status: row.status,
+    unsignedTransaction: Uint8Array.from(Buffer.from(row.unsigned_transaction, "base64")),
   };
 }
 
@@ -234,7 +237,7 @@ export async function submitSignedLaunch(input: {
   transaction: Uint8Array;
 }): Promise<{ ok: true; status: string; broadcast: boolean; signature: string } | { ok: false; code: string }> {
   const sql = getSql();
-  let build: StoredLaunchBuild | null;
+  let build: (StoredLaunchBuild & { unsignedTransaction: Uint8Array }) | null;
   let existing: SubmissionIntent | null;
   try {
     build = await loadBuild(sql, input.accountId, input.launchId, input.buildId);
@@ -252,6 +255,7 @@ export async function submitSignedLaunch(input: {
     existing,
     approval,
     wireKeyPresent: key !== null,
+    ...(build ? { committedTransaction: build.unsignedTransaction } : {}),
   });
   if (!plan.ok) return plan;
   const sealed = sealWire(input.transaction, key);

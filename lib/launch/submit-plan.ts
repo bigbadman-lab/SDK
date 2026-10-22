@@ -1,4 +1,6 @@
 import { PLATFORM_FEE_WALLET, allocateCreatorFees, type FeeCategory, type Shareholder } from "./fees.ts";
+import { getSignatureFromTransaction, getTransactionDecoder } from "@solana/kit";
+
 import { beginSubmission, type SubmissionIntent, type SubmissionStatus } from "./submission.ts";
 import { verifySignedCommitment } from "./v1-signature.ts";
 
@@ -53,6 +55,7 @@ export async function planSubmission(input: {
   existing: SubmissionIntent | null;
   approval: LaunchApproval | null;
   wireKeyPresent: boolean;
+  committedTransaction?: Uint8Array;
 }): Promise<
   | { ok: true; intent: SubmissionIntent; broadcast: "hold" | "send" }
   | { ok: false; code: string }
@@ -73,6 +76,7 @@ export async function planSubmission(input: {
   if (!fees.ok || !sameShareholders(fees.shareholders, build.shareholders)) return { ok: false, code: "fees" };
   const verified = await verifySignedCommitment({
     transaction: input.transaction,
+    ...(input.committedTransaction ? { committedTransaction: input.committedTransaction } : {}),
     walletAddress: build.wallet,
     mintAddress: build.childMint,
     messageHash: build.messageHash,
@@ -141,30 +145,9 @@ function noteChainStatus(
 }
 
 function signatureOf(transaction: Uint8Array): string {
-  const count = transaction[0] ?? 0;
-  if (count < 1 || transaction.byteLength < 1 + 64) return "";
-  return encodeBase58(transaction.subarray(1, 65));
-}
-
-const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-function encodeBase58(bytes: Uint8Array): string {
-  let zeros = 0;
-  while (zeros < bytes.length && bytes[zeros] === 0) zeros += 1;
-  const digits = [0];
-  for (const byte of bytes) {
-    let carry = byte;
-    for (let index = 0; index < digits.length; index += 1) {
-      carry += (digits[index] ?? 0) * 256;
-      digits[index] = carry % 58;
-      carry = Math.floor(carry / 58);
-    }
-    while (carry > 0) {
-      digits.push(carry % 58);
-      carry = Math.floor(carry / 58);
-    }
+  try {
+    return getSignatureFromTransaction(getTransactionDecoder().decode(transaction));
+  } catch {
+    return "";
   }
-  let text = "1".repeat(zeros);
-  for (let index = digits.length - 1; index >= 0; index -= 1) text += ALPHABET[digits[index] ?? 0] ?? "";
-  return text;
 }

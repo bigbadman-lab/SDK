@@ -9,6 +9,8 @@ import {
   createTransactionMessage,
   generateKeyPair,
   getAddressFromPublicKey,
+  getSignatureFromTransaction,
+  getTransactionDecoder,
   getTransactionEncoder,
   partiallySignTransaction,
   pipe,
@@ -132,6 +134,10 @@ test("a signed build is held until that launch is approved", async () => {
   assert.equal(held.intent.status, "submission_pending");
   assert.equal(held.intent.parentMint, PARENT);
   assert.equal(held.intent.signature.length >= 64, true);
+  assert.equal(
+    held.intent.signature,
+    getSignatureFromTransaction(getTransactionDecoder().decode(wire.transaction)),
+  );
   const approved = await planSubmission({
     accountId: ACCOUNT,
     build: stored,

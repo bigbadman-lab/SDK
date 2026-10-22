@@ -35,10 +35,11 @@ async function transaction(input: {
   blockhash?: string;
   data?: Uint8Array;
   feeAccount?: Address;
+  extraProgram?: Address;
 }) {
   const walletAddress = await getAddressFromPublicKey(input.wallet.publicKey);
   const mintAddress = await getAddressFromPublicKey(input.mint.publicKey);
-  const message = pipe(
+  const drafted = pipe(
     createTransactionMessage({ version: 1 }),
     (current) => setTransactionMessageFeePayer(walletAddress, current),
     (current) =>
@@ -60,6 +61,16 @@ async function transaction(input: {
         current,
       ),
   );
+  const message = input.extraProgram
+    ? appendTransactionMessageInstruction(
+        {
+          programAddress: input.extraProgram,
+          accounts: [],
+          data: Uint8Array.of(9),
+        },
+        drafted,
+      )
+    : drafted;
   const compiled = compileTransaction(message);
   const wire = Uint8Array.from(getTransactionEncoder().encode(compiled));
   const walletSigned = Uint8Array.from(
@@ -165,6 +176,69 @@ test("blockhash, fee, metadata, buy, and mint changes are rejected", async () =>
     committedShareholders: [{ address: "DLhNy5Y33LrSoszV4cG3dEfcXTTmnRMDDUgFLMpt7zwC", shareBps: 1500 }],
   });
   assert.equal(lineage.ok, false);
+});
+
+test("Phantom's lighthouse instruction can be co-signed and another program cannot", async () => {
+  const wallet = await generateKeyPair();
+  const mint = await generateKeyPair();
+  const built = await transaction({ wallet, mint });
+  const lighthouse = address("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
+  const augmented = await transaction({ wallet, mint, extraProgram: lighthouse });
+  const common = {
+    committedTransaction: built.wire,
+    mint,
+    walletAddress: built.walletAddress,
+    mintAddress: built.mintAddress,
+    messageHash: built.messageHash,
+    blockhash: BLOCKHASH,
+    expiresAt: 2_000,
+    now: 1_000,
+  };
+  const finished = await finishLaunchSignatures({ ...common, walletSignedTransaction: augmented.walletSigned });
+  assert.equal(finished.ok, true);
+  if (!finished.ok) return;
+  const verified = await verifySignedCommitment({
+    transaction: finished.transaction,
+    committedTransaction: built.wire,
+    walletAddress: built.walletAddress,
+    mintAddress: built.mintAddress,
+    messageHash: built.messageHash,
+    blockhash: BLOCKHASH,
+    expiresAt: 2_000,
+    now: 1_000,
+    metadataUri: "https://example.com/metadata.json",
+    committedMetadataUri: "https://example.com/metadata.json",
+    buyAmount: "0",
+    committedBuyAmount: "0",
+    shareholders: [],
+    committedShareholders: [],
+  });
+  assert.equal(verified.ok, true);
+  const missingCommitment = await verifySignedCommitment({
+    transaction: finished.transaction,
+    walletAddress: built.walletAddress,
+    mintAddress: built.mintAddress,
+    messageHash: built.messageHash,
+    blockhash: BLOCKHASH,
+    expiresAt: 2_000,
+    now: 1_000,
+    metadataUri: "https://example.com/metadata.json",
+    committedMetadataUri: "https://example.com/metadata.json",
+    buyAmount: "0",
+    committedBuyAmount: "0",
+    shareholders: [],
+    committedShareholders: [],
+  });
+  assert.equal(missingCommitment.ok, false);
+  const other = await transaction({
+    wallet,
+    mint,
+    extraProgram: address("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+  });
+  const rejected = await finishLaunchSignatures({ ...common, walletSignedTransaction: other.walletSigned });
+  assert.equal(rejected.ok, false);
+  if (rejected.ok) return;
+  assert.equal(rejected.code, "message_changed");
 });
 
 test("signing files do not broadcast or carry a private key transport", () => {
