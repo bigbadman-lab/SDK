@@ -141,7 +141,7 @@ export function postgresStores(sql: Sql): {
             select
               ${row.launchId}, ${row.accountId}, ${row.walletAddress}, ${row.idempotencyKey}, ${row.payloadHash},
               ${row.mintAddress}, ${row.parentMint}, l.content_hash, l.metadata_hash, l.metadata_ipfs_uri,
-              l.fee_category, ${row.shareholdersJson}::jsonb, l.buy_amount, l.slippage_bps, ${row.blockhash},
+              l.fee_category, ${sql.json(JSON.parse(row.shareholdersJson))}, l.buy_amount, l.slippage_bps, ${row.blockhash},
               ${row.messageHash}, ${row.transaction}, 'live', 'built', ${new Date(row.expiresAt).toISOString()}
             from token_launches l
             where l.id = ${row.launchId}
