@@ -4,16 +4,17 @@ import test from "node:test";
 import { PublicKey } from "@solana/web3.js";
 
 import { verifyLaunchEvidence } from "../../../lib/launch/chain-evidence.ts";
-import { evidenceFromAccounts, loadLaunchEvidence } from "./evidence.ts";
+import { evidenceFromAccounts, loadLaunchEvidence, transactionFromRpc } from "./evidence.ts";
 import { EXPECTED_PROGRAMS } from "./protocol.ts";
 
 const require = createRequire(import.meta.url);
 const BN = require("bn.js") as new (value: number) => unknown;
-const { PumpSdk } = require("@pump-fun/pump-sdk") as {
+const { PumpSdk, feeSharingConfigPda } = require("@pump-fun/pump-sdk") as {
   PumpSdk: new () => {
     offlinePumpFeeProgram: { coder: { accounts: { encode(name: string, value: unknown): Promise<Buffer> } } };
     offlinePumpProgram: { coder: { accounts: { encode(name: string, value: unknown): Promise<Buffer> } } };
   };
+  feeSharingConfigPda: (mint: PublicKey) => PublicKey;
 };
 
 const CHILD = new PublicKey("GyGKxMyg1p9SsHfm15MkNUu1u9TN2JtTspcdmrtGUdse");
@@ -27,7 +28,7 @@ function u64(value: number): unknown {
   return new BN(value);
 }
 
-async function encoded() {
+async function encoded(creator: PublicKey = LAUNCHER) {
   const sdk = new PumpSdk();
   const sharing = await sdk.offlinePumpFeeProgram.coder.accounts.encode("sharingConfig", {
     bump: 1,
@@ -48,7 +49,7 @@ async function encoded() {
     realQuoteReserves: u64(1),
     tokenTotalSupply: u64(1),
     complete: false,
-    creator: LAUNCHER,
+    creator,
     isMayhemMode: false,
     isCashbackCoin: false,
     quoteMint: PARENT,
@@ -205,4 +206,55 @@ test("a reader without accounts stays unverified", async () => {
   );
   assert.equal(verdict.verified, false);
   assert.equal(verdict.failed, false);
+});
+
+test("a version 1 transaction is confirmed from its metadata", () => {
+  const confirmed = transactionFromRpc({
+    slot: 460107051,
+    meta: { err: null, preTokenBalances: [], postTokenBalances: [] },
+  });
+  assert.equal(confirmed.status, "confirmed");
+  assert.equal(confirmed.error, false);
+  assert.equal(confirmed.slot, "460107051");
+  assert.equal(transactionFromRpc(null).status, "missing");
+});
+
+test("fee sharing migration still identifies the launcher and the mint metadata", async () => {
+  const accounts = await encoded(feeSharingConfigPda(CHILD));
+  const evidence = evidenceFromAccounts({
+    childMint: CHILD.toBase58(),
+    launcher: LAUNCHER.toBase58(),
+    mintAccount: { owner: TOKEN, data: Buffer.from(`mint ${URI}`) },
+    curveAccount: { owner: EXPECTED_PROGRAMS.pump, data: accounts.curve },
+    sharingAccount: { owner: EXPECTED_PROGRAMS.fee, data: accounts.sharing },
+    metadataAccount: null,
+    transaction: {
+      status: "confirmed",
+      error: false,
+      slot: "44",
+      preTokenBalances: [],
+      postTokenBalances: [],
+    },
+  });
+  assert.equal(evidence.launcher, LAUNCHER.toBase58());
+  assert.equal(evidence.metadataUri, URI);
+  assert.equal(evidence.adminRevoked, true);
+  assert.equal(
+    verifyLaunchEvidence(
+      {
+        childMint: CHILD.toBase58(),
+        parentMint: PARENT.toBase58(),
+        launcher: LAUNCHER.toBase58(),
+        tokenProgram: TOKEN,
+        metadataUri: URI,
+        buyAmount: "0",
+        shareholders: [
+          { address: LAUNCHER.toBase58(), shareBps: 8500 },
+          { address: PLATFORM.toBase58(), shareBps: 1500 },
+        ],
+      },
+      evidence,
+    ).verified,
+    true,
+  );
 });

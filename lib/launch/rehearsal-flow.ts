@@ -60,3 +60,7 @@ export function recoveryPhase(status: string): { phase: string; verified: boolea
   }
   return { phase: "submitting", verified: false };
 }
+
+export function confirmationPending(phase: string): boolean {
+  return phase === "awaiting_confirmation" || phase === "verifying" || phase === "recovering";
+}

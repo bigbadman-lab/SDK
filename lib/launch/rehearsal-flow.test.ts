@@ -20,7 +20,8 @@ import { verifyLaunchEvidence } from "./chain-evidence.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "./fees.ts";
 import { preflightChildLaunch, preflightMessageBound } from "./preflight.ts";
 import { launchMessage } from "./messages.ts";
-import { canReleaseUnsignedMint, recoveryPhase, rehearsalSignAllowed } from "./rehearsal-flow.ts";
+import { canReleaseUnsignedMint, confirmationPending, recoveryPhase, rehearsalSignAllowed } from "./rehearsal-flow.ts";
+import { launchLifecycleCopy } from "./signing-phase.ts";
 import { noteBroadcast, noteChain, noteVerification } from "./submission.ts";
 import { planRecovery, planSubmission, type StoredLaunchBuild } from "./submit-plan.ts";
 import { finishLaunchSignatures, messageHashOf } from "./v1-signature.ts";
@@ -399,4 +400,7 @@ test("Phantom signs the exact v1 bytes, then the mint co-signs the unchanged mes
   assert.equal(recoveryPhase(verified.status).verified, true);
   assert.equal(recoveryPhase(unknown.status).verified, false);
   assert.equal(recoveryPhase("submitted").phase, "awaiting_confirmation");
+  assert.equal(confirmationPending("awaiting_confirmation"), true);
+  assert.equal(confirmationPending("verified"), false);
+  assert.equal(launchLifecycleCopy("verified").title, "Mint is live");
 });

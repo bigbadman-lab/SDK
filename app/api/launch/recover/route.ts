@@ -49,5 +49,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     code: result.status,
     broadcast: result.broadcast,
     signature: result.signature,
+    childMint: result.childMint,
+    parentMint: result.parentMint,
+    buyAmount: result.buyAmount,
+    shareholders: result.shareholders,
   });
 }

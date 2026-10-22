@@ -10,11 +10,29 @@ import { networkCostCopy } from "@/lib/launch/cost";
 import { launchMessage } from "@/lib/launch/messages";
 import { audiencePair } from "@/lib/launch/verified-launch";
 import type { LaunchReview } from "@/lib/launch/prepare";
-import { recoveryPhase, rehearsalSignAllowed } from "@/lib/launch/rehearsal-flow";
+import { confirmationPending, recoveryPhase, rehearsalSignAllowed } from "@/lib/launch/rehearsal-flow";
 import { launchLifecycleCopy, type LaunchLifecycle } from "@/lib/launch/signing-phase";
 import { finishLaunchSignatures, messageHashOf } from "@/lib/launch/v1-signature";
 import { heldMint, rememberMint } from "@/lib/wallet/mint-keypair";
 import { readPhantomSigner, requestPhantomSignature } from "@/lib/wallet/phantom-sign";
+
+type RecoveryBody = {
+  code?: string;
+  signature?: string;
+  childMint?: string;
+  parentMint?: string;
+  buyAmount?: string;
+  shareholders?: unknown;
+};
+
+function shareholderRows(value: unknown): { address: string; shareBps: number }[] {
+  return Array.isArray(value)
+    ? value.filter(
+        (row): row is { address: string; shareBps: number } =>
+          !!row && typeof row.address === "string" && typeof row.shareBps === "number",
+      )
+    : [];
+}
 
 type BuildView = {
   buildId: string;
@@ -70,9 +88,41 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     void loadBrowserSession();
   }, []);
 
+  function showRecovery(body: RecoveryBody) {
+    if (typeof body.signature === "string") setSignature(body.signature);
+    if (typeof body.childMint === "string" && typeof body.parentMint === "string") {
+      setBuild((current) => current ?? {
+        buildId: "",
+        parentMint: body.parentMint ?? "",
+        childMint: body.childMint ?? "",
+        messageHash: "",
+        blockhash: "",
+        expiresAt: "",
+        transaction: "",
+        buyAmount: typeof body.buyAmount === "string" ? body.buyAmount : "0",
+        shareholders: shareholderRows(body.shareholders),
+      });
+    }
+    const next = recoveryPhase(body.code ?? "submitting");
+    setPhase(next.phase);
+    setNotice(null);
+  }
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      const recovered = await fetch("/api/launch/recover", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ launchId: review.id }),
+      });
+      const recovery = (await recovered.json()) as RecoveryBody;
+      if (cancelled) return;
+      if (recovered.ok) {
+        showRecovery(recovery);
+        return;
+      }
       const probe = await fetch("/api/admin/trest/build", {
         method: "POST",
         credentials: "same-origin",
@@ -111,12 +161,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
         setParentRegistered(body.code !== "parent_unregistered");
         return;
       }
-      const shareholders = Array.isArray(body.shareholders)
-        ? body.shareholders.filter(
-            (row): row is { address: string; shareBps: number } =>
-              !!row && typeof row.address === "string" && typeof row.shareBps === "number",
-          )
-        : [];
+      const shareholders = shareholderRows(body.shareholders);
       const next = { ...body, shareholders };
       setBuild(next);
       setPersistenceReady(true);
@@ -150,6 +195,27 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       cancelled = true;
     };
   }, [review.id]);
+
+  useEffect(() => {
+    if (!confirmationPending(phase)) return;
+    let cancelled = false;
+    const timer = setInterval(() => {
+      void fetch("/api/launch/recover", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ launchId: review.id }),
+      }).then(async (response) => {
+        const body = (await response.json()) as RecoveryBody;
+        if (cancelled || !response.ok) return;
+        showRecovery(body);
+      }).catch(() => undefined);
+    }, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [phase, review.id]);
 
   const gate = rehearsalSignAllowed({
     operator: true,
@@ -257,9 +323,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       setPhase(body.code === "wire_key" ? "signed" : "failed");
       return;
     }
-    const next = recoveryPhase(body.code ?? "submitting");
-    setPhase(next.phase);
-    setNotice(launchLifecycleCopy(asLifecycle(next.phase)).body);
+    showRecovery(body);
   }
 
   async function refresh() {
@@ -269,15 +333,12 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ launchId: review.id }),
     });
-    const body = (await response.json()) as { code?: string; signature?: string };
-    if (typeof body.signature === "string") setSignature(body.signature);
+    const body = (await response.json()) as RecoveryBody;
     if (!response.ok) {
       setNotice(launchMessage(body.code ?? "unavailable"));
       return;
     }
-    const next = recoveryPhase(body.code ?? "submitting");
-    setPhase(next.phase);
-    setNotice(launchLifecycleCopy(asLifecycle(next.phase)).body);
+    showRecovery(body);
   }
 
   return (
@@ -310,20 +371,22 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
           <Link href="/paired">Paired</Link>
         </p>
       ) : null}
-      {build && preflightHash && approvedBuildId !== build.buildId ? (
+      {!signature && build && preflightHash && approvedBuildId !== build.buildId ? (
         <button type="button" disabled={busy} onClick={() => void approve()} className="rounded-lg border border-solid border-border px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
           Approve this build
         </button>
       ) : null}
-      <button
-        type="button"
-        disabled={!gate.allowed || busy}
-        onClick={() => void signAndSubmit()}
-        className="rounded-lg border border-solid border-accent bg-accent px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Sign with Phantom
-      </button>
-      {wire && phase !== "verified" ? (
+      {!signature ? (
+        <button
+          type="button"
+          disabled={!gate.allowed || busy}
+          onClick={() => void signAndSubmit()}
+          className="rounded-lg border border-solid border-accent bg-accent px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Sign with Phantom
+        </button>
+      ) : null}
+      {wire && !signature ? (
         <button
           type="button"
           disabled={busy || !build}
@@ -333,9 +396,9 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
           Retry submission
         </button>
       ) : null}
-      {build && signature ? (
+      {confirmationPending(phase) ? (
         <button type="button" disabled={busy} onClick={() => void refresh()} className="rounded-lg border border-solid border-border px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
-          Recover status
+          Check confirmation
         </button>
       ) : null}
     </div>

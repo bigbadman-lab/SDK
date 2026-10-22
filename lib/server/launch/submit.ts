@@ -327,7 +327,7 @@ async function readChain(signature: string, childMint: string): Promise<{
 export async function recoverSignedLaunch(input: {
   accountId: string;
   launchId: string;
-}): Promise<{ ok: true; status: string; broadcast: boolean; signature: string } | { ok: false; code: string }> {
+}): Promise<{ ok: true; status: string; broadcast: boolean; signature: string; childMint: string; parentMint: string; buyAmount: string; shareholders: StoredLaunchBuild["shareholders"] } | { ok: false; code: string }> {
   const sql = getSql();
   let existing: SubmissionIntent | null;
   let build: StoredLaunchBuild | null = null;
@@ -389,7 +389,7 @@ export async function recoverSignedLaunch(input: {
   } catch (error) {
     return { ok: false, code: schemaCode(error) === "missing_schema" ? "not_ready" : "unavailable" };
   }
-  return { ok: true, status: stamped.intent.status, broadcast: recovery.action === "rebroadcast", signature: intent.signature };
+  return { ok: true, status: stamped.intent.status, broadcast: recovery.action === "rebroadcast", signature: intent.signature, childMint: build.childMint, parentMint: build.parentMint, buyAmount: build.buyAmount, shareholders: build.shareholders };
 }
 
 async function currentCiphertext(sql: Sql, launchId: string): Promise<string | null> {

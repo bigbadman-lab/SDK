@@ -12,7 +12,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { PLATFORM_FEE_WALLET } from "../../../lib/launch/fees.ts";
 import { handle, type HandlerPorts } from "./handle.ts";
 import { observeQuoteParent } from "./chain.ts";
-import { loadLaunchEvidence } from "./evidence.ts";
+import { loadLaunchEvidence, transactionFromRpc } from "./evidence.ts";
 import { createLiveProducer } from "./live.ts";
 import { simulateUnsignedTransaction } from "./simulate.ts";
 import { createSql, postgresStores } from "./store.ts";
@@ -107,32 +107,18 @@ function livePorts(databaseUrl: string, rpcUrl: string): HandlerPorts {
               return info ? { owner: info.owner.toBase58(), data: info.data } : null;
             },
             async transaction(signature) {
-              const found = await connection.getTransaction(signature, {
-                commitment: "confirmed",
-                maxSupportedTransactionVersion: 1,
+              const response = await fetch(connection.rpcEndpoint, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: 1,
+                  method: "getTransaction",
+                  params: [signature, { encoding: "json", commitment: "confirmed", maxSupportedTransactionVersion: 1 }],
+                }),
               });
-              if (!found?.meta) {
-                return {
-                  status: found ? "uncertain" : "missing",
-                  error: false,
-                  slot: found ? String(found.slot) : null,
-                  preTokenBalances: [],
-                  postTokenBalances: [],
-                };
-              }
-              const balances = (rows: typeof found.meta.preTokenBalances) =>
-                (rows ?? []).map((row) => ({
-                  mint: row.mint,
-                  owner: row.owner ?? "",
-                  amount: row.uiTokenAmount.amount,
-                }));
-              return {
-                status: found.meta?.err ? "failed" : "confirmed",
-                error: found.meta?.err !== null,
-                slot: String(found.slot),
-                preTokenBalances: balances(found.meta?.preTokenBalances ?? []),
-                postTokenBalances: balances(found.meta?.postTokenBalances ?? []),
-              };
+              const payload = (await response.json()) as { result?: Parameters<typeof transactionFromRpc>[0] };
+              return transactionFromRpc(payload.result ?? null);
             },
           },
           { signature: input.signature, childMint: input.childMint, launcher: "" },

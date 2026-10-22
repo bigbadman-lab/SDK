@@ -14,6 +14,7 @@ const require = createRequire(import.meta.url);
 const pump = require("@pump-fun/pump-sdk") as {
   PumpSdk: new () => {
     decodeSharingConfig(account: { data: Buffer }): {
+      admin: { toBase58(): string };
       adminRevoked: boolean;
       shareholders: { address: { toBase58(): string }; shareBps: number | { toNumber(): number } }[];
     };
@@ -25,6 +26,39 @@ const pump = require("@pump-fun/pump-sdk") as {
   feeSharingConfigPda: (mint: PublicKey) => PublicKey;
   bondingCurvePda: (mint: PublicKey) => PublicKey;
 };
+
+export function transactionFromRpc(result: {
+  slot?: number | string;
+  meta?: {
+    err?: unknown;
+    preTokenBalances?: { mint?: string; owner?: string; uiTokenAmount?: { amount?: string } }[] | null;
+    postTokenBalances?: { mint?: string; owner?: string; uiTokenAmount?: { amount?: string } }[] | null;
+  } | null;
+} | null): ChainTransaction {
+  const balances = (rows: { mint?: string; owner?: string; uiTokenAmount?: { amount?: string } }[] | null | undefined) =>
+    (rows ?? []).map((row) => ({
+      mint: row.mint ?? "",
+      owner: row.owner ?? "",
+      amount: row.uiTokenAmount?.amount ?? "0",
+    }));
+  if (!result) return { status: "missing", error: false, slot: null, preTokenBalances: [], postTokenBalances: [] };
+  if (!result.meta) {
+    return {
+      status: "uncertain",
+      error: false,
+      slot: result.slot === undefined ? null : String(result.slot),
+      preTokenBalances: [],
+      postTokenBalances: [],
+    };
+  }
+  return {
+    status: result.meta.err ? "failed" : "confirmed",
+    error: result.meta.err != null,
+    slot: result.slot === undefined ? null : String(result.slot),
+    preTokenBalances: balances(result.meta.preTokenBalances),
+    postTokenBalances: balances(result.meta.postTokenBalances),
+  };
+}
 
 const decoder = new pump.PumpSdk();
 
@@ -87,14 +121,25 @@ export function evidenceFromAccounts(input: {
   }
   let shareholders: { address: string; shareBps: number }[] | null = null;
   let adminRevoked: boolean | null = null;
+  let sharingAdmin: string | null = null;
   if (input.sharingAccount?.owner === EXPECTED_PROGRAMS.fee) {
     try {
       const sharing = decoder.decodeSharingConfig({ data: Buffer.from(input.sharingAccount.data) });
       adminRevoked = sharing.adminRevoked === true;
+      sharingAdmin = sharing.admin.toBase58();
       shareholders = sharing.shareholders.map((row) => ({ address: row.address.toBase58(), shareBps: bps(row.shareBps) }));
     } catch {
       shareholders = null;
       adminRevoked = null;
+      sharingAdmin = null;
+    }
+  }
+  if (launcher && sharingAdmin) {
+    try {
+      const sharingConfig = pump.feeSharingConfigPda(new PublicKey(input.childMint)).toBase58();
+      if (launcher === sharingConfig) launcher = sharingAdmin;
+    } catch {
+      // Keep the curve creator when the mint address cannot derive a sharing config.
     }
   }
   let buyExecuted: boolean | null = null;
@@ -112,7 +157,7 @@ export function evidenceFromAccounts(input: {
     tokenProgram,
     quoteMint,
     launcher,
-    metadataUri: uriFromAccount(input.metadataAccount),
+    metadataUri: uriFromAccount(input.metadataAccount) ?? uriFromAccount(input.mintAccount),
     shareholders,
     adminRevoked,
     buyExecuted,
