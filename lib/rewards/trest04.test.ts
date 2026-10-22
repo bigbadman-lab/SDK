@@ -235,6 +235,33 @@ test("a full sweep records liabilities without reducing the transferable balance
   assert.ok(!("ok" in plan));
   if ("ok" in plan) return;
   assert.equal(plan.solLamports, "9104120");
+  const protectedSweep = planSweep({
+    parent: "trest",
+    destination: DESTINATION,
+    signer: DEPLOYER,
+    solBalance: "10000000",
+    rentMinimum: "890880",
+    feeReserve: "5000",
+    tokenBalance: "0",
+    liabilities: { ...liabilities, unallocated: "80140307" },
+    inFlightClaim: false,
+    inFlightBuyback: false,
+    suspended: false,
+    alreadyExecuted: false,
+  });
+  assert.ok(!("ok" in protectedSweep));
+  if ("ok" in protectedSweep) return;
+  const blockedSweep = authoriseSweep({
+    requested: "execute",
+    executionEnabled: true,
+    liabilityAuthorised: true,
+    approval: "a".repeat(32),
+    plan: protectedSweep,
+    parent: "trest",
+    signer: DEPLOYER,
+    destination: DESTINATION,
+  });
+  assert.deepEqual(blockedSweep, { ok: false, code: "deferred_protected" });
   assert.equal(plan.tokenAmount, "250000");
   assert.equal(plan.shortfall, true);
   assert.equal(plan.liabilities.claimableSol, "3000000");

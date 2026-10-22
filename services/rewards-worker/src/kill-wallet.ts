@@ -61,6 +61,8 @@ export async function cliMain(argv: string[], env: Env, io: SweepIo = {}): Promi
     const derived = derivedDeployerAddress(env.TREST_DEPLOYER_PRIVATE_KEY);
     if (!derived || derived !== signer) return { code: 2, out: "signer_mismatch" };
   }
+  const liabilities = io.liabilities ?? await deferredSweepHold(env);
+  if (!liabilities) return { code: 2, out: "deferred_unprotected" };
   const planned = planSweep({
     parent,
     destination,
@@ -69,7 +71,7 @@ export async function cliMain(argv: string[], env: Env, io: SweepIo = {}): Promi
     rentMinimum: io.rentMinimum ?? "0",
     feeReserve: "5000",
     tokenBalance: io.tokenBalance ?? "0",
-    liabilities: io.liabilities ?? ZERO,
+    liabilities,
     inFlightClaim: io.inFlightClaim === true,
     inFlightBuyback: io.inFlightBuyback === true,
     suspended: env.TREST_SIGNER_SUSPENDED === "true",
@@ -136,6 +138,30 @@ function summarise(plan: SweepPlan, mode: string): string {
     "ledger=recorded",
     "custody=deployer_wallet",
   ].join("\n");
+}
+
+async function deferredSweepHold(env: Env): Promise<SweepLiabilities | null> {
+  const url = env.DATABASE_URL?.trim() ?? "";
+  if (!url) return ZERO;
+  const { createSql } = await import("./postgres.ts");
+  const sql = createSql(url);
+  try {
+    const rows = await sql<{ held: string }[]>`
+      select coalesce(sum(recovery.holder_lamports + recovery.buyback_lamports + recovery.deployer_lamports), 0)::text as held
+      from reward_collection_recoveries recovery
+      join reward_collections receipt on receipt.signature = recovery.signature
+      where receipt.allocation_deferred = true
+        and receipt.allocated_at is null
+        and receipt.status = 'confirmed'
+        and receipt.credited = true
+        and recovery.scope = 'test'
+    `;
+    return { ...ZERO, unallocated: rows[0]?.held ?? "0" };
+  } catch {
+    return null;
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
 }
 
 async function persistSweep(env: Env, plan: SweepPlan, audit: SweepAudit, parentMint: string): Promise<void> {

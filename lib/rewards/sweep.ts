@@ -98,12 +98,13 @@ export function authoriseSweep(input: {
   parent: SweepParent;
   signer: string;
   destination: string;
-}): { ok: true; mode: "dry-run" | "execute" } | { ok: false; code: "approval_required" | "destination" | "duplicate" | "execution_disabled" | "holder_liability_unauthorised" | "in_flight" | "locked" | "parent" | "signer" | "suspended" } {
+}): { ok: true; mode: "dry-run" | "execute" } | { ok: false; code: "approval_required" | "deferred_protected" | "destination" | "duplicate" | "execution_disabled" | "holder_liability_unauthorised" | "in_flight" | "locked" | "parent" | "signer" | "suspended" } {
   if (input.plan.parent !== input.parent) return { ok: false, code: "parent" };
   if (input.plan.signer !== input.signer) return { ok: false, code: "signer" };
   if (input.plan.destination !== input.destination) return { ok: false, code: "destination" };
   if (input.requested === "dry-run") return { ok: true, mode: "dry-run" };
   if (!input.executionEnabled) return { ok: false, code: "execution_disabled" };
+  if ((parse(input.plan.liabilities.unallocated) ?? BigInt(0)) > BigInt(0)) return { ok: false, code: "deferred_protected" };
   if (!input.approval || input.approval.length < 32) return { ok: false, code: "approval_required" };
   if (input.plan.suspended) return { ok: false, code: "suspended" };
   if (input.plan.locked) return { ok: false, code: "locked" };

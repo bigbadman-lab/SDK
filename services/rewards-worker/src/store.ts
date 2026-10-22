@@ -146,6 +146,9 @@ export type SolObligations = {
   deployerRetained: string;
   buybackSol: string;
   confirmedBuybackSol: string;
+  deferredHolderLamports: string;
+  deferredBuybackLamports: string;
+  deferredDeployerLamports: string;
 };
 
 export type WindowAllocation =
@@ -295,12 +298,23 @@ export function memoryStore(seed: {
       const confirmedBuyback = intents
         .filter((intent) => intent.parentMint === parentMint && intent.scope === scope && intent.kind === "buyback" && intent.status === "confirmed")
         .reduce((total, intent) => total + BigInt(intent.amountLamports ?? "0"), BigInt(0));
+      const deferredReceipts = receipts.filter((receipt) => receipt.parentMint === parentMint && receipt.scope === scope && receipt.allocationDeferred && !receipt.allocated);
+      const deferredFor = (pick: (row: (typeof collectionRecoveries)[number]) => string) => deferredReceipts.reduce((total, receipt) => {
+        const audit = collectionRecoveries.find((row) => row.signature === receipt.signature);
+        return total + BigInt(audit ? pick(audit) : "0");
+      }, BigInt(0));
+      const recordedBuyback = BigInt(sum((row) => row.buyback));
+      const excessBuyback = confirmedBuyback > recordedBuyback ? confirmedBuyback - recordedBuyback : BigInt(0);
+      const deferredBuyback = deferredFor((row) => row.buybackLamports);
       return {
         holderSol: sum((row) => row.holders),
         confirmedHolderSol: confirmedHolder.toString(),
         deployerRetained: sum((row) => row.deployer),
         buybackSol: sum((row) => row.buyback),
         confirmedBuybackSol: confirmedBuyback.toString(),
+        deferredHolderLamports: deferredFor((row) => row.holderLamports).toString(),
+        deferredBuybackLamports: (deferredBuyback > excessBuyback ? deferredBuyback - excessBuyback : BigInt(0)).toString(),
+        deferredDeployerLamports: deferredFor((row) => row.deployerLamports).toString(),
       };
     },
     async allocateUnallocated(input) {

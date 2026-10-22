@@ -507,6 +507,9 @@ test("a buyback cannot spend SOL reserved for holders, the deployer, or an earli
     unpaidHolderLamports: "30",
     deployerRetainedLamports: "40",
     unspentPriorBuybackLamports: "0",
+    deferredHolderLamports: "0",
+    deferredBuybackLamports: "0",
+    deferredDeployerLamports: "0",
   });
   assert.equal(covered.ok, true);
   const short = buybackSpendAllowed({
@@ -516,6 +519,9 @@ test("a buyback cannot spend SOL reserved for holders, the deployer, or an earli
     unpaidHolderLamports: "30",
     deployerRetainedLamports: "40",
     unspentPriorBuybackLamports: "0",
+    deferredHolderLamports: "0",
+    deferredBuybackLamports: "0",
+    deferredDeployerLamports: "0",
   });
   assert.equal(short.ok, false);
   if (short.ok) return;
@@ -527,6 +533,45 @@ test("a buyback cannot spend SOL reserved for holders, the deployer, or an earli
     unpaidHolderLamports: "30",
     deployerRetainedLamports: "40",
     unspentPriorBuybackLamports: "0",
+    deferredHolderLamports: "0",
+    deferredBuybackLamports: "0",
+    deferredDeployerLamports: "0",
   });
   assert.equal(reserved.ok, false);
+  const net = "85140307";
+  const deferred = {
+    deferredHolderLamports: "24042092",
+    deferredBuybackLamports: "24042092",
+    deferredDeployerLamports: "32056123",
+  };
+  const protectedCollection = buybackSpendAllowed({
+    walletLamports: net,
+    buybackLamports: "1",
+    reserveLamports: "5000000",
+    unpaidHolderLamports: "0",
+    deployerRetainedLamports: "0",
+    unspentPriorBuybackLamports: "0",
+    ...deferred,
+  });
+  assert.equal(protectedCollection.ok, false);
+  const unrelated = buybackSpendAllowed({
+    walletLamports: (BigInt(net) + BigInt(30)).toString(),
+    buybackLamports: "30",
+    reserveLamports: "5000000",
+    unpaidHolderLamports: "0",
+    deployerRetainedLamports: "0",
+    unspentPriorBuybackLamports: "0",
+    ...deferred,
+  });
+  assert.equal(unrelated.ok, true);
+  const countedTwice = buybackSpendAllowed({
+    walletLamports: (BigInt(net) + BigInt(30)).toString(),
+    buybackLamports: "30",
+    reserveLamports: "5000000",
+    unpaidHolderLamports: deferred.deferredHolderLamports,
+    deployerRetainedLamports: deferred.deferredDeployerLamports,
+    unspentPriorBuybackLamports: deferred.deferredBuybackLamports,
+    ...deferred,
+  });
+  assert.equal(countedTwice.ok, false);
 });

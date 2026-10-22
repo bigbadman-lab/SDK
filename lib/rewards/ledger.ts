@@ -99,6 +99,9 @@ export function buybackSpendAllowed(input: {
   unpaidHolderLamports: string;
   deployerRetainedLamports: string;
   unspentPriorBuybackLamports: string;
+  deferredHolderLamports: string;
+  deferredBuybackLamports: string;
+  deferredDeployerLamports: string;
 }): { ok: true } | { ok: false; code: "amount" | "unfunded" } {
   const wallet = parseAmount(input.walletLamports);
   const buyback = parseAmount(input.buybackLamports);
@@ -106,11 +109,19 @@ export function buybackSpendAllowed(input: {
   const holders = parseAmount(input.unpaidHolderLamports);
   const deployer = parseAmount(input.deployerRetainedLamports);
   const prior = parseAmount(input.unspentPriorBuybackLamports);
-  if (wallet === null || buyback === null || reserve === null || holders === null || deployer === null || prior === null) {
+  const deferredHolders = parseAmount(input.deferredHolderLamports);
+  const deferredBuyback = parseAmount(input.deferredBuybackLamports);
+  const deferredDeployer = parseAmount(input.deferredDeployerLamports);
+  if (
+    wallet === null || buyback === null || reserve === null || holders === null || deployer === null || prior === null
+    || deferredHolders === null || deferredBuyback === null || deferredDeployer === null
+  ) {
     return { ok: false, code: "amount" };
   }
   if (buyback <= BigInt(0) || wallet < BigInt(0)) return { ok: false, code: "amount" };
-  if (wallet < buyback + reserve + holders + deployer + prior) return { ok: false, code: "unfunded" };
+  if (wallet < buyback + reserve + holders + deployer + prior + deferredHolders + deferredBuyback + deferredDeployer) {
+    return { ok: false, code: "unfunded" };
+  }
   return { ok: true };
 }
 

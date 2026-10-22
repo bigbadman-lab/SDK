@@ -101,12 +101,33 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
             where parent_mint_address = ${parentMint} and scope = ${scope} and kind = 'buyback' and status = 'confirmed'
           ), 0)::text as buyback
       `;
+      const deferred = await sql<{ holders: string; buyback: string; deployer: string }[]>`
+        select
+          coalesce(sum(recovery.holder_lamports), 0)::text as holders,
+          coalesce(sum(recovery.buyback_lamports), 0)::text as buyback,
+          coalesce(sum(recovery.deployer_lamports), 0)::text as deployer
+        from reward_collection_recoveries recovery
+        join reward_collections receipt on receipt.signature = recovery.signature
+        where recovery.parent_mint_address = ${parentMint}
+          and recovery.scope = ${scope}
+          and receipt.allocation_deferred = true
+          and receipt.allocated_at is null
+          and receipt.status = 'confirmed'
+          and receipt.credited = true
+      `;
+      const recordedBuyback = BigInt(liabilities[0]?.buyback ?? "0");
+      const confirmedBuyback = BigInt(paid[0]?.buyback ?? "0");
+      const excessBuyback = confirmedBuyback > recordedBuyback ? confirmedBuyback - recordedBuyback : BigInt(0);
+      const deferredBuyback = BigInt(deferred[0]?.buyback ?? "0");
       return {
         holderSol: liabilities[0]?.holder ?? "0",
         confirmedHolderSol: paid[0]?.holder ?? "0",
         deployerRetained: liabilities[0]?.deployer ?? "0",
         buybackSol: liabilities[0]?.buyback ?? "0",
         confirmedBuybackSol: paid[0]?.buyback ?? "0",
+        deferredHolderLamports: deferred[0]?.holders ?? "0",
+        deferredBuybackLamports: (deferredBuyback > excessBuyback ? deferredBuyback - excessBuyback : BigInt(0)).toString(),
+        deferredDeployerLamports: deferred[0]?.deployer ?? "0",
       };
     },
     async allocateUnallocated(input): Promise<WindowAllocation> {
@@ -434,7 +455,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           `;
           const marked = await tx<{ id: string }[]>`
             update reward_intents
-            set status = 'confirmed', updated_at = now()
+            set status = 'confirmed'
             where parent_mint_address = ${input.parentMint}
               and scope = ${input.scope}
               and idempotency_key = ${input.idempotencyKey}

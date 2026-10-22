@@ -843,3 +843,180 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   `;
   assert.equal(productionControl[0]?.reserve, "0");
 });
+
+test("the confirmed collection recovery commits on the migrated schema and protects deferred funds", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "sdk-rewards-recovery-"));
+  const recoveryDb = new EmbeddedPostgres({
+    databaseDir: directory,
+    user: "sdk_rewards",
+    password: "sdk_rewards_local",
+    port: 55436,
+    persistent: false,
+    onLog: () => undefined,
+    onError: () => undefined,
+  });
+  const mint = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+  const signature = "3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF";
+  let recoverySql: ReturnType<typeof createSql> | null = null;
+  try {
+    await recoveryDb.initialise();
+    await recoveryDb.start();
+    await recoveryDb.createDatabase("rewards");
+    recoverySql = createSql("postgres://sdk_rewards:sdk_rewards_local@127.0.0.1:55436/rewards");
+    await recoverySql.unsafe(`
+      do $$ begin
+        if not exists (select 1 from pg_roles where rolname = 'anon') then create role anon nologin; end if;
+        if not exists (select 1 from pg_roles where rolname = 'authenticated') then create role authenticated nologin; end if;
+      end $$;
+      create schema if not exists storage;
+      create table if not exists storage.buckets (
+        id text primary key, name text, public boolean, file_size_limit bigint, allowed_mime_types text[]
+      );
+    `);
+    const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
+    const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
+    for (const file of files) await recoverySql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
+    await recoverySql`
+      insert into parent_registrations (
+        scope, symbol, mint_address, deployer_address, fee_recipient_address, fee_mode,
+        token_program, decimals, graduated, quote_mint_address, eligible, eligibility_reason,
+        verified_at, registered_by, evidence_hash
+      ) values (
+        'test', 'TREST', ${mint}, ${DEPLOYER}, ${DEPLOYER}, 'single_recipient',
+        'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb', 6, false,
+        '11111111111111111111111111111111', true, 'verified', now(), ${DEPLOYER}, ${HASH}
+      )
+    `;
+    await recoverySql`
+      insert into reward_intents (
+        parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, signature, amount_lamports
+      )
+      select id, ${mint}, 'test', 'collect', 'collect-1792603200000', 'uncertain', ${signature}, 0
+      from parent_registrations where mint_address = ${mint}
+    `;
+    const store = postgresRewardsStore(recoverySql);
+    const recovery = {
+      parentMint: mint,
+      scope: "test" as const,
+      idempotencyKey: "collect-1792603200000",
+      signature,
+      priorStatus: "uncertain" as const,
+      approval: "TREST-07J-COLLECTION-RECOVERY",
+      operator: "trest-07k",
+      reason: "reconcile the confirmed 21 October creator-fee collection",
+      grossLamports: "85145307",
+      feeLamports: "5000",
+      netLamports: "85140307",
+      reserveLamports: "5000000",
+      holderLamports: "24042092",
+      buybackLamports: "24042092",
+      deployerLamports: "32056123",
+      snapshotStatus: "historical_unavailable" as const,
+      gross: "85145307",
+      fee: "5000",
+      native: "85145307",
+      wsolConverted: "0",
+      rentExcluded: "0",
+      slot: "459711211",
+    };
+    assert.equal(await store.commitCollectionRecovery({ ...recovery, amountLamports: "90000000" }), "rejected");
+    const rolled = await recoverySql`
+      select
+        (select count(*)::int from reward_collection_recoveries) as audits,
+        (select count(*)::int from reward_collections) as receipts,
+        (select status from reward_intents where idempotency_key = 'collect-1792603200000') as status
+    `;
+    assert.equal(Number(rolled[0]?.audits), 0);
+    assert.equal(Number(rolled[0]?.receipts), 0);
+    assert.equal(rolled[0]?.status, "uncertain");
+    assert.equal(await store.commitCollectionRecovery({ ...recovery, amountLamports: "85140307" }), "ok");
+    assert.equal(await store.commitCollectionRecovery({ ...recovery, amountLamports: "85140307" }), "duplicate");
+    const saved = await recoverySql`
+      select
+        receipt.id::text as receipt_id,
+        receipt.amount_lamports::text as amount,
+        receipt.network_fee_lamports::text as fee,
+        receipt.allocation_deferred,
+        receipt.slot::text as slot,
+        audit.id::text as audit_id,
+        intent.status,
+        intent.signature,
+        (select count(*)::int from reward_collections) as receipts,
+        (select count(*)::int from reward_collection_recoveries) as audits,
+        (select count(*)::int from reward_snapshots where parent_mint_address = ${mint}) as snapshots,
+        (select count(*)::int from reward_liabilities where parent_mint_address = ${mint}) as liabilities
+      from reward_collections receipt
+      join reward_collection_recoveries audit on audit.signature = receipt.signature
+      join reward_intents intent on intent.signature = receipt.signature
+    `;
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0]?.amount, "85140307");
+    assert.equal(saved[0]?.fee, "5000");
+    assert.equal(saved[0]?.allocation_deferred, true);
+    assert.equal(saved[0]?.slot, "459711211");
+    assert.equal(saved[0]?.status, "confirmed");
+    assert.equal(saved[0]?.signature, signature);
+    assert.equal(Number(saved[0]?.receipts), 1);
+    assert.equal(Number(saved[0]?.audits), 1);
+    assert.equal(Number(saved[0]?.snapshots), 0);
+    assert.equal(Number(saved[0]?.liabilities), 0);
+    assert.ok(saved[0]?.receipt_id);
+    assert.ok(saved[0]?.audit_id);
+    const protectedFunds = await store.solObligations(mint, "test");
+    assert.deepEqual({
+      holders: protectedFunds.deferredHolderLamports,
+      buyback: protectedFunds.deferredBuybackLamports,
+      deployer: protectedFunds.deferredDeployerLamports,
+      recordedHolders: protectedFunds.holderSol,
+    }, {
+      holders: "24042092",
+      buyback: "24042092",
+      deployer: "32056123",
+      recordedHolders: "0",
+    });
+    const windowKey = rewardWindowKey(mint, "test", START + 1);
+    assert.ok(windowKey);
+    assert.equal(await store.saveReceipt({
+      signature: "H".repeat(88),
+      parentMint: mint,
+      scope: "test",
+      amountLamports: "1000",
+      slot: "45",
+      confirmed: true,
+      source: "creator_vault",
+      gross: "1000",
+      fee: "0",
+      native: "1000",
+      wsolConverted: "0",
+      rentExcluded: "0",
+    }), "ok");
+    const ordinary = await store.allocateUnallocated({ parentMint: mint, scope: "test", windowKey, reserveLamports: "0" });
+    assert.equal(ordinary.ok, true);
+    if (!ordinary.ok || ordinary.state !== "allocated") return;
+    assert.equal(ordinary.holders, "300");
+    const combined = await store.solObligations(mint, "test");
+    assert.equal(combined.holderSol, "300");
+    assert.equal(combined.deferredHolderLamports, "24042092");
+    const deferredOnly = await store.allocateUnallocated({
+      parentMint: mint,
+      scope: "test",
+      windowKey: rewardWindowKey(mint, "test", START + 300_001) ?? "",
+      reserveLamports: "5000000",
+    });
+    assert.deepEqual(deferredOnly, { ok: true, state: "empty" });
+    await recoverySql`
+      update reward_collections
+      set allocated_at = now(), reserve_withheld_lamports = amount_lamports
+      where signature = ${signature}
+    `;
+    const handedOff = await store.solObligations(mint, "test");
+    assert.equal(handedOff.deferredHolderLamports, "0");
+    assert.equal(handedOff.deferredBuybackLamports, "0");
+    assert.equal(handedOff.deferredDeployerLamports, "0");
+    assert.equal(handedOff.holderSol, "300");
+  } finally {
+    await recoverySql?.end({ timeout: 5 });
+    await recoveryDb.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

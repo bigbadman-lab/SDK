@@ -196,6 +196,13 @@ test("the confirmed collection recovers one receipt and does not allocate or buy
   assert.equal(receipts.length, 1);
   assert.equal(receipts[0]?.amountLamports, CONFIRMED_COLLECTION.net);
   assert.equal(receipts[0]?.slot, CONFIRMED_COLLECTION.slot);
+  const obligations = await store.solObligations(TREST_REHEARSAL_MINT, "test");
+  assert.equal(obligations.holderSol, "0");
+  assert.equal(obligations.buybackSol, "0");
+  assert.equal(obligations.deployerRetained, "0");
+  assert.equal(obligations.deferredHolderLamports, CONFIRMED_COLLECTION.holders);
+  assert.equal(obligations.deferredBuybackLamports, CONFIRMED_COLLECTION.buyback);
+  assert.equal(obligations.deferredDeployerLamports, CONFIRMED_COLLECTION.deployerRetained);
   const intent = (await store.intents(TREST_REHEARSAL_MINT, "test")).find((row) => row.idempotencyKey === CONFIRMED_COLLECTION.idempotencyKey);
   assert.equal(intent?.status, "confirmed");
   assert.equal(intent?.signature, CONFIRMED_COLLECTION.signature);

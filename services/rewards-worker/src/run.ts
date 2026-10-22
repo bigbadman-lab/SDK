@@ -537,6 +537,9 @@ async function execute(
     unpaidHolderLamports: unpaidHolders.toString(),
     deployerRetainedLamports: obligations.deployerRetained,
     unspentPriorBuybackLamports: unspentPrior.toString(),
+    deferredHolderLamports: obligations.deferredHolderLamports,
+    deferredBuybackLamports: obligations.deferredBuybackLamports,
+    deferredDeployerLamports: obligations.deferredDeployerLamports,
   });
   if (!covered.ok) return { ok: false, code: covered.code === "amount" ? "unreconciled" : "unfunded" };
   const authorised = authoriseBucketSpend({
@@ -709,7 +712,9 @@ export async function submitClaim(input: {
     .reduce((sum, claim) => sum + BigInt(claim.amount), BigInt(0));
   if (claimed + BigInt(input.amount) > entitlement) return { ok: false, code: "amount" };
   const wallet = await input.chain.account(parent.deployerAddress);
-  if (!wallet || BigInt(wallet.lamports) < BigInt(input.amount) + BigInt(control.reserveLamports)) return { ok: false, code: "unfunded" };
+  const obligations = await input.store.solObligations(parent.mintAddress, parent.scope);
+  const deferredHold = BigInt(obligations.deferredHolderLamports) + BigInt(obligations.deferredBuybackLamports) + BigInt(obligations.deferredDeployerLamports);
+  if (!wallet || BigInt(wallet.lamports) < BigInt(input.amount) + BigInt(control.reserveLamports) + deferredHold) return { ok: false, code: "unfunded" };
   const instruction = input.asset === "sol"
     ? buildSolClaim({
         parentMint: parent.mintAddress,
