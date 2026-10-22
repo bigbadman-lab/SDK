@@ -25,6 +25,8 @@ export type SubmissionIntent = {
   messageHash: string;
   status: SubmissionStatus;
   wireRetained: boolean;
+  slot?: string | null;
+  verifiedAtMs?: number | null;
 };
 
 export type SubmissionDraft = Omit<SubmissionIntent, "status">;

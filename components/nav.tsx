@@ -12,6 +12,8 @@ const LINKS = [
   { label: "Builder", href: "/build" },
   { label: "Library", href: "/library" },
   { label: "Launch", href: "/launch" },
+  { label: "Paired", href: "/paired" },
+  { label: "Feed", href: "/feed" },
   { label: "Code", href: "/code" },
   { label: "Scope", href: "/#scope" },
   { label: "About", href: "/about" },

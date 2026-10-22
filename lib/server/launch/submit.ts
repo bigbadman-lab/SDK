@@ -1,6 +1,8 @@
 import "server-only";
 
+import { writeSubmission } from "@/lib/launch/registry";
 import { noteBroadcast, noteVerification, type SubmissionIntent } from "@/lib/launch/submission";
+import { verificationStamp, type VerificationStamp } from "@/lib/launch/verified-launch";
 import { openWire, sealWire } from "@/lib/launch/wire";
 import { verifyLaunchEvidence, type LaunchEvidence } from "@/lib/launch/chain-evidence";
 import { broadcastSignedTransaction, type BroadcastOutcome } from "@/lib/launch/broadcast";
@@ -133,9 +135,11 @@ async function loadSubmission(sql: Sql, launchId: string): Promise<SubmissionInt
     message_hash: string;
     status: SubmissionIntent["status"];
     wire_ciphertext: string | null;
+    slot: string | null;
+    verified_at: Date | null;
   }[]>`
     select launch_id, build_id, child_mint_address, parent_mint_address, scope, wallet_address,
-      signature, message_hash, status, wire_ciphertext
+      signature, message_hash, status, wire_ciphertext, slot::text as slot, verified_at
     from launch_submissions
     where launch_id = ${launchId}
   `;
@@ -152,6 +156,8 @@ async function loadSubmission(sql: Sql, launchId: string): Promise<SubmissionInt
     messageHash: row.message_hash,
     status: row.status,
     wireRetained: row.wire_ciphertext !== null,
+    slot: row.slot,
+    verifiedAtMs: row.verified_at ? new Date(row.verified_at).getTime() : null,
   };
 }
 
@@ -169,28 +175,31 @@ async function loadApproval(sql: Sql, launchId: string, buildId: string): Promis
   }
 }
 
-async function saveSubmission(sql: Sql, intent: SubmissionIntent, accountId: string, ciphertext: string): Promise<"ok" | "conflict"> {
-  const rows = await sql.begin(async (tx) => {
-    await tx`select id from token_launches where id = ${intent.launchId} for update`;
-    return tx<{ id: string }[]>`
-      insert into launch_submissions (
-        launch_id, build_id, account_id, wallet_address, child_mint_address, parent_mint_address,
-        scope, signature, message_hash, status, wire_ciphertext
-      ) values (
-        ${intent.launchId}, ${intent.buildId}, ${accountId}, ${intent.wallet}, ${intent.childMint},
-        ${intent.parentMint}, ${intent.scope}, ${intent.signature}, ${intent.messageHash}, ${intent.status},
-        ${ciphertext}
-      )
-      on conflict (launch_id) do update
-      set status = excluded.status
-      where launch_submissions.signature = excluded.signature
-        and launch_submissions.message_hash = excluded.message_hash
-        and launch_submissions.build_id = excluded.build_id
-        and launch_submissions.child_mint_address = excluded.child_mint_address
-      returning id
-    `;
+function stampedIntent(intent: SubmissionIntent, evidenceSlot: string | null, nowMs: number): {
+  intent: SubmissionIntent;
+  stamp: VerificationStamp;
+} {
+  const stamp = verificationStamp({
+    status: intent.status,
+    evidenceSlot,
+    nowMs,
+    storedSlot: intent.slot ?? null,
+    storedVerifiedAtMs: intent.verifiedAtMs ?? null,
   });
-  return rows[0] ? "ok" : "conflict";
+  return {
+    stamp,
+    intent: { ...intent, status: stamp.status, slot: stamp.slot, verifiedAtMs: stamp.verifiedAtMs },
+  };
+}
+
+async function saveSubmission(
+  sql: Sql,
+  intent: SubmissionIntent,
+  accountId: string,
+  ciphertext: string,
+  stamp: VerificationStamp,
+): Promise<"ok" | "conflict"> {
+  return writeSubmission(sql, { intent, accountId, ciphertext, stamp });
 }
 
 async function rpcSend(wire: Uint8Array): Promise<BroadcastOutcome> {
@@ -247,8 +256,9 @@ export async function submitSignedLaunch(input: {
   if (!plan.ok) return plan;
   const sealed = sealWire(input.transaction, key);
   if (!sealed.ok || !sealed.retained) return { ok: false, code: "wire_key" };
+  const pending = stampedIntent(plan.intent, null, Date.now());
   try {
-    const saved = await saveSubmission(sql, plan.intent, input.accountId, sealed.ciphertext);
+    const saved = await saveSubmission(sql, pending.intent, input.accountId, sealed.ciphertext, pending.stamp);
     if (saved === "conflict") return { ok: false, code: "conflict" };
   } catch (error) {
     const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
@@ -256,17 +266,17 @@ export async function submitSignedLaunch(input: {
     return { ok: false, code: schemaCode(error) === "missing_schema" ? "not_ready" : "unavailable" };
   }
   if (plan.broadcast !== "send" || !build || !approvalMatches(build, approval)) {
-    return { ok: true, status: plan.intent.status, broadcast: false, signature: plan.intent.signature };
+    return { ok: true, status: pending.intent.status, broadcast: false, signature: plan.intent.signature };
   }
   const sent = await broadcastSignedTransaction({ wire: input.transaction, authorised: true, rpc: rpcSend });
   const outcome = sent.ok ? sent.outcome : "unknown";
-  const next = noteBroadcast(plan.intent, outcome);
+  const next = stampedIntent(noteBroadcast(pending.intent, outcome), null, Date.now());
   try {
-    await saveSubmission(sql, next, input.accountId, sealed.ciphertext);
+    await saveSubmission(sql, next.intent, input.accountId, sealed.ciphertext, next.stamp);
   } catch {
     return { ok: true, status: "uncertain", broadcast: true, signature: plan.intent.signature };
   }
-  return { ok: true, status: next.status, broadcast: true, signature: next.signature };
+  return { ok: true, status: next.intent.status, broadcast: true, signature: next.intent.signature };
 }
 
 async function readChain(signature: string, childMint: string): Promise<{
@@ -365,13 +375,17 @@ export async function recoverSignedLaunch(input: {
     const sent = await broadcastSignedTransaction({ wire: opened.wire, authorised: true, rpc: rpcSend });
     intent = noteBroadcast(intent, sent.ok ? sent.outcome : "unknown");
   }
+  const stamped = stampedIntent(intent, chain.evidence?.slot ?? null, Date.now());
   try {
     const ciphertext = await currentCiphertext(sql, existing.launchId);
-    if (ciphertext) await saveSubmission(sql, intent, input.accountId, ciphertext);
+    if (ciphertext) {
+      const saved = await saveSubmission(sql, stamped.intent, input.accountId, ciphertext, stamped.stamp);
+      if (saved === "conflict") return { ok: false, code: "conflict" };
+    }
   } catch (error) {
     return { ok: false, code: schemaCode(error) === "missing_schema" ? "not_ready" : "unavailable" };
   }
-  return { ok: true, status: intent.status, broadcast: recovery.action === "rebroadcast", signature: intent.signature };
+  return { ok: true, status: stamped.intent.status, broadcast: recovery.action === "rebroadcast", signature: intent.signature };
 }
 
 async function currentCiphertext(sql: Sql, launchId: string): Promise<string | null> {

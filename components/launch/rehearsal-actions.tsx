@@ -2,10 +2,13 @@
 
 import { useAppKitAccount } from "@reown/appkit/react";
 import { getWallets } from "@wallet-standard/app";
+import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { loadBrowserSession } from "@/lib/auth/browser-session";
+import { networkCostCopy } from "@/lib/launch/cost";
 import { launchMessage } from "@/lib/launch/messages";
+import { audiencePair } from "@/lib/launch/verified-launch";
 import type { LaunchReview } from "@/lib/launch/prepare";
 import { recoveryPhase, rehearsalSignAllowed } from "@/lib/launch/rehearsal-flow";
 import { launchLifecycleCopy, type LaunchLifecycle } from "@/lib/launch/signing-phase";
@@ -146,6 +149,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     mintAvailable,
   });
   const copy = launchLifecycleCopy(asLifecycle(phase));
+  const pair = audiencePair(true);
 
   async function approve() {
     if (!build) return;
@@ -264,21 +268,34 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
 
   return (
     <div className="mt-4 grid gap-3" data-rehearsal="trest">
-      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">TREST rehearsal</p>
-      {build ? (
-        <dl className="grid gap-2 text-[14px] leading-[1.45]">
-          <Pair term="Parent mint" value={build.parentMint} />
-          <Pair term="Child mint" value={build.childMint} />
-          <Pair term="Developer buy" value={build.buyAmount === "0" ? "None" : `${build.buyAmount} TREST`} />
-          <Pair
-            term="Fee shares"
-            value={build.shareholders.map((row) => `${row.address} ${row.shareBps} bps`).join(" · ") || review.feeLabel}
-          />
-        </dl>
-      ) : null}
+      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">{pair.label} rehearsal</p>
+      <dl className="grid gap-2 text-[14px] leading-[1.45]">
+        <Pair term="Quote" value={pair.label} />
+        <Pair term="Creator fees" value={review.feeLabel} />
+        <Pair term="Network" value={networkCostCopy()} />
+        {build ? (
+          <>
+            <Pair term="Parent mint" value={build.parentMint} />
+            <Pair term="Child mint" value={build.childMint} />
+            <Pair term="Developer buy" value={build.buyAmount === "0" ? "None" : `${build.buyAmount} ${pair.label}`} />
+            <Pair
+              term="Fee shares"
+              value={build.shareholders.map((row) => `${row.address} ${row.shareBps} bps`).join(" · ") || review.feeLabel}
+            />
+          </>
+        ) : null}
+      </dl>
+      <p className="text-[14px] leading-[1.4]">{copy.title}</p>
       <p className="text-[13px] leading-[1.5] text-muted-foreground">{copy.body}</p>
       {notice ? <p className="text-[13px] leading-[1.5]">{notice}</p> : null}
       {signature ? <p className="font-mono text-[10px] break-all text-muted-foreground">Signature {signature}</p> : null}
+      {phase === "verified" && build ? (
+        <p className="font-mono text-[10px] tracking-[0.04em] uppercase">
+          <Link href={`/token/${build.childMint}`}>Open token</Link>
+          <span className="mx-3 text-muted-foreground">·</span>
+          <Link href="/paired">Paired</Link>
+        </p>
+      ) : null}
       {build && preflightHash && approvedBuildId !== build.buildId ? (
         <button type="button" disabled={busy} onClick={() => void approve()} className="rounded-lg border border-solid border-border px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
           Approve this build

@@ -10,6 +10,8 @@ const GROUPS = [
       { label: "Journeys", href: "/#journeys" },
       { label: "Builder", href: "/build" },
       { label: "Library", href: "/library" },
+      { label: "Paired", href: "/paired" },
+      { label: "Feed", href: "/feed" },
       { label: "Account", href: "/account" },
       { label: "Current scope", href: "/#scope" },
     ],

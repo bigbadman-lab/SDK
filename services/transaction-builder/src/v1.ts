@@ -17,11 +17,13 @@ import {
 } from "@solana/kit";
 import type { TransactionInstruction } from "@solana/web3.js";
 
+import { LAUNCH_PRIORITY_FEE_LAMPORTS } from "../../../lib/launch/cost.ts";
+
 export const V1_PACKET_LIMIT_BYTES = 4096;
 export const V1_ACCOUNT_LIMIT = 64;
 export const V1_COMPUTE_UNIT_LIMIT = 1_400_000;
 export const V1_LOADED_ACCOUNTS_DATA_LIMIT = 64 * 1024 * 1024;
-export const V1_PRIORITY_FEE_LAMPORTS = 5000n;
+export const V1_PRIORITY_FEE_LAMPORTS = LAUNCH_PRIORITY_FEE_LAMPORTS;
 const V1_CONFIG_MASK = 15;
 
 export type CompiledV1 = {

@@ -1,6 +1,7 @@
 import { ApiKeys } from "@/components/account/api-keys";
 import { HolderRewards, SdkEarnings } from "@/components/account/holder-rewards";
 import { DraftList } from "@/components/builder/draft-list";
+import { VerifiedLaunchList } from "@/components/launch/verified-list";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { Footer } from "@/components/footer";
@@ -8,6 +9,7 @@ import { Logo } from "@/components/logo";
 import { createMetadata } from "@/lib/metadata";
 import { readSession } from "@/lib/server/auth";
 import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
+import { loadVerifiedLaunches } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { cookies } from "next/headers";
@@ -32,6 +34,7 @@ export default async function AccountPage({
   const account = session.state === "active" ? session.account : null;
   const scope = rewardScope((await searchParams).scope ?? null);
   const rewards = account ? await loadAccountRewards(account.walletAddress, scope) : null;
+  const launches = account ? await loadVerifiedLaunches({ creator: account.walletAddress }) : null;
 
   return (
     <>
@@ -77,6 +80,17 @@ export default async function AccountPage({
                 Review Library
               </Link>
             ) : null}
+            <section className="grid gap-3">
+              <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">Your launches</h2>
+              {launches?.ok ? (
+                <VerifiedLaunchList
+                  launches={launches.launches}
+                  empty="No verified child tokens for this wallet. Preparing a launch does not list one here."
+                />
+              ) : (
+                <p className="text-[15px] leading-[1.7] text-muted-foreground">Verified launches are unavailable.</p>
+              )}
+            </section>
             <DraftList />
             <ApiKeys />
             {rewards ? (

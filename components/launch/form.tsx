@@ -13,7 +13,9 @@ import {
   type ConfirmationDraft,
 } from "@/lib/launch/confirm";
 import { checkImage } from "@/lib/launch/image";
+import { networkCostCopy } from "@/lib/launch/cost";
 import { launchMessage } from "@/lib/launch/messages";
+import { audiencePair } from "@/lib/launch/verified-launch";
 import {
   canonicalAmount,
   parseBuy,
@@ -409,7 +411,7 @@ export function LaunchForm({
               : "grid"
           }
         >
-          <Field label={rehearsal ? "Developer buy · TREST" : "Developer buy · $SDK"} htmlFor="token-buy">
+          <Field label={`Developer buy · ${audiencePair(rehearsal).label}`} htmlFor="token-buy">
             <input
               id="token-buy"
               className={fieldClass}
@@ -443,8 +445,9 @@ export function LaunchForm({
           ) : null}
         </div>
         <p className="text-[13px] leading-[1.5] text-muted-foreground">
-          Optional, bundled into the launch transaction. Developer buy will be
-          quoted when the $SDK launch market is available.
+          {rehearsal
+            ? "Optional, bundled into the launch transaction and denominated in TREST."
+            : "Optional, bundled into the launch transaction. Developer buy will be quoted when the $SDK launch market is available."}
         </p>
         {notice ? (
           <p role="alert" className="text-[14px] leading-[1.5] text-foreground">
@@ -623,7 +626,7 @@ function ConfirmLaunch({
               height={20}
               className="h-5 w-5 rounded-lg object-contain"
             />
-            {rehearsal ? "Paired with TREST" : "Paired with $SDK"}
+            Paired with {audiencePair(rehearsal).label}
           </p>
         </div>
       </div>
@@ -632,15 +635,16 @@ function ConfirmLaunch({
       </p>
       <dl className="mt-4 grid gap-2 text-[14px] leading-[1.45]">
         <Row term="SDK" value={review.name} />
-        <Row term="Pair" value={rehearsal ? "TREST" : "$SDK"} />
+        <Row term="Pair" value={audiencePair(rehearsal).label} />
         <Row
           term="Developer buy"
-          value={review.buyAmount === "0" ? "None" : `${review.buyAmount} ${rehearsal ? "TREST" : "$SDK"}`}
+          value={review.buyAmount === "0" ? "None" : `${review.buyAmount} ${audiencePair(rehearsal).label}`}
         />
         {review.slippageBps ? (
           <Row term="Slippage" value={`${review.slippageBps / 100}%`} />
         ) : null}
         <Row term="Creator fees" value={review.feeLabel} />
+        <Row term="Network" value={networkCostCopy()} />
         <Row term="Originator" value={review.originatorLabel} />
         <Row
           term="Metadata"
