@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 
+import { UNRESOLVED_SUBMISSIONS } from "./post-launch.ts";
 import type { SubmissionIntent } from "./submission.ts";
 import {
   presentVerifiedLaunch,
@@ -134,4 +135,55 @@ export async function selectVerifiedLaunches(
     return launch ? [launch] : [];
   });
   return uniqueLaunches(presented);
+}
+
+export async function selectOpenSubmission(
+  sql: Sql,
+  accountId: string,
+): Promise<{
+  launchId: string;
+  status: string;
+  scope: "production" | "test";
+  childMint: string;
+  parentMint: string;
+  signature: string;
+  tokenName: string;
+  tokenSymbol: string;
+  imageUrl: string | null;
+  parentSymbol: "SDK" | "TREST" | null;
+} | null> {
+  const rows = await sql<{
+    launchId: string;
+    status: string;
+    scope: "production" | "test";
+    childMint: string;
+    parentMint: string;
+    signature: string;
+    tokenName: string;
+    tokenSymbol: string;
+    imageUrl: string | null;
+    parentSymbol: "SDK" | "TREST" | null;
+  }[]>`
+    select
+      s.launch_id as "launchId",
+      s.status,
+      s.scope,
+      s.child_mint_address as "childMint",
+      s.parent_mint_address as "parentMint",
+      s.signature,
+      l.token_name as "tokenName",
+      l.token_symbol as "tokenSymbol",
+      l.image_ipfs_uri as "imageUrl",
+      p.symbol as "parentSymbol"
+    from launch_submissions s
+    join token_launches l on l.id = s.launch_id
+    left join parent_registrations p
+      on p.mint_address = s.parent_mint_address
+     and p.scope = s.scope
+    where s.account_id = ${accountId}
+      and s.status = any(${UNRESOLVED_SUBMISSIONS})
+    order by s.created_at desc
+    limit 1
+  `;
+  return rows[0] ?? null;
 }

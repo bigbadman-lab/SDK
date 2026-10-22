@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 
 import postgres from "postgres";
 
-import { writeSubmission, selectVerifiedLaunches } from "../registry.ts";
+import { writeSubmission, selectOpenSubmission, selectVerifiedLaunches } from "../registry.ts";
 import type { SubmissionIntent } from "../submission.ts";
 import { verificationStamp } from "../verified-launch.ts";
 
@@ -277,6 +277,15 @@ test("a verified TREST child is stored once and the same record feeds every page
   `;
   assert.equal(attempt[0]?.attempt_status, "verified");
   assert.equal(attempt[0]?.attempt_mint_address, CHILD);
+  const unresolved = await db<{ launch_id: string; status: string }[]>`
+    select launch_id, status from launch_submissions
+    where account_id = ${ACCOUNT}
+      and status in ('submission_pending', 'submitted', 'pending_confirmation', 'verifying', 'uncertain')
+  `;
+  assert.equal(unresolved.length, 1);
+  assert.equal(unresolved[0]?.launch_id, OPEN_LAUNCH);
+  assert.equal(unresolved[0]?.status, "submitted");
+  assert.equal((await selectOpenSubmission(db, ACCOUNT))?.launchId, OPEN_LAUNCH);
   const bare = await db`
     update launch_submissions
     set status = 'verified', slot = null, verified_at = null

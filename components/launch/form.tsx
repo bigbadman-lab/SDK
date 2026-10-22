@@ -1,6 +1,7 @@
 "use client";
 
 import { RehearsalActions } from "@/components/launch/rehearsal-actions";
+import { LaunchResume } from "@/components/launch/launch-progress";
 import { LaunchSigningStatus } from "@/components/launch/signing-status";
 import {
   LaunchCapabilityDiagnostic,
@@ -24,6 +25,7 @@ import {
   type LaunchSourceView,
   type PrepareSource,
 } from "@/lib/launch/prepare";
+import type { OpenLaunch } from "@/lib/launch/post-launch";
 import { ImagePlus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -72,6 +74,7 @@ export function LaunchForm({
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState<"artwork" | "prepare" | null>(null);
   const [confirm, setConfirm] = useState<LaunchReview | null>(null);
+  const [tracked, setTracked] = useState<OpenLaunch | null>(null);
   const confirmRef = useRef<LaunchReview | null>(null);
   function setConfirmation(next: LaunchReview | null): void {
     confirmRef.current = next;
@@ -463,6 +466,11 @@ export function LaunchForm({
           Launch Token
         </button>
       </form>
+      {tracked && !confirm ? (
+        <div className="mt-6">
+          <LaunchResume launch={tracked} />
+        </div>
+      ) : null}
       <dialog
         ref={dialogRef}
         aria-labelledby="confirm-launch-title"
@@ -477,6 +485,7 @@ export function LaunchForm({
             review={confirm}
             rehearsal={rehearsal}
             onEdit={() => setConfirmation(null)}
+            onTrack={setTracked}
           />
         ) : null}
       </dialog>
@@ -588,10 +597,12 @@ function ConfirmLaunch({
   review,
   rehearsal,
   onEdit,
+  onTrack,
 }: {
   review: LaunchReview;
   rehearsal: boolean;
   onEdit: () => void;
+  onTrack: (launch: OpenLaunch) => void;
 }): ReactNode {
   const links = [review.website, review.twitter, review.telegram].filter(
     (link): link is string => Boolean(link)
@@ -668,7 +679,7 @@ function ConfirmLaunch({
       <LaunchCapabilityDiagnostic surface="modal" />
       <LaunchCapabilityNotice />
       {rehearsal ? (
-        <RehearsalActions review={review} />
+            <RehearsalActions review={review} onTrack={onTrack} />
       ) : (
         <>
           <LaunchSigningStatus phase="unavailable" />

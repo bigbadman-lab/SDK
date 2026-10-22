@@ -1,3 +1,5 @@
+import { launchWatchCopy } from "./post-launch.ts";
+
 export type SigningPhase =
   | "unavailable"
   | "ready_to_sign"
@@ -21,11 +23,11 @@ export type LaunchLifecycle =
 export function launchLifecycleCopy(phase: LaunchLifecycle): { title: string; body: string; verified: boolean } {
   if (phase === "preparing") return { title: "Preparing", body: "The launch is being prepared. Nothing has been signed.", verified: false };
   if (phase === "submitting") return { title: "Submitting", body: "The signed transaction is waiting for an authorised submission.", verified: false };
-  if (phase === "awaiting_confirmation") return { title: "Awaiting confirmation", body: "The transaction was submitted. This screen updates when Solana confirms the mint.", verified: false };
-  if (phase === "verifying") return { title: "Verifying on-chain", body: "The transaction is being checked against the chain. It is not verified yet.", verified: false };
-  if (phase === "verified") return { title: "Mint is live", body: "This token is confirmed on Solana.", verified: true };
-  if (phase === "recovering") return { title: "Recovering", body: "The network outcome is unresolved. The original mint is unchanged.", verified: false };
-  if (phase === "failed") return { title: "Failed", body: "The recorded evidence shows this launch did not succeed.", verified: false };
+  if (phase === "awaiting_wallet") return { ...launchWatchCopy("awaiting_wallet"), verified: false };
+  if (phase === "awaiting_confirmation" || phase === "recovering") return { ...launchWatchCopy("launching"), verified: false };
+  if (phase === "verifying") return { ...launchWatchCopy("finalising"), verified: false };
+  if (phase === "verified") return { ...launchWatchCopy("live"), verified: true };
+  if (phase === "failed") return { ...launchWatchCopy("failed"), verified: false };
   const signing = signingPhaseCopy(phase);
   return { title: signing.title, body: signing.body, verified: false };
 }
@@ -44,8 +46,8 @@ export function signingPhaseCopy(phase: SigningPhase): {
   }
   if (phase === "awaiting_wallet") {
     return {
-      title: "Awaiting Phantom approval",
-      body: "Approve the transaction in Phantom. Nothing is sent to the network.",
+      title: "Approve your launch in Phantom",
+      body: "Review and approve the transaction in your wallet to launch your SDK token.",
       submits: false,
     };
   }

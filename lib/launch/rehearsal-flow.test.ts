@@ -356,7 +356,7 @@ test("Phantom signs the exact v1 bytes, then the mint co-signs the unchanged mes
     approvalMatches: true,
     wireRetained: true,
   });
-  assert.equal(restarted.ok && restarted.action, "rebroadcast");
+  assert.equal(restarted.ok && restarted.action, "hold");
   if (restarted.ok) assert.equal(restarted.intent.signature, sent.intent.signature);
   const confirmed = noteChain(sent.intent, "confirmed", false);
   const commitment = {
@@ -402,5 +402,5 @@ test("Phantom signs the exact v1 bytes, then the mint co-signs the unchanged mes
   assert.equal(recoveryPhase("submitted").phase, "awaiting_confirmation");
   assert.equal(confirmationPending("awaiting_confirmation"), true);
   assert.equal(confirmationPending("verified"), false);
-  assert.equal(launchLifecycleCopy("verified").title, "Mint is live");
+  assert.equal(launchLifecycleCopy("verified").title, "Your SDK token is live!");
 });

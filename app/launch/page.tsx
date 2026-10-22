@@ -1,5 +1,6 @@
 import { Footer } from "@/components/footer";
 import { LaunchForm } from "@/components/launch/form";
+import { LaunchResume } from "@/components/launch/launch-progress";
 import { LaunchCapabilityDiagnostic } from "@/components/launch/wallet-capability";
 import {
   HeldSdk,
@@ -18,6 +19,7 @@ import { launchMessage } from "@/lib/launch/messages";
 import { libraryQuery, type LibraryQuery } from "@/lib/library/library";
 import { createMetadata } from "@/lib/metadata";
 import { getCurrentAccount } from "@/lib/server/account";
+import { loadOpenLaunch } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { BlueprintFlowError, listDrafts } from "@/lib/server/blueprint/service";
@@ -55,6 +57,7 @@ export default async function LaunchPage({
 }): Promise<ReactNode> {
   const query = await searchParams;
   const account = await getCurrentAccount();
+  const openLaunch = account ? await loadOpenLaunch(account.id) : null;
   const rehearsalRequested = query.rehearsal === "trest";
   const rehearsal = Boolean(
     rehearsalRequested && account && isProvisionedOperator(account.walletAddress),
@@ -132,6 +135,11 @@ export default async function LaunchPage({
           <p className="mt-6 text-[15px] leading-[1.6]" role="status">
             The TREST rehearsal is limited to the provisioned operator. This page stays paired with $SDK.
           </p>
+        ) : null}
+        {openLaunch ? (
+          <div className="mt-6">
+            <LaunchResume launch={openLaunch} />
+          </div>
         ) : null}
         {process.env.NODE_ENV === "development" ? <LaunchCapabilityDiagnostic /> : null}
         {message ? (

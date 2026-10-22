@@ -1,5 +1,6 @@
 import type { BroadcastOutcome } from "./broadcast.ts";
 import type { VerificationVerdict } from "./chain-evidence.ts";
+import { confirmationStatus } from "./post-launch.ts";
 
 export const SUBMISSION_STATUSES = [
   "submission_pending",
@@ -81,11 +82,7 @@ export function noteChain(
   observed: "confirmed" | "failed" | "missing" | "uncertain",
   blockhashExpired: boolean,
 ): SubmissionIntent {
-  if (observed === "confirmed") return { ...intent, status: "verifying" };
-  if (observed === "failed") return { ...intent, status: "failed" };
-  if (blockhashExpired) return { ...intent, status: "uncertain" };
-  if (observed === "missing" || observed === "uncertain") return { ...intent, status: "uncertain" };
-  return { ...intent, status: "uncertain" };
+  return { ...intent, status: confirmationStatus({ status: intent.status, observed, blockhashExpired }) };
 }
 
 export function noteVerification(intent: SubmissionIntent, verdict: VerificationVerdict): SubmissionIntent {

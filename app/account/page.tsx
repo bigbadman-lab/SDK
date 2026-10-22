@@ -2,6 +2,7 @@ import { ApiKeys } from "@/components/account/api-keys";
 import { HolderRewards, SdkEarnings } from "@/components/account/holder-rewards";
 import { DraftList } from "@/components/builder/draft-list";
 import { VerifiedLaunchList } from "@/components/launch/verified-list";
+import { LaunchResume } from "@/components/launch/launch-progress";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { Footer } from "@/components/footer";
@@ -9,7 +10,7 @@ import { Logo } from "@/components/logo";
 import { createMetadata } from "@/lib/metadata";
 import { readSession } from "@/lib/server/auth";
 import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
-import { loadVerifiedLaunches } from "@/lib/server/launch/discover";
+import { loadVerifiedLaunches, loadOpenLaunch } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { cookies } from "next/headers";
@@ -35,6 +36,7 @@ export default async function AccountPage({
   const scope = rewardScope((await searchParams).scope ?? null);
   const rewards = account ? await loadAccountRewards(account.walletAddress, scope) : null;
   const launches = account ? await loadVerifiedLaunches({ creator: account.walletAddress }) : null;
+  const openLaunch = account ? await loadOpenLaunch(account.id) : null;
 
   return (
     <>
@@ -82,6 +84,7 @@ export default async function AccountPage({
             ) : null}
             <section className="grid gap-3">
               <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">Your launches</h2>
+              {openLaunch ? <LaunchResume launch={openLaunch} /> : null}
               {launches?.ok ? (
                 <VerifiedLaunchList
                   launches={launches.launches}

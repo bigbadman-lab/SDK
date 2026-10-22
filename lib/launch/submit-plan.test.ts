@@ -294,7 +294,8 @@ test("a missing wire key does not broadcast, and recovery separates failure from
   assert.equal(failed.ok && failed.intent.status, "failed");
   if (failed.ok) assert.equal(failed.action, "hold");
   const recovered = planRecovery({ existing: unknown, observed: "missing", blockhashExpired: false, approvalMatches: true, wireRetained: true });
-  assert.equal(recovered.ok && recovered.action, "rebroadcast");
+  assert.equal(recovered.ok && recovered.action, "hold");
+  if (recovered.ok) assert.equal(recovered.intent.status, "uncertain");
   if (recovered.ok) assert.equal(recovered.intent.signature, pending.intent.signature);
   const chainFailed = noteChain(pending.intent, "failed", false);
   assert.equal(chainFailed.status, "failed");

@@ -19,6 +19,7 @@ import {
   type LaunchSourceView,
   type PrepareRequest,
 } from "@/lib/launch/prepare";
+import { UNRESOLVED_SUBMISSIONS } from "@/lib/launch/post-launch";
 import { developerLabel, trustedOriginator } from "@/lib/library/submission";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
@@ -254,6 +255,13 @@ async function claim(
 ): Promise<LaunchRow> {
   return guard(() =>
     getSql().begin(async (tx) => {
+      const open = await tx<{ launch_id: string }[]>`
+        select launch_id from launch_submissions
+        where account_id = ${account.id}
+          and status = any(${UNRESOLVED_SUBMISSIONS})
+        limit 1
+      `;
+      if (open[0]) throw new LaunchFlowError(409, "launch_open");
       const current = request.preparationId
         ? await lockLaunch(tx, account.id, request.preparationId, null)
         : await lockLaunch(tx, account.id, null, request.idempotencyKey);

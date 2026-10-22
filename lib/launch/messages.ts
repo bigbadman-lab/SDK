@@ -42,6 +42,8 @@ export function launchMessage(code: string): string {
     return "Choose slippage between 0.1% and 10% when the developer buy is above zero.";
   if (code === "idempotency_conflict")
     return "This preparation was already saved with different details.";
+  if (code === "launch_open")
+    return "A launch is still being confirmed. Check that launch before starting another. A new token was not created.";
   if (code === "uri" || code === "uri_too_long")
     return "The metadata link is too long for a token launch.";
   if (code === "pin_failed")

@@ -2,14 +2,21 @@
 
 import { useAppKitAccount } from "@reown/appkit/react";
 import { getWallets } from "@wallet-standard/app";
-import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { getBrowserSession, loadBrowserSession } from "@/lib/auth/browser-session";
 import { networkCostCopy } from "@/lib/launch/cost";
 import { launchMessage } from "@/lib/launch/messages";
 import { audiencePair } from "@/lib/launch/verified-launch";
 import type { LaunchReview } from "@/lib/launch/prepare";
+import { LaunchProgress, readRecovery } from "@/components/launch/launch-progress";
+import {
+  failureExplanation,
+  launchWatchCopy,
+  nextPollDelay,
+  watchLaunch,
+  type OpenLaunch,
+} from "@/lib/launch/post-launch";
 import { confirmationPending, recoveryPhase, rehearsalSignAllowed } from "@/lib/launch/rehearsal-flow";
 import { launchLifecycleCopy, type LaunchLifecycle } from "@/lib/launch/signing-phase";
 import { finishLaunchSignatures, messageHashOf } from "@/lib/launch/v1-signature";
@@ -69,7 +76,13 @@ function asLifecycle(phase: string): LaunchLifecycle {
   return "preparing";
 }
 
-export function RehearsalActions({ review }: { review: LaunchReview }): ReactNode {
+export function RehearsalActions({
+  review,
+  onTrack,
+}: {
+  review: LaunchReview;
+  onTrack?: (launch: OpenLaunch) => void;
+}): ReactNode {
   const { address, isConnected } = useAppKitAccount({ namespace: "solana" });
   const [build, setBuild] = useState<BuildView | null>(null);
   const [preflightHash, setPreflightHash] = useState<string | null>(null);
@@ -83,13 +96,41 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
   const [notice, setNotice] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [anchor, setAnchor] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [trackedMint, setTrackedMint] = useState<string | null>(null);
+  const checking = useRef(false);
+  const mintRef = useRef({ child: "", parent: "" });
 
   useEffect(() => {
     void loadBrowserSession();
   }, []);
 
-  function showRecovery(body: RecoveryBody) {
-    if (typeof body.signature === "string") setSignature(body.signature);
+  const showRecovery = useCallback((body: RecoveryBody) => {
+    const childMint = typeof body.childMint === "string" ? body.childMint : mintRef.current.child;
+    const parentMint = typeof body.parentMint === "string" ? body.parentMint : mintRef.current.parent;
+    if (childMint && parentMint) {
+      mintRef.current = { child: childMint, parent: parentMint };
+      setTrackedMint(childMint);
+    }
+    if (typeof body.signature === "string") {
+      setSignature(body.signature);
+      setAnchor((current) => current ?? Date.now());
+      if (childMint && parentMint) {
+        onTrack?.({
+          launchId: review.id,
+          status: body.code ?? "submitted",
+          scope: "test",
+          childMint,
+          parentMint,
+          signature: body.signature,
+          tokenName: review.tokenName,
+          tokenSymbol: review.tokenSymbol,
+          imageUrl: review.imageUri?.startsWith("https://") ? review.imageUri : null,
+          pairLabel: "$TREST",
+        });
+      }
+    }
     if (typeof body.childMint === "string" && typeof body.parentMint === "string") {
       setBuild((current) => current ?? {
         buildId: "",
@@ -106,7 +147,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     const next = recoveryPhase(body.code ?? "submitting");
     setPhase(next.phase);
     setNotice(null);
-  }
+  }, [onTrack, review.id, review.imageUri, review.tokenName, review.tokenSymbol]);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,6 +162,11 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       if (cancelled) return;
       if (recovered.ok) {
         showRecovery(recovery);
+        return;
+      }
+      if (recovery.code !== "not_found") {
+        setNotice(null);
+        setPhase("service_unavailable");
         return;
       }
       const probe = await fetch("/api/admin/trest/build", {
@@ -194,28 +240,49 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     return () => {
       cancelled = true;
     };
-  }, [review.id]);
+  }, [review.id, showRecovery]);
 
   useEffect(() => {
-    if (!confirmationPending(phase)) return;
+    if (build) mintRef.current = { child: build.childMint, parent: build.parentMint };
+  }, [build]);
+
+  useEffect(() => {
+    if (!signature || phase === "verified" || phase === "failed") return;
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [signature, phase]);
+
+  useEffect(() => {
+    if (!confirmationPending(phase) || !signature) return;
+    const started = anchor ?? Date.now();
     let cancelled = false;
-    const timer = setInterval(() => {
-      void fetch("/api/launch/recover", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ launchId: review.id }),
-      }).then(async (response) => {
-        const body = (await response.json()) as RecoveryBody;
-        if (cancelled || !response.ok) return;
-        showRecovery(body);
-      }).catch(() => undefined);
-    }, 3000);
+    let timer = 0;
+    const loop = () => {
+      if (checking.current) {
+        timer = window.setTimeout(loop, 1_000);
+        return;
+      }
+      checking.current = true;
+      void readRecovery(review.id)
+        .then((body) => {
+          if (cancelled || !body.ok) return;
+          showRecovery(body);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          checking.current = false;
+          if (cancelled || phase === "verified" || phase === "failed") return;
+          const delay = nextPollDelay(Date.now() - started);
+          if (delay === null) return;
+          timer = window.setTimeout(loop, delay);
+        });
+    };
+    timer = window.setTimeout(loop, 0);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      window.clearTimeout(timer);
     };
-  }, [phase, review.id]);
+  }, [anchor, phase, review.id, showRecovery, signature]);
 
   const gate = rehearsalSignAllowed({
     operator: true,
@@ -227,9 +294,19 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     approvedBuildId,
     mintAvailable,
   });
-  const copy = launchLifecycleCopy(asLifecycle(phase));
+  const elapsed = anchor === null ? 0 : now - anchor;
+  const view = watchLaunch({ phase, elapsedMs: elapsed, signature });
+  const watched = view.watch === "other" ? null : launchWatchCopy(view.watch);
+  const copy = watched
+    ? {
+        title: watched.title,
+        body: view.watch === "failed" ? failureExplanation(signature, notice) : watched.body,
+        verified: view.watch === "live",
+      }
+    : launchLifecycleCopy(asLifecycle(phase));
   const buildRejected = phase === "failed" && !build && !signature;
   const pair = audiencePair(true);
+  const imageUrl = review.imageUri?.startsWith("https://") ? review.imageUri : null;
 
   async function approve() {
     if (!build) return;
@@ -327,18 +404,15 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
   }
 
   async function refresh() {
-    const response = await fetch("/api/launch/recover", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ launchId: review.id }),
-    });
-    const body = (await response.json()) as RecoveryBody;
-    if (!response.ok) {
-      setNotice(launchMessage(body.code ?? "unavailable"));
-      return;
+    if (checking.current) return;
+    checking.current = true;
+    try {
+      const body = await readRecovery(review.id);
+      if (!body.ok) return;
+      showRecovery(body);
+    } finally {
+      checking.current = false;
     }
-    showRecovery(body);
   }
 
   return (
@@ -360,17 +434,27 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
           </>
         ) : null}
       </dl>
-      <p className="text-[14px] leading-[1.4]">{buildRejected ? "Build not accepted" : copy.title}</p>
-      {buildRejected ? null : <p className="text-[13px] leading-[1.5] text-muted-foreground">{copy.body}</p>}
-      {notice ? <p className="text-[13px] leading-[1.5]">{notice}</p> : null}
-      {signature ? <p className="font-mono text-[10px] break-all text-muted-foreground">Signature {signature}</p> : null}
-      {phase === "verified" && build ? (
-        <p className="font-mono text-[10px] tracking-[0.04em] uppercase">
-          <Link href={`/token/${build.childMint}`}>Open token</Link>
-          <span className="mx-3 text-muted-foreground">·</span>
-          <Link href="/paired">Paired</Link>
-        </p>
-      ) : null}
+      {view.watch === "other" ? (
+        <>
+          <p className="text-[14px] leading-[1.4]">{buildRejected ? "Build not accepted" : copy.title}</p>
+          {buildRejected ? null : <p className="text-[13px] leading-[1.5] text-muted-foreground">{copy.body}</p>}
+          {notice ? <p className="text-[13px] leading-[1.5]">{notice}</p> : null}
+        </>
+      ) : (
+        <LaunchProgress
+          watch={view.watch}
+          polling={view.polling}
+          checking={busy}
+          tokenName={review.tokenName}
+          tokenSymbol={review.tokenSymbol}
+          imageUrl={imageUrl}
+          pairLabel={pair.label}
+          childMint={build?.childMint ?? trackedMint}
+          signature={signature}
+          notice={notice}
+          onCheck={() => void refresh()}
+        />
+      )}
       {!signature && build && preflightHash && approvedBuildId !== build.buildId ? (
         <button type="button" disabled={busy} onClick={() => void approve()} className="rounded-lg border border-solid border-border px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
           Approve this build
@@ -396,9 +480,9 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
           Retry submission
         </button>
       ) : null}
-      {confirmationPending(phase) ? (
+      {phase === "service_unavailable" ? (
         <button type="button" disabled={busy} onClick={() => void refresh()} className="rounded-lg border border-solid border-border px-3 py-2.5 font-mono text-[10px] tracking-[0.04em] uppercase">
-          Check confirmation
+          Check Launch Status
         </button>
       ) : null}
     </div>

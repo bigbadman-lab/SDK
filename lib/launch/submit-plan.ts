@@ -1,7 +1,8 @@
 import { PLATFORM_FEE_WALLET, allocateCreatorFees, type FeeCategory, type Shareholder } from "./fees.ts";
 import { getSignatureFromTransaction, getTransactionDecoder } from "@solana/kit";
 
-import { beginSubmission, type SubmissionIntent, type SubmissionStatus } from "./submission.ts";
+import { confirmationStatus, recoveryBroadcast } from "./post-launch.ts";
+import { beginSubmission, type SubmissionIntent } from "./submission.ts";
 import { verifySignedCommitment } from "./v1-signature.ts";
 
 export type StoredLaunchBuild = {
@@ -116,32 +117,15 @@ export function planRecovery(input: {
   wireRetained: boolean;
 }): { ok: true; intent: SubmissionIntent; action: "hold" | "rebroadcast" } | { ok: false; code: "not_found" } {
   if (!input.existing) return { ok: false, code: "not_found" };
-  const intent = input.observed
-    ? noteChainStatus(input.existing, input.observed, input.blockhashExpired)
-    : input.existing;
-  if (intent.status === "failed" || intent.status === "verified" || intent.status === "page_ready") {
-    return { ok: true, intent, action: "hold" };
-  }
-  if (
-    (intent.status === "submission_pending" || intent.status === "uncertain") &&
-    input.wireRetained &&
-    input.approvalMatches
-  ) {
+  const prior = input.existing.status;
+  const status = input.observed
+    ? confirmationStatus({ status: prior, observed: input.observed, blockhashExpired: input.blockhashExpired })
+    : prior;
+  const intent = { ...input.existing, status };
+  if (recoveryBroadcast(prior, status) === "rebroadcast" && input.wireRetained && input.approvalMatches) {
     return { ok: true, intent, action: "rebroadcast" };
   }
   return { ok: true, intent, action: "hold" };
-}
-
-function noteChainStatus(
-  existing: SubmissionIntent,
-  observed: "confirmed" | "failed" | "missing" | "uncertain",
-  blockhashExpired: boolean,
-): SubmissionIntent {
-  if (observed === "confirmed") return { ...existing, status: "verifying" };
-  if (observed === "failed") return { ...existing, status: "failed" };
-  const status: SubmissionStatus = "uncertain";
-  if (blockhashExpired || observed === "missing" || observed === "uncertain") return { ...existing, status };
-  return { ...existing, status };
 }
 
 function signatureOf(transaction: Uint8Array): string {
