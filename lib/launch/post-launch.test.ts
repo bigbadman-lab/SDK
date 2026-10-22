@@ -248,7 +248,7 @@ test("TREST and production wording stay apart and the public launch stays closed
   assert.equal(progress.includes("Check Launch Status"), true);
   assert.equal(progress.includes("View Token"), true);
   assert.equal(progress.includes("View on Paired"), true);
-  assert.equal(progress.includes("View in SDK Feed"), true);
+  assert.equal(progress.includes("/feed"), false);
   assert.equal(progress.includes("/api/launch/submit"), false);
   assert.equal(page.includes("isProvisionedOperator"), true);
   assert.equal(service.includes("launch_open"), true);

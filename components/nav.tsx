@@ -8,14 +8,12 @@ import { Logo } from "@/components/logo";
 import { WalletButton } from "@/components/wallet/wallet-button";
 
 const LINKS = [
-  { label: "Journeys", href: "/#journeys" },
   { label: "Builder", href: "/build" },
   { label: "Library", href: "/library" },
   { label: "Launch", href: "/launch" },
   { label: "Paired", href: "/paired" },
-  { label: "Feed", href: "/feed" },
+  { label: "$SDK", href: "/sdk" },
   { label: "Code", href: "/code" },
-  { label: "Scope", href: "/#scope" },
   { label: "About", href: "/about" },
   { label: "Account", href: "/account" },
 ];

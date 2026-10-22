@@ -62,6 +62,16 @@ export function verificationStamp(input: {
   };
 }
 
+export type PublishedTokenSdk = {
+  id: string;
+  name: string;
+  description: string;
+  origin: "official" | "community";
+  originatorLabel: string;
+  versionNumber: number;
+  inputs: { key: string; type: string; required: boolean }[];
+};
+
 export type VerifiedLaunch = {
   childMint: string;
   parentMint: string;
@@ -72,6 +82,7 @@ export type VerifiedLaunch = {
   symbol: string;
   imageUrl: string | null;
   sdkName: string;
+  librarySdkId: string | null;
   sdkHref: string | null;
   creator: string;
   originatorLabel: string;
@@ -117,6 +128,7 @@ export function presentVerifiedLaunch(source: VerifiedLaunchSource): VerifiedLau
     symbol: source.symbol,
     imageUrl: image,
     sdkName: source.sdkName,
+    librarySdkId: source.librarySdkId,
     sdkHref: source.librarySdkId ? `/library/${source.librarySdkId}` : null,
     creator: source.creator,
     originatorLabel: source.originatorLabel,

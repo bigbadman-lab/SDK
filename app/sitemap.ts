@@ -26,9 +26,9 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.7,
     },
     {
-      url: new URL("/feed", siteConfig.url).toString(),
+      url: new URL("/sdk", siteConfig.url).toString(),
       changeFrequency: "daily",
-      priority: 0.7,
+      priority: 0.8,
     },
     {
       url: new URL("/account", siteConfig.url).toString(),

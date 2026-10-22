@@ -1,9 +1,9 @@
 import { Footer } from "@/components/footer";
-import { VerifiedLaunchDetail } from "@/components/launch/verified-list";
+import { TokenExperience } from "@/components/launch/token-experience";
 import { Nav } from "@/components/nav";
-import { createMetadata } from "@/lib/metadata";
+import { createMetadata, siteConfig } from "@/lib/metadata";
 import { launchByMint } from "@/lib/launch/verified-launch";
-import { loadVerifiedLaunches } from "@/lib/server/launch/discover";
+import { loadPublishedTokenSdk, loadVerifiedLaunches } from "@/lib/server/launch/discover";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import type { ReactNode } from "react";
@@ -56,12 +56,9 @@ export default async function TokenPage({
       <Nav />
       <main
         id="main-content"
-        className="mx-auto w-[min(760px,calc(100%-48px))] scroll-mt-23 pt-16 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-10"
+        className="mx-auto w-[min(980px,calc(100%-48px))] scroll-mt-23 pt-10 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-6"
       >
-        <span className="block font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">Child token</span>
-        <div className="mt-6">
-          <VerifiedLaunchDetail launch={launch} />
-        </div>
+        <TokenExperience launch={launch} sdk={await loadPublishedTokenSdk(launch.librarySdkId)} baseUrl={siteConfig.url ?? "https://sdk.fund"} />
       </main>
       <Footer />
     </>

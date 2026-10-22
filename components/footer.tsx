@@ -11,7 +11,7 @@ const GROUPS = [
       { label: "Builder", href: "/build" },
       { label: "Library", href: "/library" },
       { label: "Paired", href: "/paired" },
-      { label: "Feed", href: "/feed" },
+      { label: "$SDK", href: "/sdk" },
       { label: "Account", href: "/account" },
       { label: "Current scope", href: "/#scope" },
     ],

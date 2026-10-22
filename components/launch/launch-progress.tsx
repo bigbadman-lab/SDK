@@ -178,8 +178,6 @@ export function LaunchProgress({
           <Link href={`/token/${childMint}`}>View Token</Link>
           <span className="mx-3 text-muted-foreground">·</span>
           <Link href="/paired">View on Paired</Link>
-          <span className="mx-3 text-muted-foreground">·</span>
-          <Link href="/feed">View in SDK Feed</Link>
         </p>
       ) : null}
       {manual ? (
