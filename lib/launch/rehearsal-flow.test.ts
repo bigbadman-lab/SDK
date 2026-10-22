@@ -59,6 +59,10 @@ test("the public path stays closed and a non-operator cannot open a TREST rehear
   const actions = readFileSync(new URL("../../components/launch/rehearsal-actions.tsx", import.meta.url), "utf8");
   assert.equal(actions.includes('setPhase("unavailable")'), false);
   assert.equal(actions.includes("audiencePair(true)"), true);
+  const sign = actions.slice(actions.indexOf("async function signAndSubmit"));
+  const requestAt = sign.indexOf("requestPhantomSignature");
+  assert.ok(requestAt > 0);
+  assert.equal(sign.slice(0, requestAt).includes("await "), false);
   assert.equal(launchMessage("simulation_failed").includes("did not simulate"), true);
   assert.equal(launchMessage("simulation_failed").includes("not accepted"), false);
   assert.equal(launchMessage("builder_rejected").includes("not accepted"), false);

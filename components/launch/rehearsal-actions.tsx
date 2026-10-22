@@ -5,7 +5,7 @@ import { getWallets } from "@wallet-standard/app";
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
 
-import { loadBrowserSession } from "@/lib/auth/browser-session";
+import { getBrowserSession, loadBrowserSession } from "@/lib/auth/browser-session";
 import { networkCostCopy } from "@/lib/launch/cost";
 import { launchMessage } from "@/lib/launch/messages";
 import { audiencePair } from "@/lib/launch/verified-launch";
@@ -60,10 +60,15 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
   const [parentRegistered, setParentRegistered] = useState(false);
   const [mintAvailable, setMintAvailable] = useState(false);
   const [wire, setWire] = useState<string | null>(null);
+  const [wireHash, setWireHash] = useState<string | null>(null);
   const [phase, setPhase] = useState("preparing");
   const [notice, setNotice] = useState<string | null>(null);
   const [signature, setSignature] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void loadBrowserSession();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +134,14 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
         setPhase("invalidated");
         return;
       }
+      const hashed = await messageHashOf(decodeBase64(next.transaction));
+      if (cancelled) return;
+      if (hashed !== next.messageHash) {
+        setNotice(launchMessage("message_changed"));
+        setPhase("invalidated");
+        return;
+      }
+      setWireHash(hashed);
       setPreflightHash(simulated.messageHash);
       setPhase("preparing");
     }
@@ -176,27 +189,27 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
 
   async function signAndSubmit() {
     const current = build;
-    const held = await rememberMint(review.id);
-    const keypair = held.keypair();
-    if (!current || !keypair || !gate.allowed) return;
-    setBusy(true);
-    setPhase("awaiting_wallet");
-    try {
-      const bytes = decodeBase64(current.transaction);
-      const observed = await messageHashOf(bytes);
-      if (observed !== current.messageHash || observed !== preflightHash) {
+    const held = heldMint(review.id);
+    const keypair = held?.keypair() ?? null;
+    const session = getBrowserSession();
+    if (!current || !held || !keypair || !gate.allowed || wireHash !== current.messageHash || wireHash !== preflightHash) {
+      if (current && wireHash && (wireHash !== current.messageHash || wireHash !== preflightHash)) {
         setPhase("invalidated");
         setNotice(launchMessage("message_changed"));
-        return;
       }
-      const session = await loadBrowserSession();
-      const wallets = getWallets().get().map((wallet) => readPhantomSigner(wallet));
-      const wallet = await requestPhantomSignature({
-        sessionAddress: session.status === "signed-in" ? session.walletAddress : null,
-        connectedAddress: isConnected ? (address ?? null) : null,
-        wallets,
-        transaction: bytes,
-      });
+      return;
+    }
+    const bytes = decodeBase64(current.transaction);
+    setBusy(true);
+    setPhase("awaiting_wallet");
+    const pendingSignature = requestPhantomSignature({
+      sessionAddress: session.status === "signed-in" ? session.walletAddress : null,
+      connectedAddress: isConnected ? (address ?? null) : null,
+      wallets: getWallets().get().map((wallet) => readPhantomSigner(wallet)),
+      transaction: bytes,
+    });
+    try {
+      const wallet = await pendingSignature;
       if (!wallet.ok) {
         setPhase(wallet.code === "sign_rejected" ? "wallet_rejected" : "service_unavailable");
         setNotice(launchMessage(wallet.code === "sign_rejected" ? "sign_rejected" : "unavailable"));
