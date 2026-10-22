@@ -13,7 +13,7 @@ import {
 import BN from "bn.js";
 
 import type { Shareholder } from "../../../lib/launch/fees.ts";
-import { coinCreatorVaultAuthority, pump } from "./protocol.ts";
+import { pump } from "./protocol.ts";
 import { V1_COMPUTE_UNIT_LIMIT, compileLaunchV1 } from "./v1.ts";
 
 export class AssembleError extends Error {
@@ -237,14 +237,12 @@ export async function assembleChildLaunch(input: AssembleLaunchInput): Promise<A
   });
   const sharingConfig = pump.feeSharingConfigPda(input.mint);
   const atas = new Map<string, TransactionInstruction>();
-  // Fee updates distribute the quote before changing shares. A new child has
-  // no creator vault yet, and the fee program rejects that missing token account.
-  for (const owner of [
-    input.launcher,
-    ...holders.map((holder) => holder.address),
-    pump.creatorVaultPda(sharingConfig),
-    coinCreatorVaultAuthority(sharingConfig),
-  ]) {
+  // The fee program rejects the share update when the creator vault's quote
+  // account is missing. Shareholder quote accounts are created later, when
+  // fees are distributed. Creating them here, along with the coin-creator
+  // vault, fills Solana's 64-entry instruction trace once Phantom inserts its
+  // own assertions, and the share update never lands.
+  for (const owner of [input.launcher, pump.creatorVaultPda(sharingConfig)]) {
     const instruction = quoteAta(input.launcher, owner, input.parentMint, input.quoteTokenProgram);
     const key = instruction.keys.map((item) => `${item.pubkey.toBase58()}:${item.isSigner}`).join(",");
     atas.set(key, instruction);

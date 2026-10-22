@@ -73,7 +73,7 @@ test("fixture launches keep fee locking before an optional buy", async () => {
   assert.equal(staticMembers.includes(FIXTURE_MINT.toBase58()), false);
   assert.equal(staticMembers.includes(FIXTURE_LAUNCHER.toBase58()), false);
   assert.equal(staticMembers.includes(FIXTURE_PARENT.toBase58()), false);
-  assert.equal(staticMembers.includes(PLATFORM_FEE_WALLET), true);
+  assert.equal(staticMembers.includes(PLATFORM_FEE_WALLET), false);
   for (const signer of signers) assert.equal(staticMembers.includes(signer), false);
   assert.equal(measured.length, 8);
   const standard = measured.filter((row) => !row.migrated);
@@ -238,13 +238,14 @@ test("merged launcher and platform shareholders stay unique", async () => {
   assert.equal(assembled.roles.includes("update_fee_shares_v2"), true);
   assert.equal(assembled.roles.includes("buy_exact_quote_in_v3"), false);
   const sharing = pump.feeSharingConfigPda(FIXTURE_MINT);
-  const vaultOwners = new Set([
-    pump.creatorVaultPda(sharing).toBase58(),
-    coinCreatorVaultAuthority(sharing).toBase58(),
-  ]);
   const createdOwners = assembled.instructions
     .filter((_, index) => assembled.roles[index] === "quote_ata")
     .map((instruction) => instruction.keys[2]?.pubkey.toBase58());
-  for (const owner of vaultOwners) assert.equal(createdOwners.includes(owner), true);
+  assert.deepEqual(createdOwners, [
+    PLATFORM_FEE_WALLET,
+    pump.creatorVaultPda(sharing).toBase58(),
+  ]);
+  assert.equal(createdOwners.includes(FIXTURE_ORIGINATOR.toBase58()), false);
+  assert.equal(createdOwners.includes(coinCreatorVaultAuthority(sharing).toBase58()), false);
   assert.ok(assembled.roles.indexOf("quote_ata") < assembled.roles.indexOf("update_fee_shares_v2"));
 });
