@@ -28,6 +28,28 @@ export function rehearsalSignAllowed(input: {
   return { allowed: true, reason: "ready" };
 }
 
+const RELEASABLE_ATTEMPT = new Set([
+  "ready_for_transaction",
+  "ready_to_sign",
+  "awaiting_wallet",
+  "wallet_rejected",
+  "expired",
+  "invalidated",
+]);
+
+const DROPPABLE_BUILD = new Set(["built", "expired", "invalidated"]);
+
+export function canReleaseUnsignedMint(input: {
+  scope: string;
+  attemptStatus: string;
+  buildStatuses: readonly string[];
+  submitted: boolean;
+}): boolean {
+  if (input.scope !== "test" || input.submitted) return false;
+  if (!RELEASABLE_ATTEMPT.has(input.attemptStatus)) return false;
+  return input.buildStatuses.every((status) => DROPPABLE_BUILD.has(status));
+}
+
 export function recoveryPhase(status: string): { phase: string; verified: boolean } {
   if (status === "verified" || status === "page_ready") return { phase: "verified", verified: true };
   if (status === "failed") return { phase: "failed", verified: false };

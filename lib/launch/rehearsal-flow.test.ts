@@ -20,7 +20,7 @@ import { verifyLaunchEvidence } from "./chain-evidence.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "./fees.ts";
 import { preflightChildLaunch, preflightMessageBound } from "./preflight.ts";
 import { launchMessage } from "./messages.ts";
-import { recoveryPhase, rehearsalSignAllowed } from "./rehearsal-flow.ts";
+import { canReleaseUnsignedMint, recoveryPhase, rehearsalSignAllowed } from "./rehearsal-flow.ts";
 import { noteBroadcast, noteChain, noteVerification } from "./submission.ts";
 import { planRecovery, planSubmission, type StoredLaunchBuild } from "./submit-plan.ts";
 import { finishLaunchSignatures, messageHashOf } from "./v1-signature.ts";
@@ -66,6 +66,33 @@ test("the public path stays closed and a non-operator cannot open a TREST rehear
   assert.equal(launchMessage("simulation_failed").includes("did not simulate"), true);
   assert.equal(launchMessage("simulation_failed").includes("not accepted"), false);
   assert.equal(launchMessage("builder_rejected").includes("not accepted"), false);
+});
+
+test("an unsigned rehearsal mint can be replaced after the browser loses the key", () => {
+  assert.equal(canReleaseUnsignedMint({
+    scope: "test",
+    attemptStatus: "ready_to_sign",
+    buildStatuses: ["built"],
+    submitted: false,
+  }), true);
+  assert.equal(canReleaseUnsignedMint({
+    scope: "test",
+    attemptStatus: "signed",
+    buildStatuses: ["built"],
+    submitted: false,
+  }), false);
+  assert.equal(canReleaseUnsignedMint({
+    scope: "test",
+    attemptStatus: "ready_to_sign",
+    buildStatuses: ["signed"],
+    submitted: false,
+  }), false);
+  assert.equal(canReleaseUnsignedMint({
+    scope: "production",
+    attemptStatus: "ready_to_sign",
+    buildStatuses: ["built"],
+    submitted: false,
+  }), false);
 });
 
 test("signing stays closed until the parent, preflight, approval, and mint all match", () => {

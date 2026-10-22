@@ -15,6 +15,7 @@ import {
 } from "@/lib/launch/builder-request";
 import { parseParentObservation, type ParentObservation } from "@/lib/launch/parent";
 import { signServiceRequest } from "@/lib/launch/service-auth";
+import { canReleaseUnsignedMint } from "@/lib/launch/rehearsal-flow";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { requireTransactionBuilder } from "@/lib/server/env";
 
@@ -156,16 +157,56 @@ export async function requestRehearsalBuild(input: {
       return { ok: false, code: databaseFailure(error) === "missing_schema" ? "parent_unregistered" : "unavailable" };
     }
     if (!parents[0]) return { ok: false, code: "parent_unregistered" };
-    if (launch.attempt_mint_address && launch.attempt_mint_address !== input.mintPublicKey) {
-      return { ok: false, code: "mint_conflict" };
-    }
-    const open = await sql<{ mint_address: string }[]>`
-      select mint_address from launch_builds
-      where launch_id = ${input.launchId} and account_id = ${input.accountId} and status in ('built', 'signed')
+    const open = await sql<{ mint_address: string; status: string }[]>`
+      select mint_address, status from launch_builds
+      where launch_id = ${input.launchId} and account_id = ${input.accountId}
       order by created_at desc
-      limit 1
     `;
-    if (open[0] && open[0].mint_address !== input.mintPublicKey) return { ok: false, code: "mint_conflict" };
+    const pinnedElsewhere = launch.attempt_mint_address !== null && launch.attempt_mint_address !== input.mintPublicKey;
+    const builtElsewhere = open.some((row) => row.mint_address !== input.mintPublicKey);
+    if (pinnedElsewhere || builtElsewhere) {
+      const submissions = await sql<{ present: boolean }[]>`
+        select to_regclass('public.launch_submissions') is not null as present
+      `;
+      const submitted = submissions[0]?.present
+        ? (await sql<{ id: string }[]>`
+            select id from launch_submissions where launch_id = ${input.launchId} limit 1
+          `).length > 0
+        : false;
+      if (!canReleaseUnsignedMint({
+        scope: launch.parent_scope,
+        attemptStatus: launch.attempt_status,
+        buildStatuses: open.map((row) => row.status),
+        submitted,
+      })) {
+        return { ok: false, code: "mint_conflict" };
+      }
+      const approvals = await sql<{ present: boolean }[]>`
+        select to_regclass('public.launch_approvals') is not null as present
+      `;
+      await sql.begin(async (tx) => {
+        if (approvals[0]?.present) {
+          await tx`delete from launch_approvals where launch_id = ${input.launchId}`;
+        }
+        await tx`
+          delete from launch_builds
+          where launch_id = ${input.launchId}
+            and account_id = ${input.accountId}
+            and status in ('built', 'expired', 'invalidated')
+        `;
+        const cleared = await tx<{ id: string }[]>`
+          update token_launches
+          set attempt_status = 'ready_for_transaction',
+              attempt_mint_address = null,
+              attempt_message_hash = null
+          where id = ${input.launchId}
+            and account_id = ${input.accountId}
+            and attempt_status = ${launch.attempt_status}
+          returning id
+        `;
+        if (cleared.length !== 1) throw new Error("unsigned mint release was not applied");
+      });
+    }
     const rehearsal = parseRehearsalBuildRequest({
       launchId: input.launchId,
       idempotencyKey: launch.idempotency_key,
