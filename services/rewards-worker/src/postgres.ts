@@ -2,7 +2,7 @@ import postgres from "postgres";
 
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import { TREST_REHEARSAL_MINT, validRehearsalStarts, type CollectionRecovery, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
+import { DEFERRED_BUYBACK_BUDGET, DEFERRED_BUYBACK_KEY, DEFERRED_COLLECTION_SIGNATURE, TREST_REHEARSAL_MINT, validRehearsalStarts, type CollectionRecovery, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
 import { matchesLegacyCollection } from "./legacy-recovery.ts";
 
 type Sql = ReturnType<typeof postgres>;
@@ -312,6 +312,117 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
             select 1 from reward_intents other
             where other.signature = ${signature} and other.idempotency_key <> ${idempotencyKey}
           )
+        returning id::text
+      `;
+      return rows[0] ? "ok" : "order";
+    },
+    async holdDeferredBuyback(input) {
+      if (
+        input.parentMint !== TREST_REHEARSAL_MINT
+        || input.scope !== "test"
+        || input.idempotencyKey !== DEFERRED_BUYBACK_KEY
+        || input.budgetLamports !== DEFERRED_BUYBACK_BUDGET
+        || input.collectionSignature !== DEFERRED_COLLECTION_SIGNATURE
+      ) return "rejected";
+      const classify = (status: string, signature: string | null, amount: string | null): "resume" | "pending" | "settled" | "failed" | "rejected" => {
+        if (amount !== input.budgetLamports) return "rejected";
+        if (status === "recorded" && !signature) return "resume";
+        if (status === "confirmed") return "settled";
+        if (status === "failed") return "failed";
+        if (status === "submitted" || status === "uncertain" || status === "unreconciled") return "pending";
+        return "rejected";
+      };
+      try {
+        return await sql.begin(async (tx) => {
+          const recovery = await tx<{ buyback: string }[]>`
+            select recovery.buyback_lamports::text as buyback
+            from reward_collection_recoveries recovery
+            join reward_collections receipt on receipt.signature = recovery.signature
+            where recovery.signature = ${input.collectionSignature}
+              and recovery.parent_mint_address = ${input.parentMint}
+              and recovery.scope = ${input.scope}
+              and recovery.buyback_lamports = ${input.budgetLamports}::bigint
+              and receipt.allocation_deferred = true
+              and receipt.allocated_at is null
+              and receipt.status = 'confirmed'
+              and receipt.credited = true
+            for update
+          `;
+          if (!recovery[0]) return "rejected" as const;
+          const existing = await tx<{ status: string; signature: string | null; amount: string | null }[]>`
+            select status, signature, amount_lamports::text as amount
+            from reward_intents
+            where parent_mint_address = ${input.parentMint}
+              and scope = ${input.scope}
+              and idempotency_key = ${input.idempotencyKey}
+            for update
+          `;
+          const current = existing[0];
+          if (current) return classify(current.status, current.signature, current.amount);
+          const inserted = await tx<{ id: string }[]>`
+            insert into reward_intents (
+              parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, amount_lamports
+            )
+            select id, ${input.parentMint}, ${input.scope}, 'buyback', ${input.idempotencyKey}, 'recorded', ${input.budgetLamports}::bigint
+            from parent_registrations
+            where mint_address = ${input.parentMint} and scope = ${input.scope}
+            returning id::text
+          `;
+          if (!inserted[0]) return "rejected" as const;
+          return "held" as const;
+        });
+      } catch (error) {
+        const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+        if (code !== "23505") throw error;
+        const existing = await sql<{ status: string; signature: string | null; amount: string | null }[]>`
+          select status, signature, amount_lamports::text as amount
+          from reward_intents
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope} and idempotency_key = ${input.idempotencyKey}
+        `;
+        const current = existing[0];
+        return current ? classify(current.status, current.signature, current.amount) : "rejected";
+      }
+    },
+    async settleDeferredBuyback(input) {
+      if (
+        input.parentMint !== TREST_REHEARSAL_MINT
+        || input.scope !== "test"
+        || input.idempotencyKey !== DEFERRED_BUYBACK_KEY
+        || input.budgetLamports !== DEFERRED_BUYBACK_BUDGET
+        || !/^[1-9][0-9]*$/.test(input.solSpentLamports)
+        || !/^[1-9][0-9]*$/.test(input.tokenAmount)
+        || BigInt(input.solSpentLamports) > BigInt(input.budgetLamports)
+      ) return "order";
+      const rows = await sql<{ id: string }[]>`
+        update reward_intents
+        set status = 'confirmed', amount_lamports = ${input.solSpentLamports}::bigint, token_amount = ${input.tokenAmount}
+        where parent_mint_address = ${input.parentMint}
+          and scope = ${input.scope}
+          and idempotency_key = ${input.idempotencyKey}
+          and kind = 'buyback'
+          and signature = ${input.signature}
+          and amount_lamports = ${input.budgetLamports}::bigint
+          and status in ('submitted', 'uncertain', 'unreconciled')
+        returning id::text
+      `;
+      return rows[0] ? "ok" : "order";
+    },
+    async reopenFailedDeferredBuyback(input) {
+      if (
+        input.parentMint !== TREST_REHEARSAL_MINT
+        || input.scope !== "test"
+        || input.idempotencyKey !== DEFERRED_BUYBACK_KEY
+        || input.budgetLamports !== DEFERRED_BUYBACK_BUDGET
+      ) return "order";
+      const rows = await sql<{ id: string }[]>`
+        update reward_intents
+        set status = 'recorded', signature = null, token_amount = null
+        where parent_mint_address = ${input.parentMint}
+          and scope = ${input.scope}
+          and idempotency_key = ${input.idempotencyKey}
+          and kind = 'buyback'
+          and status = 'failed'
+          and amount_lamports = ${input.budgetLamports}::bigint
         returning id::text
       `;
       return rows[0] ? "ok" : "order";

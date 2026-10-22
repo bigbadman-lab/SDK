@@ -16,7 +16,7 @@ import {
   releaseCycleLock,
   windowKey,
 } from "./cycle.ts";
-import { WINDOW_MS, authoriseBucketSpend, buybackSpendAllowed, planIncrementalAllocation } from "./ledger.ts";
+import { WINDOW_MS, authoriseBucketSpend, buybackSpendAllowed, planIncrementalAllocation, quoteInsideBuybackBudget, reservedBuybackSpendAllowed } from "./ledger.ts";
 import { PUMP_PROGRAM_ID } from "./collect.ts";
 import { snapshotHolders } from "./holders.ts";
 import { reconcileBuyback, reconcileCreatorFee } from "./reconcile.ts";
@@ -574,4 +574,24 @@ test("a buyback cannot spend SOL reserved for holders, the deployer, or an earli
     ...deferred,
   });
   assert.equal(countedTwice.ok, false);
+  const floor = {
+    walletLamports: net,
+    spendLamports: deferred.deferredBuybackLamports,
+    budgetLamports: deferred.deferredBuybackLamports,
+    pendingLamports: "0",
+    reserveLamports: "5000000",
+    unpaidHolderLamports: "0",
+    deployerRetainedLamports: "0",
+    unspentPriorBuybackLamports: "0",
+    ...deferred,
+  };
+  assert.equal(reservedBuybackSpendAllowed(floor).ok, true);
+  assert.equal(reservedBuybackSpendAllowed({ ...floor, walletLamports: (BigInt(net) - BigInt(1)).toString() }).ok, false);
+  assert.equal(reservedBuybackSpendAllowed({ ...floor, pendingLamports: deferred.deferredBuybackLamports }).ok, false);
+  assert.equal(reservedBuybackSpendAllowed({ ...floor, spendLamports: (BigInt(deferred.deferredBuybackLamports) + BigInt(1)).toString() }).ok, false);
+  const quoted = quoteInsideBuybackBudget({ budgetLamports: deferred.deferredBuybackLamports, networkFeeLamports: "5000", rentLamports: "2039280" });
+  assert.equal(quoted.ok, true);
+  if (!quoted.ok) return;
+  assert.equal(quoted.quoteLamports, (BigInt(deferred.deferredBuybackLamports) - BigInt(5000) - BigInt(2039280)).toString());
+  assert.equal(quoteInsideBuybackBudget({ budgetLamports: "5000", networkFeeLamports: "5000", rentLamports: "0" }).ok, false);
 });

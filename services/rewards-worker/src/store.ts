@@ -4,6 +4,23 @@ import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.t
 import { planIncrementalAllocation, WINDOW_MS, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
 
 export const TREST_REHEARSAL_MINT = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+export const DEFERRED_BUYBACK_KEY = "buyback-1792603200000";
+export const DEFERRED_BUYBACK_BUDGET = "24042092";
+export const DEFERRED_COLLECTION_SIGNATURE = "3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL9BBqJWBbcpY4ueo6FJ5B2Zbo38AF";
+
+function deferredBuybackIdentity(input: {
+  parentMint: string;
+  scope: RewardScope;
+  idempotencyKey: string;
+  budgetLamports: string;
+  collectionSignature?: string;
+}): boolean {
+  return input.parentMint === TREST_REHEARSAL_MINT
+    && input.scope === "test"
+    && input.idempotencyKey === DEFERRED_BUYBACK_KEY
+    && input.budgetLamports === DEFERRED_BUYBACK_BUDGET
+    && (input.collectionSignature === undefined || input.collectionSignature === DEFERRED_COLLECTION_SIGNATURE);
+}
 
 export type RehearsalAdmission =
   | { ok: true; admission: "execute" | "replay" }
@@ -170,6 +187,28 @@ export type RewardsStore = {
   intents(parentMint: string, scope: RewardScope): Promise<StoredIntent[]>;
   recordIntent(intent: Omit<StoredIntent, "status" | "signature" | "recentBlockhash" | "submissionCode" | "submissionDetail" | "createdAtMs"> & { amountLamports: string | null; recentBlockhash?: string | null; createdAtMs?: string }): Promise<"ok" | "duplicate">;
   markIntent(parentMint: string, scope: RewardScope, idempotencyKey: string, status: IntentStatus, signature: string | null): Promise<"ok" | "order" | "duplicate">;
+  holdDeferredBuyback(input: {
+    parentMint: string;
+    scope: RewardScope;
+    idempotencyKey: string;
+    budgetLamports: string;
+    collectionSignature: string;
+  }): Promise<"held" | "resume" | "pending" | "settled" | "failed" | "rejected">;
+  settleDeferredBuyback(input: {
+    parentMint: string;
+    scope: RewardScope;
+    idempotencyKey: string;
+    signature: string;
+    solSpentLamports: string;
+    tokenAmount: string;
+    budgetLamports: string;
+  }): Promise<"ok" | "order">;
+  reopenFailedDeferredBuyback(input: {
+    parentMint: string;
+    scope: RewardScope;
+    idempotencyKey: string;
+    budgetLamports: string;
+  }): Promise<"ok" | "order">;
   recordSubmission(parentMint: string, scope: RewardScope, idempotencyKey: string, note: SubmissionNote): Promise<"ok" | "order">;
   legacyRecoveries(parentMint: string, scope: RewardScope): Promise<LegacyRecovery[]>;
   saveLegacyRecovery(input: Omit<LegacyRecovery, "id" | "createdAtMs">): Promise<{ ok: true; id: string } | { ok: false; code: "duplicate" | "rejected" }>;
@@ -408,6 +447,66 @@ export function memoryStore(seed: {
         if (signature && intents.some((intent) => intent.signature === signature && intent.idempotencyKey !== idempotencyKey)) return "duplicate";
         current.status = status;
         current.signature = signature ?? current.signature;
+        return "ok";
+      });
+    },
+    async holdDeferredBuyback(input) {
+      return exclusive(() => {
+        if (!deferredBuybackIdentity(input)) return "rejected";
+        const receipt = receipts.find((row) => row.signature === input.collectionSignature && row.parentMint === input.parentMint && row.scope === input.scope);
+        const audit = collectionRecoveries.find((row) => row.signature === input.collectionSignature && row.parentMint === input.parentMint && row.scope === input.scope);
+        if (!receipt || !audit || !receipt.confirmed || receipt.allocated || !receipt.allocationDeferred || audit.buybackLamports !== input.budgetLamports) {
+          return "rejected";
+        }
+        const current = intents.find((intent) => intent.parentMint === input.parentMint && intent.scope === input.scope && intent.idempotencyKey === input.idempotencyKey);
+        if (!current) {
+          intents.push({
+            idempotencyKey: input.idempotencyKey,
+            parentMint: input.parentMint,
+            scope: input.scope,
+            kind: "buyback",
+            status: "recorded",
+            signature: null,
+            amountLamports: input.budgetLamports,
+            tokenAmount: null,
+            messageSha256: null,
+            recentBlockhash: null,
+            submissionCode: null,
+            submissionDetail: null,
+            createdAtMs: Date.now().toString(),
+          });
+          return "held";
+        }
+        if (current.kind !== "buyback" || current.amountLamports !== input.budgetLamports) return "rejected";
+        if (current.status === "recorded" && !current.signature) return "resume";
+        if (current.status === "confirmed") return "settled";
+        if (current.status === "failed") return "failed";
+        if (current.status === "submitted" || current.status === "uncertain" || current.status === "unreconciled") return "pending";
+        return "rejected";
+      });
+    },
+    async settleDeferredBuyback(input) {
+      return exclusive(() => {
+        if (!deferredBuybackIdentity(input) || !/^[1-9][0-9]*$/.test(input.solSpentLamports) || !/^[1-9][0-9]*$/.test(input.tokenAmount)) return "order";
+        const current = intents.find((intent) => intent.parentMint === input.parentMint && intent.scope === input.scope && intent.idempotencyKey === input.idempotencyKey);
+        if (!current || current.signature !== input.signature || current.amountLamports !== input.budgetLamports) return "order";
+        if (current.status !== "submitted" && current.status !== "uncertain" && current.status !== "unreconciled") return "order";
+        const spent = BigInt(input.solSpentLamports);
+        if (spent <= BigInt(0) || spent > BigInt(input.budgetLamports)) return "order";
+        current.status = "confirmed";
+        current.amountLamports = input.solSpentLamports;
+        current.tokenAmount = input.tokenAmount;
+        return "ok";
+      });
+    },
+    async reopenFailedDeferredBuyback(input) {
+      return exclusive(() => {
+        if (!deferredBuybackIdentity(input)) return "order";
+        const current = intents.find((intent) => intent.parentMint === input.parentMint && intent.scope === input.scope && intent.idempotencyKey === input.idempotencyKey);
+        if (!current || current.status !== "failed" || current.amountLamports !== input.budgetLamports) return "order";
+        current.status = "recorded";
+        current.signature = null;
+        current.tokenAmount = null;
         return "ok";
       });
     },

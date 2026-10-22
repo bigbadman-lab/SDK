@@ -974,6 +974,63 @@ test("the confirmed collection recovery commits on the migrated schema and prote
       deployer: "32056123",
       recordedHolders: "0",
     });
+    const buybackKey = "buyback-1792603200000";
+    const buybackSignature = "5".repeat(88);
+    assert.equal(await store.holdDeferredBuyback({
+      parentMint: mint,
+      scope: "test",
+      idempotencyKey: buybackKey,
+      budgetLamports: "24042092",
+      collectionSignature: signature,
+    }), "held");
+    assert.equal(await store.holdDeferredBuyback({
+      parentMint: mint,
+      scope: "test",
+      idempotencyKey: buybackKey,
+      budgetLamports: "24042092",
+      collectionSignature: signature,
+    }), "resume");
+    assert.equal(await store.markIntent(mint, "test", buybackKey, "submitted", buybackSignature), "ok");
+    const duringFlight = await store.solObligations(mint, "test");
+    assert.equal(duringFlight.deferredBuybackLamports, "24042092");
+    assert.equal(duringFlight.deferredHolderLamports, "24042092");
+    assert.equal(await store.settleDeferredBuyback({
+      parentMint: mint,
+      scope: "test",
+      idempotencyKey: buybackKey,
+      signature: buybackSignature,
+      solSpentLamports: "24037092",
+      tokenAmount: "99",
+      budgetLamports: "24042092",
+    }), "ok");
+    assert.equal(await store.settleDeferredBuyback({
+      parentMint: mint,
+      scope: "test",
+      idempotencyKey: buybackKey,
+      signature: buybackSignature,
+      solSpentLamports: "24037092",
+      tokenAmount: "99",
+      budgetLamports: "24042092",
+    }), "order");
+    const afterBuy = await store.solObligations(mint, "test");
+    assert.equal(afterBuy.deferredBuybackLamports, "5000");
+    assert.equal(afterBuy.deferredHolderLamports, "24042092");
+    assert.equal(afterBuy.deferredDeployerLamports, "32056123");
+    assert.equal(afterBuy.holderSol, "0");
+    const buybackRows = await recoverySql`
+      select status, amount_lamports::text as spent, token_amount, signature
+      from reward_intents
+      where idempotency_key = ${buybackKey}
+    `;
+    assert.equal(buybackRows.length, 1);
+    assert.equal(buybackRows[0]?.status, "confirmed");
+    assert.equal(buybackRows[0]?.spent, "24037092");
+    assert.equal(buybackRows[0]?.token_amount, "99");
+    const historicalReceipt = await recoverySql`
+      select allocation_deferred, allocated_at from reward_collections where signature = ${signature}
+    `;
+    assert.equal(historicalReceipt[0]?.allocation_deferred, true);
+    assert.equal(historicalReceipt[0]?.allocated_at, null);
     const windowKey = rewardWindowKey(mint, "test", START + 1);
     assert.ok(windowKey);
     assert.equal(await store.saveReceipt({

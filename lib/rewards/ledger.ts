@@ -125,6 +125,60 @@ export function buybackSpendAllowed(input: {
   return { ok: true };
 }
 
+// The reserved buyback is already inside the deferred figure. This purchase spends
+// that figure once. It does not add the same lamports to the floor a second time.
+export function reservedBuybackSpendAllowed(input: {
+  walletLamports: string;
+  spendLamports: string;
+  budgetLamports: string;
+  pendingLamports: string;
+  reserveLamports: string;
+  unpaidHolderLamports: string;
+  deployerRetainedLamports: string;
+  unspentPriorBuybackLamports: string;
+  deferredHolderLamports: string;
+  deferredBuybackLamports: string;
+  deferredDeployerLamports: string;
+}): { ok: true } | { ok: false; code: "amount" | "budget" | "unfunded" } {
+  const wallet = parseAmount(input.walletLamports);
+  const spend = parseAmount(input.spendLamports);
+  const budget = parseAmount(input.budgetLamports);
+  const pending = parseAmount(input.pendingLamports);
+  const reserve = parseAmount(input.reserveLamports);
+  const holders = parseAmount(input.unpaidHolderLamports);
+  const deployer = parseAmount(input.deployerRetainedLamports);
+  const prior = parseAmount(input.unspentPriorBuybackLamports);
+  const deferredHolders = parseAmount(input.deferredHolderLamports);
+  const deferredBuyback = parseAmount(input.deferredBuybackLamports);
+  const deferredDeployer = parseAmount(input.deferredDeployerLamports);
+  if (
+    wallet === null || spend === null || budget === null || pending === null || reserve === null
+    || holders === null || deployer === null || prior === null
+    || deferredHolders === null || deferredBuyback === null || deferredDeployer === null
+  ) {
+    return { ok: false, code: "amount" };
+  }
+  if (spend <= BigInt(0) || budget <= BigInt(0) || pending < BigInt(0) || wallet < BigInt(0)) return { ok: false, code: "amount" };
+  if (spend > budget || pending > deferredBuyback || spend > deferredBuyback - pending) return { ok: false, code: "budget" };
+  if (wallet < reserve + holders + deployer + prior + deferredHolders + deferredBuyback + deferredDeployer) {
+    return { ok: false, code: "unfunded" };
+  }
+  return { ok: true };
+}
+
+export function quoteInsideBuybackBudget(input: {
+  budgetLamports: string;
+  networkFeeLamports: string;
+  rentLamports: string;
+}): { ok: true; quoteLamports: string } | { ok: false; code: "amount" | "budget" } {
+  const budget = parseAmount(input.budgetLamports);
+  const fee = parseAmount(input.networkFeeLamports);
+  const rent = parseAmount(input.rentLamports);
+  if (budget === null || fee === null || rent === null) return { ok: false, code: "amount" };
+  if (fee < BigInt(0) || rent < BigInt(0) || fee + rent >= budget) return { ok: false, code: "budget" };
+  return { ok: true, quoteLamports: (budget - fee - rent).toString() };
+}
+
 export function rewardBase(credited: string, reserveLamports: string): { ok: true; base: string } | { ok: false; code: "amount" } {
   const collected = parseAmount(credited);
   const reserve = parseAmount(reserveLamports);

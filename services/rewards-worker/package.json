@@ -13,6 +13,7 @@
     "kill-wallet": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/kill-wallet.ts",
     "recover-legacy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/legacy-recovery-cli.ts",
     "recover-collection": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/collection-recovery-cli.ts",
+    "deferred-buyback": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/deferred-buyback-cli.ts",
     "register-rehearsal": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/rehearsal-register-cli.ts"
   },
   "dependencies": {
