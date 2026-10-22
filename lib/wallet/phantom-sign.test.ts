@@ -86,19 +86,25 @@ test("unsupported versions, other wallets, and account changes do not sign", asy
   assert.equal(feature.code, "wallet_feature_unavailable");
 });
 
-test("the Wallet Standard feature receives the exact unsigned transaction", async () => {
+test("the Wallet Standard feature receives the account, mainnet, and exact unsigned transaction", async () => {
   let seen: Uint8Array | null = null;
+  const account = {
+    address,
+    publicKey: Uint8Array.of(1),
+    chains: ["solana:mainnet"],
+    features: ["solana:signTransaction"],
+  };
   const signer = readPhantomSigner({
     name: "Phantom",
-    accounts: [{ address }],
+    accounts: [account],
     features: {
       "solana:signTransaction": {
         supportedTransactionVersions: ["legacy", 0, 1],
-        signTransaction: async (inputs: readonly { account: { address: string }; transaction: Uint8Array }[]) => {
-          const first = inputs[0];
-          if (!first) throw new Error("missing");
-          seen = first.transaction;
-          assert.equal(first.account.address, address);
+        signTransaction: async (input: { account: typeof account; chain: string; transaction: Uint8Array }) => {
+          assert.equal(Array.isArray(input), false);
+          assert.equal(input.account, account);
+          assert.equal(input.chain, "solana:mainnet");
+          seen = input.transaction;
           return [{ signedTransaction: Uint8Array.of(7) }];
         },
       },

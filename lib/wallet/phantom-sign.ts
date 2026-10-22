@@ -1,13 +1,30 @@
 import { assessPhantomCapability, observeWallet, type WalletCapability } from "./phantom-capability.ts";
 
+const MAINNET = "solana:mainnet";
+
+type PhantomAccount = {
+  readonly address: string;
+  readonly chains: readonly string[];
+  readonly features: readonly string[];
+};
+
 type StandardSignFeature = {
   supportedTransactionVersions?: readonly (string | number)[];
-  signTransaction?: (inputs: readonly { account: { address: string }; transaction: Uint8Array }[]) => Promise<readonly { signedTransaction: Uint8Array }[]>;
+  signTransaction?: (input: {
+    account: PhantomAccount;
+    chain: string;
+    transaction: Uint8Array;
+  }) => Promise<readonly { signedTransaction: Uint8Array }[]>;
 };
+
+function mainnetChain(chains: readonly string[]): string | null {
+  if (chains.includes(MAINNET)) return MAINNET;
+  return chains.find((chain) => chain.startsWith("solana:") && chain.includes("mainnet")) ?? null;
+}
 
 export function readPhantomSigner(wallet: {
   name: string;
-  accounts: readonly { address: string }[];
+  accounts: readonly PhantomAccount[];
   features: Readonly<Record<string, unknown>>;
 }): PhantomSignInput {
   const observed = observeWallet(wallet);
@@ -20,7 +37,12 @@ export function readPhantomSigner(wallet: {
     ...(signer?.signTransaction
       ? {
           signTransaction: async (transaction: Uint8Array, account: string) => {
-            const outputs = await signer.signTransaction?.([{ account: { address: account }, transaction }]);
+            const selected = wallet.accounts.find((item) => item.address === account);
+            const chain = selected ? mainnetChain(selected.chains) : null;
+            if (!selected || !chain || !selected.features.includes("solana:signTransaction")) {
+              throw new Error("Phantom account cannot sign on mainnet");
+            }
+            const outputs = await signer.signTransaction?.({ account: selected, chain, transaction });
             const signed = outputs?.[0]?.signedTransaction;
             if (!signed) throw new Error("empty signature");
             return signed;
@@ -64,7 +86,8 @@ export async function requestPhantomSignature(input: {
     const signed = await phantom.signTransaction(input.transaction, input.connectedAddress);
     if (signed.byteLength === 0) return { ok: false, code: "sign_empty" };
     return { ok: true, signedTransaction: signed };
-  } catch {
+  } catch (error) {
+    console.error("Phantom sign failed", error instanceof Error ? error.message : "rejected");
     return { ok: false, code: "sign_rejected" };
   }
 }
