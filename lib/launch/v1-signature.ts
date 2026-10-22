@@ -97,10 +97,13 @@ export async function finishLaunchSignatures(input: {
     return { ok: false, code: "blockhash_changed" };
   }
   if ((await digest(committedBytes)) !== input.messageHash) return { ok: false, code: "hash" };
-  const preserved =
-    bytesEqual(committedBytes, returnedBytes) ||
-    phantomPreservedLaunch(committedMessage as V1Message, returnedMessage as V1Message);
-  if (!preserved) return { ok: false, code: "message_changed" };
+  const drift = bytesEqual(committedBytes, returnedBytes)
+    ? null
+    : phantomLaunchDrift(committedMessage as V1Message, returnedMessage as V1Message);
+  if (drift) {
+    console.error("Phantom launch drift", drift);
+    return { ok: false, code: "message_changed" };
+  }
   const walletSignature = returned.signatures[wallet as Address];
   if (!walletSignature) return { ok: false, code: "signature" };
   const walletKey = await getPublicKeyFromAddress(wallet);
@@ -214,59 +217,76 @@ function accountWritable(message: V1Message, index: number): boolean {
   return index < writableSigners || (index >= message.header.numSignerAccounts && index < readonlyTail);
 }
 
-function phantomPreservedLaunch(committed: V1Message, returned: V1Message): boolean {
-  if (String(committed.lifetimeToken) !== String(returned.lifetimeToken)) return false;
-  if (committed.configMask !== returned.configMask || committed.configValues.length !== returned.configValues.length) {
-    return false;
-  }
-  const sameConfig = committed.configValues.every((item, index) => {
-    const other = returned.configValues[index];
-    if (!other || item.kind !== other.kind) return false;
-    return item.kind === "u64" || item.value === other.value;
+function instructionViews(message: V1Message): { program: string; accounts: string[]; data: ArrayLike<number> }[] {
+  return message.instructionHeaders.map((header, index) => {
+    const payload = message.instructionPayloads[index];
+    const accounts = payload ? Array.from(payload.instructionAccountIndices) : [];
+    return {
+      program: message.staticAccounts[header.programAccountIndex] ?? "",
+      accounts: accounts.map((accountIndex) => message.staticAccounts[accountIndex] ?? ""),
+      data: payload?.instructionData ?? [],
+    };
   });
-  if (!sameConfig) return false;
+}
+
+function phantomPreservedLaunch(committed: V1Message, returned: V1Message): boolean {
+  return phantomLaunchDrift(committed, returned) === null;
+}
+
+function phantomLaunchDrift(committed: V1Message, returned: V1Message): string | null {
+  if (String(committed.lifetimeToken) !== String(returned.lifetimeToken)) return "blockhash";
+  if (committed.configMask !== returned.configMask || committed.configValues.length !== returned.configValues.length) {
+    return "config";
+  }
+  const configChanged = committed.configValues.some((item, index) => {
+    const other = returned.configValues[index];
+    if (!other || item.kind !== other.kind) return true;
+    return item.kind !== "u64" && item.value !== other.value;
+  });
+  if (configChanged) return "config";
   const committedSigners = committed.staticAccounts.slice(0, committed.header.numSignerAccounts);
   const returnedSigners = returned.staticAccounts.slice(0, returned.header.numSignerAccounts);
-  if (committedSigners.length !== returnedSigners.length || committedSigners.some((account, index) => account !== returnedSigners[index])) {
-    return false;
+  if (
+    committedSigners.length !== returnedSigners.length ||
+    committedSigners.some((account, index) => account !== returnedSigners[index])
+  ) {
+    return "signers";
+  }
+  const lighthouseAccounts = new Set<string>();
+  const returnedInstructions = instructionViews(returned);
+  const committedInstructions = instructionViews(committed);
+  for (const instruction of returnedInstructions) {
+    if (instruction.program === LIGHTHOUSE_PROGRAM) {
+      for (const account of instruction.accounts) lighthouseAccounts.add(account);
+    }
   }
   for (let index = 0; index < committed.staticAccounts.length; index += 1) {
     const account = committed.staticAccounts[index];
     const returnedIndex = returned.staticAccounts.indexOf(account ?? "");
-    if (returnedIndex < 0) return false;
-    if (accountWritable(committed, index) !== accountWritable(returned, returnedIndex)) return false;
-    if ((index < committed.header.numSignerAccounts) !== (returnedIndex < returned.header.numSignerAccounts)) return false;
+    if (returnedIndex < 0 || !account) return "account-missing";
+    const committedWritable = accountWritable(committed, index);
+    const returnedWritable = accountWritable(returned, returnedIndex);
+    const signerChanged = (index < committed.header.numSignerAccounts) !== (returnedIndex < returned.header.numSignerAccounts);
+    if (signerChanged) return "account-signer";
+    if (committedWritable === returnedWritable) continue;
+    if (committedWritable || !lighthouseAccounts.has(account)) return "account-writable";
   }
   for (let index = 0; index < returned.staticAccounts.length; index += 1) {
     const account = returned.staticAccounts[index];
-    if (account && !committed.staticAccounts.includes(account) && index < returned.header.numSignerAccounts) return false;
+    if (account && !committed.staticAccounts.includes(account) && index < returned.header.numSignerAccounts) {
+      return "extra-signer";
+    }
   }
-  if (returned.instructionPayloads.length < committed.instructionPayloads.length) return false;
-  for (let index = 0; index < committed.instructionPayloads.length; index += 1) {
-    if (!sameInstruction(committed, returned, index)) return false;
+  const committedLaunch = committedInstructions.filter((instruction) => instruction.program !== LIGHTHOUSE_PROGRAM);
+  const returnedLaunch = returnedInstructions.filter((instruction) => instruction.program !== LIGHTHOUSE_PROGRAM);
+  if (committedLaunch.length !== returnedLaunch.length) return "instruction-count";
+  for (let index = 0; index < committedLaunch.length; index += 1) {
+    const left = committedLaunch[index];
+    const right = returnedLaunch[index];
+    if (!left || !right || left.program !== right.program || left.accounts.join(",") !== right.accounts.join(",")) {
+      return `instruction-${index}`;
+    }
+    if (!bytesEqual(left.data, right.data)) return `instruction-data-${index}`;
   }
-  for (let index = committed.instructionPayloads.length; index < returned.instructionPayloads.length; index += 1) {
-    const header = returned.instructionHeaders[index];
-    if (!header || returned.staticAccounts[header.programAccountIndex] !== LIGHTHOUSE_PROGRAM) return false;
-  }
-  return true;
-}
-
-function sameInstruction(committed: V1Message, returned: V1Message, index: number): boolean {
-  const committedHeader = committed.instructionHeaders[index];
-  const returnedHeader = returned.instructionHeaders[index];
-  const committedPayload = committed.instructionPayloads[index];
-  const returnedPayload = returned.instructionPayloads[index];
-  if (!committedHeader || !returnedHeader || !committedPayload || !returnedPayload) return false;
-  if (committed.staticAccounts[committedHeader.programAccountIndex] !== returned.staticAccounts[returnedHeader.programAccountIndex]) {
-    return false;
-  }
-  if (!bytesEqual(committedPayload.instructionData, returnedPayload.instructionData)) return false;
-  const committedAccounts = Array.from(committedPayload.instructionAccountIndices);
-  const returnedAccounts = Array.from(returnedPayload.instructionAccountIndices);
-  if (committedAccounts.length !== returnedAccounts.length) return false;
-  return committedAccounts.every((accountIndex, key) => {
-    const returnedIndex = returnedAccounts[key];
-    return returnedIndex !== undefined && committed.staticAccounts[accountIndex] === returned.staticAccounts[returnedIndex];
-  });
+  return null;
 }

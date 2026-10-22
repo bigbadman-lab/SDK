@@ -36,6 +36,8 @@ async function transaction(input: {
   data?: Uint8Array;
   feeAccount?: Address;
   extraProgram?: Address;
+  extraAccounts?: { address: Address; role: AccountRole }[];
+  readonlyAccount?: Address;
 }) {
   const walletAddress = await getAddressFromPublicKey(input.wallet.publicKey);
   const mintAddress = await getAddressFromPublicKey(input.mint.publicKey);
@@ -55,6 +57,7 @@ async function transaction(input: {
             { address: walletAddress, role: AccountRole.WRITABLE_SIGNER },
             { address: mintAddress, role: AccountRole.WRITABLE_SIGNER },
             { address: input.feeAccount ?? address("DLhNy5Y33LrSoszV4cG3dEfcXTTmnRMDDUgFLMpt7zwC"), role: AccountRole.WRITABLE },
+            ...(input.readonlyAccount ? [{ address: input.readonlyAccount, role: AccountRole.READONLY }] : []),
           ],
           data: input.data ?? Uint8Array.of(1, 2, 3),
         },
@@ -65,7 +68,7 @@ async function transaction(input: {
     ? appendTransactionMessageInstruction(
         {
           programAddress: input.extraProgram,
-          accounts: [],
+          accounts: input.extraAccounts ?? [],
           data: Uint8Array.of(9),
         },
         drafted,
@@ -181,9 +184,16 @@ test("blockhash, fee, metadata, buy, and mint changes are rejected", async () =>
 test("Phantom's lighthouse instruction can be co-signed and another program cannot", async () => {
   const wallet = await generateKeyPair();
   const mint = await generateKeyPair();
-  const built = await transaction({ wallet, mint });
+  const rent = address("SysvarRent111111111111111111111111111111111");
+  const built = await transaction({ wallet, mint, readonlyAccount: rent });
   const lighthouse = address("L2TExMFKdjpN9kozasaurPirfHy9P8sbXoAN1qA3S95");
-  const augmented = await transaction({ wallet, mint, extraProgram: lighthouse });
+  const augmented = await transaction({
+    wallet,
+    mint,
+    readonlyAccount: rent,
+    extraProgram: lighthouse,
+    extraAccounts: [{ address: rent, role: AccountRole.WRITABLE }],
+  });
   const common = {
     committedTransaction: built.wire,
     mint,
