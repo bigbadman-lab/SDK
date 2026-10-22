@@ -27,8 +27,13 @@ const pump = require("@pump-fun/pump-sdk") as {
   getGlobalParamsPda: () => PublicKey;
   getSolVaultPda: () => PublicKey;
   feeSharingConfigPda: (mint: PublicKey) => PublicKey;
+  creatorVaultPda: (creator: PublicKey) => PublicKey;
   PumpSdk: new () => SdkClient;
   MAX_CURVE_DEPTH: number;
+};
+
+const swap = require("@pump-fun/pump-swap-sdk") as {
+  coinCreatorVaultAuthorityPda: (creator: PublicKey) => PublicKey;
 };
 
 export const EXPECTED_PROGRAMS = {
@@ -82,6 +87,10 @@ export function knownStaticAddresses(platformWallet: string): string[] {
     new PublicKey(BUYBACK_FEE_RECIPIENT),
     new PublicKey(platformWallet),
   ].map((key) => key.toBase58());
+}
+
+export function coinCreatorVaultAuthority(sharingConfig: PublicKey): PublicKey {
+  return swap.coinCreatorVaultAuthorityPda(sharingConfig);
 }
 
 export { pump };

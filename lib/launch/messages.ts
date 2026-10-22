@@ -48,6 +48,12 @@ export function launchMessage(code: string): string {
     return "The artwork or metadata could not be pinned. Nothing was marked ready.";
   if (code === "schema_missing" || code === "unavailable" || code === "not_ready")
     return "Launch preparation is unavailable.";
+  if (code === "simulation_failed")
+    return "The launch transaction did not simulate. Nothing was signed.";
+  if (code === "builder_rejected")
+    return "The transaction builder rejected this launch. Nothing was signed.";
+  if (code === "builder_unconfigured")
+    return "The transaction builder is not configured. Nothing was signed.";
   if (code === "parent_unregistered")
     return "The rehearsal parent is not registered.";
   if (code === "parent_immutable" || code === "parent_scope")

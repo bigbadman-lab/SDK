@@ -13,7 +13,7 @@ import {
 import BN from "bn.js";
 
 import type { Shareholder } from "../../../lib/launch/fees.ts";
-import { pump } from "./protocol.ts";
+import { coinCreatorVaultAuthority, pump } from "./protocol.ts";
 import { V1_COMPUTE_UNIT_LIMIT, compileLaunchV1 } from "./v1.ts";
 
 export class AssembleError extends Error {
@@ -235,8 +235,16 @@ export async function assembleChildLaunch(input: AssembleLaunchInput): Promise<A
     quoteTokenProgram: input.quoteTokenProgram,
     bondingCurveComplete: false,
   });
+  const sharingConfig = pump.feeSharingConfigPda(input.mint);
   const atas = new Map<string, TransactionInstruction>();
-  for (const owner of [input.launcher, ...holders.map((holder) => holder.address)]) {
+  // Fee updates distribute the quote before changing shares. A new child has
+  // no creator vault yet, and the fee program rejects that missing token account.
+  for (const owner of [
+    input.launcher,
+    ...holders.map((holder) => holder.address),
+    pump.creatorVaultPda(sharingConfig),
+    coinCreatorVaultAuthority(sharingConfig),
+  ]) {
     const instruction = quoteAta(input.launcher, owner, input.parentMint, input.quoteTokenProgram);
     const key = instruction.keys.map((item) => `${item.pubkey.toBase58()}:${item.isSigner}`).join(",");
     atas.set(key, instruction);
@@ -280,7 +288,7 @@ export async function assembleChildLaunch(input: AssembleLaunchInput): Promise<A
   if (!input.buy && buyAt !== -1) throw new AssembleError("buy");
   if (!create.keys.some((key) => key.pubkey.equals(input.parentMint))) throw new AssembleError("quote");
   if (!create.keys.some((key) => key.pubkey.equals(input.mint))) throw new AssembleError("mint");
-  const sharing = pump.feeSharingConfigPda(input.mint);
+  const sharing = sharingConfig;
   if (!feeConfig.keys.some((key) => key.pubkey.equals(sharing))) throw new AssembleError("fee_sharing");
   if (!update.keys.some((key) => key.pubkey.equals(sharing))) throw new AssembleError("fee_sharing");
   if (create.programId.toBase58() !== pump.PUMP_PROGRAM_ID.toBase58()) throw new AssembleError("program");

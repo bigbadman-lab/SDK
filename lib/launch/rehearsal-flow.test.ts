@@ -19,6 +19,7 @@ import {
 import { verifyLaunchEvidence } from "./chain-evidence.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "./fees.ts";
 import { preflightChildLaunch, preflightMessageBound } from "./preflight.ts";
+import { launchMessage } from "./messages.ts";
 import { recoveryPhase, rehearsalSignAllowed } from "./rehearsal-flow.ts";
 import { noteBroadcast, noteChain, noteVerification } from "./submission.ts";
 import { planRecovery, planSubmission, type StoredLaunchBuild } from "./submit-plan.ts";
@@ -55,6 +56,12 @@ test("the public path stays closed and a non-operator cannot open a TREST rehear
   });
   assert.equal(closed.allowed, false);
   assert.equal(closed.reason, "public");
+  const actions = readFileSync(new URL("../../components/launch/rehearsal-actions.tsx", import.meta.url), "utf8");
+  assert.equal(actions.includes('setPhase("unavailable")'), false);
+  assert.equal(actions.includes("audiencePair(true)"), true);
+  assert.equal(launchMessage("simulation_failed").includes("did not simulate"), true);
+  assert.equal(launchMessage("simulation_failed").includes("not accepted"), false);
+  assert.equal(launchMessage("builder_rejected").includes("not accepted"), false);
 });
 
 test("signing stays closed until the parent, preflight, approval, and mint all match", () => {

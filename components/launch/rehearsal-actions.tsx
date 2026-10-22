@@ -78,7 +78,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       if (cancelled) return;
       if (!probe.ok) {
         setNotice(launchMessage(probed.code ?? "unavailable"));
-        setPhase("unavailable");
+        setPhase(rehearsalBuildFailure(probed.code ?? "unavailable"));
         setParentRegistered(probed.code !== "parent_unregistered");
         return;
       }
@@ -102,7 +102,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       if (cancelled) return;
       if (!response.ok) {
         setNotice(launchMessage(body.code ?? "unavailable"));
-        setPhase(body.code === "mint_conflict" ? "failed" : "unavailable");
+        setPhase(body.code === "mint_conflict" ? "failed" : rehearsalBuildFailure(body.code ?? "unavailable"));
         setParentRegistered(body.code !== "parent_unregistered");
         return;
       }
@@ -149,6 +149,7 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
     mintAvailable,
   });
   const copy = launchLifecycleCopy(asLifecycle(phase));
+  const buildRejected = phase === "failed" && !build && !signature;
   const pair = audiencePair(true);
 
   async function approve() {
@@ -285,8 +286,8 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
           </>
         ) : null}
       </dl>
-      <p className="text-[14px] leading-[1.4]">{copy.title}</p>
-      <p className="text-[13px] leading-[1.5] text-muted-foreground">{copy.body}</p>
+      <p className="text-[14px] leading-[1.4]">{buildRejected ? "Build not accepted" : copy.title}</p>
+      {buildRejected ? null : <p className="text-[13px] leading-[1.5] text-muted-foreground">{copy.body}</p>}
       {notice ? <p className="text-[13px] leading-[1.5]">{notice}</p> : null}
       {signature ? <p className="font-mono text-[10px] break-all text-muted-foreground">Signature {signature}</p> : null}
       {phase === "verified" && build ? (
@@ -326,6 +327,11 @@ export function RehearsalActions({ review }: { review: LaunchReview }): ReactNod
       ) : null}
     </div>
   );
+}
+
+function rehearsalBuildFailure(code: string): string {
+  if (code === "builder_unconfigured" || code === "unavailable") return "service_unavailable";
+  return "failed";
 }
 
 function Pair({ term, value }: { term: string; value: string }): ReactNode {

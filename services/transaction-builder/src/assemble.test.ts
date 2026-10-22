@@ -16,7 +16,7 @@ import {
   FIXTURE_PARENT,
   measureFixtures,
 } from "./fixtures.ts";
-import { EXPECTED_PROGRAMS, pump } from "./protocol.ts";
+import { coinCreatorVaultAuthority, EXPECTED_PROGRAMS, pump } from "./protocol.ts";
 
 test("packet bytes match the Solana serializer", () => {
   const payer = FIXTURE_LAUNCHER;
@@ -237,4 +237,14 @@ test("merged launcher and platform shareholders stay unique", async () => {
   }
   assert.equal(assembled.roles.includes("update_fee_shares_v2"), true);
   assert.equal(assembled.roles.includes("buy_exact_quote_in_v3"), false);
+  const sharing = pump.feeSharingConfigPda(FIXTURE_MINT);
+  const vaultOwners = new Set([
+    pump.creatorVaultPda(sharing).toBase58(),
+    coinCreatorVaultAuthority(sharing).toBase58(),
+  ]);
+  const createdOwners = assembled.instructions
+    .filter((_, index) => assembled.roles[index] === "quote_ata")
+    .map((instruction) => instruction.keys[2]?.pubkey.toBase58());
+  for (const owner of vaultOwners) assert.equal(createdOwners.includes(owner), true);
+  assert.ok(assembled.roles.indexOf("quote_ata") < assembled.roles.indexOf("update_fee_shares_v2"));
 });
