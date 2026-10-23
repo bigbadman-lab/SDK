@@ -1,43 +1,46 @@
 import { BuilderIntro } from "@/components/builder-intro";
+import { Ecosystem } from "@/components/home/ecosystem";
+import { HowItWorks } from "@/components/home/how-it-works";
+import { LaunchShowcase } from "@/components/home/launch-showcase";
+import { LibraryShowcase } from "@/components/home/library-showcase";
 import { FinalCta } from "@/components/final-cta";
 import { Footer } from "@/components/footer";
 import { Hero } from "@/components/hero";
-import { Journeys } from "@/components/journeys";
 import { Reveal } from "@/components/reveal";
-import { Scope } from "@/components/scope";
 import { StructuredData } from "@/components/structured-data";
-import { createMetadata, siteConfig } from "@/lib/metadata";
-import { loadOfficialSdk } from "@/lib/server/sdk/official";
+import { createMetadata } from "@/lib/metadata";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
+const description =
+  "Create working SDKs with AI, remix existing tools, or bring your own code. Turn software into token-powered applications on Solana, all paired with $SDK.";
+
 export const metadata: Metadata = {
   ...createMetadata({
     title: "SDK",
-    description: siteConfig.description,
+    description,
     path: "/",
   }),
   title: { absolute: "SDK" },
 };
 
-export default async function HomePage(): Promise<ReactNode> {
-  const official = await loadOfficialSdk();
-  const mint = official.ok && official.phase === "live" ? official.mint : null;
-
+export default function HomePage(): ReactNode {
   return (
     <>
-      <StructuredData />
+      <StructuredData description={description} />
       <span id="top" />
       <main id="main-content" className="scroll-mt-23">
-        <Hero mint={mint} />
+        <Hero />
         <BuilderIntro />
+        <LibraryShowcase />
         <Reveal>
-          <Journeys />
+          <HowItWorks />
         </Reveal>
+        <LaunchShowcase />
         <Reveal>
-          <Scope />
+          <Ecosystem />
         </Reveal>
         <FinalCta />
       </main>

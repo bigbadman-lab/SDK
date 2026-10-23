@@ -8,9 +8,9 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 const EXAMPLES = [
-  { label: "Wallet activity", prompt: "Summarize recent activity for a Solana wallet." },
-  { label: "Token balance", prompt: "Read one wallet's balance of a token mint." },
-  { label: "Transaction", prompt: "Explain a transaction signature in plain language." },
+  "Build a Solana wallet intelligence tool",
+  "Create an AI-powered token research assistant",
+  "Build an on-chain transaction analyser",
 ] as const;
 
 export function HomePrompt(): ReactNode {
@@ -67,13 +67,13 @@ export function HomePrompt(): ReactNode {
     >
       <div className="rounded-[14px] border border-solid border-[#ffffff1f] bg-[#1c1c1c] px-3.5 pt-3 pb-2.5 shadow-[0_8px_28px_#00000040]">
         <label className="sr-only" htmlFor="sdk-home-prompt">
-          Describe an SDK
+          What do you want to build?
         </label>
         <textarea
           id="sdk-home-prompt"
           value={text}
           rows={2}
-          placeholder="Describe an SDK"
+          placeholder="What do you want to build?"
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -86,19 +86,19 @@ export function HomePrompt(): ReactNode {
         <div className="mt-1 flex items-center gap-2">
           <div className="flex min-w-0 flex-1 flex-wrap gap-1">
             {EXAMPLES.map((example) => {
-              const selected = text === example.prompt;
+              const selected = text === example;
               return (
                 <button
-                  key={example.label}
+                  key={example}
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => setText(example.prompt)}
+                  onClick={() => setText(example)}
                   className={
-                    "shrink-0 rounded-lg px-2.5 py-1.5 text-[13px] " +
+                    "shrink-0 rounded-lg px-2.5 py-1.5 text-left text-[13px] " +
                     (selected ? "bg-[#3a3a3a] text-[#f5f5f5]" : "text-[#c6c6c6] hover:bg-[#2a2a2a]")
                   }
                 >
-                  {example.label}
+                  {example}
                 </button>
               );
             })}
@@ -114,7 +114,7 @@ export function HomePrompt(): ReactNode {
         </div>
       </div>
       <p className="mt-3 text-[13px] text-[#ffffff] [text-shadow:0_1px_3px_#000]">
-        Describe it here. Building, testing, and saving happen in the Builder.
+        From prompt to working SDK, in one workspace.
       </p>
       <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[#ffffffd0] [text-shadow:0_1px_3px_#000]">
         <span className="inline-flex items-center gap-1.5">

@@ -5,30 +5,28 @@ import type { ReactNode } from "react";
 
 const GROUPS = [
   {
-    title: "PRODUCT",
+    title: "Platform",
     links: [
-      { label: "Journeys", href: "/#journeys" },
-      { label: "Builder", href: "/build" },
-      { label: "Library", href: "/library" },
-      { label: "Paired", href: "/paired" },
+      { label: "AI Builder", href: "/build" },
+      { label: "SDK Library", href: "/library" },
+      { label: "Launch", href: "/launch" },
+      { label: "Paired Tokens", href: "/paired" },
       { label: "$SDK", href: "/sdk" },
+    ],
+  },
+  {
+    title: "Developers",
+    links: [
+      { label: "API & Client", href: "/code" },
+      { label: "Submit an SDK", href: "/#publish" },
+    ],
+  },
+  {
+    title: "Explore",
+    links: [
+      { label: "About SDK", href: "/about" },
       { label: "Account", href: "/account" },
-      { label: "Current scope", href: "/#scope" },
-    ],
-  },
-  {
-    title: "FOR DEVELOPERS",
-    links: [
-      { label: "Submit without a token", href: "/#community" },
-      { label: "Code", href: "/code" },
-      { label: "About this site", href: "/about" },
-    ],
-  },
-  {
-    title: "NOT LIVE YET",
-    links: [
-      { label: "What this site cannot do", href: "/#scope" },
-      { label: "Local setup", href: "/about#setup" },
+      { label: "Token Ecosystem", href: "/#ecosystem" },
     ],
   },
 ];
@@ -41,28 +39,26 @@ export function Footer(): ReactNode {
           <Link href="/#top" aria-label="SDK home">
             <Logo />
           </Link>
-          <p>
-            Build a working SDK, test it, and publish it by launching a token
-            paired with $SDK.
-          </p>
+          <p>Build, publish and launch working software on Solana.</p>
         </div>
         {GROUPS.map((group) => (
           <div
-            className="[&_a]:mt-4.5 [&_a]:flex [&_a]:w-[fit-content] [&_a]:items-center [&_a]:gap-1.5 [&_a]:font-mono [&_a]:text-[10px] [&_a]:[line-height:normal] [&_a]:font-normal [&_a]:uppercase [&_a]:not-italic max-[561px]:[&_a]:text-[9px] max-[561px]:[&_a]:leading-[1.5] [&_a_svg]:opacity-0 [&_a_svg]:transition-opacity [&_a_svg]:duration-[180ms] [&_a_svg]:ease-[ease] [&_a:hover_svg]:opacity-100 [&_h3]:mx-0 [&_h3]:mt-1 [&_h3]:mb-6 [&_h3]:font-mono [&_h3]:text-[10px] [&_h3]:[line-height:normal] [&_h3]:font-normal [&_h3]:text-muted-foreground [&_h3]:not-italic max-[561px]:[&_h3]:text-[9px]"
+            className="[&_a]:mt-4.5 [&_a]:flex [&_a]:w-[fit-content] [&_a]:items-center [&_a]:gap-1.5 [&_a]:font-mono [&_a]:text-[10px] [&_a]:[line-height:normal] [&_a]:font-normal [&_a]:uppercase [&_a]:not-italic max-[561px]:[&_a]:text-[9px] max-[561px]:[&_a]:leading-[1.5] [&_a_svg]:opacity-0 [&_a_svg]:transition-opacity [&_a_svg]:duration-[180ms] [&_a_svg]:ease-[ease] [&_a:hover_svg]:opacity-100 [&_h3]:mx-0 [&_h3]:mt-1 [&_h3]:mb-6 [&_h3]:font-mono [&_h3]:text-[10px] [&_h3]:[line-height:normal] [&_h3]:font-normal [&_h3]:text-muted-foreground [&_h3]:uppercase [&_h3]:not-italic max-[561px]:[&_h3]:text-[9px]"
             key={group.title}
           >
             <h3>{group.title}</h3>
             {group.links.map((link) => (
-              <a href={link.href} key={link.label}>
+              <Link href={link.href} key={link.label}>
                 {link.label}
                 <ArrowUpRight size={12} />
-              </a>
+              </Link>
             ))}
           </div>
         ))}
       </div>
       <div className="flex items-center justify-between gap-4 border-t border-t-border px-0 pt-6 pb-8 font-mono text-[9px] [line-height:normal] font-normal text-muted-foreground not-italic max-[800px]:flex-wrap max-[800px]:leading-[1.7] max-[561px]:pb-19 max-[561px]:text-[8px] max-[561px]:[&_>_span:nth-child(2)]:[order:3] max-[561px]:[&_>_span:nth-child(2)]:w-full [&_a]:inline-flex [&_a]:items-center [&_a]:gap-0.75">
         <span>© {new Date().getFullYear()} SDK</span>
+        <span>Built for software. Powered by $SDK.</span>
         <Link href="/#top">BACK TO THE TOP ↑</Link>
       </div>
     </footer>

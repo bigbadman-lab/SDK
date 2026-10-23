@@ -1,14 +1,14 @@
 import { siteConfig } from "@/lib/metadata";
 import type { ReactNode } from "react";
 
-export function StructuredData(): ReactNode {
+export function StructuredData({ description = siteConfig.description }: { description?: string }): ReactNode {
   if (!siteConfig.url) return null;
   const data = {
     "@context": "https://schema.org",
     "@type": "WebSite",
     name: siteConfig.name,
     url: siteConfig.url,
-    description: siteConfig.description,
+    description,
   };
   return (
     <script

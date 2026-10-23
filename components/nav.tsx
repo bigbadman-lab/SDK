@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { ArrowUpRight, Menu, X } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { trapDialogFocus } from "@/lib/dialog";
@@ -19,6 +20,7 @@ const LINKS = [
 ];
 
 export function Nav(): ReactNode {
+  const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -87,7 +89,8 @@ export function Nav(): ReactNode {
             <Link
               key={link.href}
               href={link.href}
-              className={link.href === "/launch" ? "text-accent-ink" : undefined}
+              aria-current={currentNav(pathname, link.href) ? "page" : undefined}
+              className={currentNav(pathname, link.href) ? "text-accent-ink" : undefined}
             >
               {link.label}
             </Link>
@@ -123,6 +126,7 @@ export function Nav(): ReactNode {
             <Link
               key={link.href}
               href={link.href}
+              aria-current={currentNav(pathname, link.href) ? "page" : undefined}
               onClick={() => setOpen(false)}
             >
               <span>0{index + 1}</span>
@@ -139,4 +143,9 @@ export function Nav(): ReactNode {
       </dialog>
     </header>
   );
+}
+
+function currentNav(pathname: string, href: string): boolean {
+  if (href === "/library") return pathname === "/library" || pathname.startsWith("/library/");
+  return pathname === href;
 }
