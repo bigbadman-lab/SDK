@@ -123,6 +123,7 @@ export function LaunchSelector({
 
 export function HeldSdk({
   sdk,
+  mintRegistered = false,
 }: {
   sdk: {
     name: string;
@@ -131,18 +132,19 @@ export function HeldSdk({
     versionLabel: string;
     originatorLabel: string;
   };
+  mintRegistered?: boolean;
 }): ReactNode {
   return (
     <div className="mt-6 grid gap-4 border border-solid border-border p-4">
       <div className="flex items-center justify-between gap-3">
         <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
-          Selected SDK
+          Your selected SDK
         </p>
         <Link
           href="/launch"
           className="font-mono text-[10px] tracking-[0.04em] uppercase"
         >
-          Change SDK
+          Choose another SDK
         </Link>
       </div>
       <h2 className="font-display text-[26px] leading-[1.15]">{sdk.name}</h2>
@@ -156,8 +158,13 @@ export function HeldSdk({
         Originating developer {sdk.originatorLabel}
       </p>
       <p className="text-[14px] leading-[1.5] text-muted-foreground">
-        Sign in to continue. On-chain launching is not available yet.
+        Connect your wallet to continue.
       </p>
+      {mintRegistered ? null : (
+        <p className="text-[14px] leading-[1.5] text-muted-foreground">
+          Token launching opens when the official $SDK mint is registered.
+        </p>
+      )}
       <WalletButton />
     </div>
   );
@@ -227,7 +234,7 @@ function ChoiceList({ choices }: { choices: LaunchChoice[] }): ReactNode {
             href={sdk.href}
             className="justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 text-center font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
           >
-            Select
+            Use this SDK
           </Link>
         </li>
       ))}

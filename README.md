@@ -77,4 +77,4 @@ npx supabase db push
 
 ## Design credit
 
-The interface retains the Agentframe template from React Bits Pro. See `LICENSE` and `docs/design.md`. The landscape photograph is credited on the About page. The wordmark is the text “SDK” until approved artwork is supplied.
+The interface retains the Agentframe template from React Bits Pro. See `LICENSE` and `docs/design.md`. The landscape photograph is credited in `docs/design.md`. The wordmark is the text “SDK” until approved artwork is supplied.

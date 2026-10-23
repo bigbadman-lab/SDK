@@ -36,6 +36,12 @@ type BuilderEvent = {
   unauthenticated?: boolean;
 };
 
+const EXAMPLES = [
+  "Build a Solana wallet intelligence tool",
+  "Create an AI-powered token research assistant",
+  "Build an on-chain transaction analyser",
+] as const;
+
 const STAGE_LABEL: Record<Stage, string> = {
   understanding: "Understanding your request",
   constructing: "Constructing SDK Blueprint",
@@ -129,7 +135,7 @@ export function BuilderPanel(): ReactNode {
       } catch {
         if (!cancelled) {
           setStage(null);
-          setNotice("The blueprint request was not accepted.");
+          setNotice("The request was not accepted.");
         }
       } finally {
         if (!cancelled) {
@@ -153,7 +159,7 @@ export function BuilderPanel(): ReactNode {
     }
     if (!ready || ready.error || !ready.draftId || !ready.blueprint) {
       setStage(null);
-      setNotice(ready?.error ?? "The blueprint request was not accepted.");
+      setNotice(ready?.error ?? "The request was not accepted.");
       return;
     }
     if (draftIdRef.current !== ready.draftId) setSource(null);
@@ -164,7 +170,7 @@ export function BuilderPanel(): ReactNode {
     setBlueprint(ready.blueprint);
     setMessages((current) => [
       ...(alreadyListed ? current : [...current, { role: "user", content: userText }]),
-      { role: "assistant", content: ready.reply ?? "The blueprint is ready to test." },
+      { role: "assistant", content: ready.reply ?? "Your SDK is ready to test." },
     ]);
     setText("");
     setRun(null);
@@ -196,7 +202,7 @@ export function BuilderPanel(): ReactNode {
       applyGeneration(ready, message, false);
     } catch {
       setStage(null);
-      setNotice("The blueprint request was not accepted.");
+      setNotice("The request was not accepted.");
     } finally {
       busy.current = false;
       setPending(null);
@@ -299,9 +305,9 @@ export function BuilderPanel(): ReactNode {
   if (!session.authenticated) {
     return (
       <div className="grid content-start gap-3">
-        <p className="font-mono text-[10px] tracking-[0.08em] text-accent-ink uppercase">Builder</p>
+        <p className="font-mono text-[10px] tracking-[0.08em] text-accent-ink uppercase">AI SDK Builder</p>
         <p className="max-w-130 text-[15px] leading-[1.6] text-muted-foreground">
-          Sign in to build an SDK. A connected wallet is not a signed-in session until the server verifies it.
+          Connect your wallet to start building and save your work.
         </p>
         <WalletButton compact />
       </div>
@@ -321,7 +327,7 @@ export function BuilderPanel(): ReactNode {
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-4 max-[800px]:grid-cols-1">
         <section className={`flex min-h-0 min-w-0 flex-col gap-3 overflow-auto border border-solid border-border bg-card p-5 ${conversationHidden}`}>
           <p className="font-mono text-[10px] tracking-[0.08em] text-accent-ink uppercase">
-            {savedName ? "Saved SDK" : "Unsaved workspace"}
+            {savedName ? "Saved SDK" : "New SDK"}
           </p>
           {source ? (
             <p className="font-mono text-[10px] text-muted-foreground uppercase">
@@ -330,9 +336,24 @@ export function BuilderPanel(): ReactNode {
           ) : null}
           <div className="grid min-h-24 gap-2">
             {messages.length === 0 ? (
-              <p className="text-[14px] leading-[1.6] text-muted-foreground">
-                Describe the SDK you want. Nothing is added to My SDKs until you test it and save a name.
-              </p>
+              <div className="grid gap-3">
+                <p className="text-[16px] leading-[1.4]">What will you build?</p>
+                <p className="text-[14px] leading-[1.6] text-muted-foreground">
+                  Describe a tool, application or workflow. SDK will help turn your instructions into a working SDK.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {EXAMPLES.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => setText(example)}
+                      className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-left text-[13px] leading-[1.45] text-foreground"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ) : (
               messages.map((message, index) => (
                 <p key={`${message.role}-${index}`} className="text-[14px] leading-[1.5] break-words">
@@ -352,7 +373,7 @@ export function BuilderPanel(): ReactNode {
             <p className="font-mono text-[10px] text-accent-ink uppercase" aria-live="polite">{STAGE_LABEL.ready}</p>
           ) : null}
           <label className="mt-auto grid gap-1 font-mono text-[10px] text-muted-foreground uppercase">
-            Request
+            What do you want to build?
             <textarea
               value={text}
               disabled={pending !== null}
@@ -393,12 +414,19 @@ export function BuilderPanel(): ReactNode {
                   </p>
                 ))}
               </div>
-              <p className="font-mono text-[10px] text-accent-ink uppercase">
-                Valid blueprint. {savedName ? `Saved as ${savedName}.` : "Not saved."}{" "}
-                {dirty ? "This revision is not saved." : ""} Not launched.
-              </p>
+              <div className="grid gap-2">
+                <p className="text-[16px] leading-[1.4]">Your SDK is ready to test.</p>
+                <p className="text-[14px] leading-[1.6] text-muted-foreground">
+                  Run your SDK against real inputs, review the output and save it when you&apos;re happy with the result.
+                </p>
+                {savedName ? (
+                  <p className="font-mono text-[10px] text-muted-foreground uppercase">
+                    Saved as {savedName}.{dirty ? " This version has unsaved changes." : ""}
+                  </p>
+                ) : null}
+              </div>
               <details className="font-mono text-[10px] text-muted-foreground">
-                <summary className="cursor-pointer uppercase">Blueprint JSON</summary>
+                <summary className="cursor-pointer uppercase">Developer details</summary>
                 <pre className="mt-2 overflow-auto leading-[1.5] break-words whitespace-pre-wrap text-foreground">
                   {JSON.stringify(blueprint, null, 2)}
                 </pre>
@@ -466,12 +494,13 @@ export function BuilderPanel(): ReactNode {
               {tested ? (
                 naming ? (
                   <form
-                    className="grid gap-2"
+                    className="grid gap-2 border-t border-t-border pt-3"
                     onSubmit={(event) => {
                       event.preventDefault();
                       void submitSave();
                     }}
                   >
+                    <SaveGuidance />
                     <label className="grid gap-1 font-mono text-[10px] text-muted-foreground uppercase">
                       SDK name
                       <input
@@ -498,30 +527,47 @@ export function BuilderPanel(): ReactNode {
                     </button>
                   </form>
                 ) : (
-                  <button
-                    type="button"
-                    disabled={pending !== null}
-                    onClick={() => {
-                      setSdkName(savedName || blueprint.name || "");
-                      setSdkDescription(blueprint.description ?? "");
-                      setNaming(true);
-                    }}
-                    className="justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:opacity-60"
-                  >
-                    Save SDK
-                  </button>
+                  <div className="grid gap-2 border-t border-t-border pt-3">
+                    <SaveGuidance />
+                    <button
+                      type="button"
+                      disabled={pending !== null}
+                      onClick={() => {
+                        setSdkName(savedName || blueprint.name || "");
+                        setSdkDescription(blueprint.description ?? "");
+                        setNaming(true);
+                      }}
+                      className="justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:opacity-60"
+                    >
+                      Save SDK
+                    </button>
+                  </div>
                 )
               ) : (
-                <p className="font-mono text-[10px] text-muted-foreground uppercase">Test this revision before saving.</p>
+                <p className="text-[14px] leading-[1.6] text-muted-foreground">Run a successful test before saving this SDK.</p>
               )}
             </>
           ) : (
             <p className="text-[14px] leading-[1.6] text-muted-foreground">
-              The SDK preview appears here after the blueprint is ready. A test is not a launch.
+              Your SDK will appear here as you build.
             </p>
           )}
         </section>
       </div>
+    </div>
+  );
+}
+
+function SaveGuidance(): ReactNode {
+  return (
+    <div className="grid gap-2">
+      <p className="text-[16px] leading-[1.4]">Save your SDK</p>
+      <p className="text-[14px] leading-[1.6] text-muted-foreground">
+        Give your SDK a name and save it to your account.
+      </p>
+      <p className="text-[14px] leading-[1.6] text-muted-foreground">
+        Saving keeps it on your account. You can then submit it to the Library for review, or launch a token associated with it.
+      </p>
     </div>
   );
 }
@@ -616,7 +662,7 @@ async function postMessage(
   }
   if (!response.ok) {
     const body = (await response.json()) as { error?: string };
-    return { error: body.error ?? "The blueprint request was not accepted." };
+    return { error: body.error ?? "The request was not accepted." };
   }
   return readEvents(response);
 }

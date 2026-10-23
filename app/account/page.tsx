@@ -1,17 +1,25 @@
 import { ApiKeys } from "@/components/account/api-keys";
-import { AccountBodySkeleton, AccountIntro, AccountSectionSkeleton, accountMainClass } from "@/components/account/account-skeleton";
+import {
+  AccountBodySkeleton,
+  AccountIntro,
+  AccountSectionHeading,
+  AccountSectionSkeleton,
+  accountMainClass,
+} from "@/components/account/account-skeleton";
 import { HolderRewards, SdkEarnings } from "@/components/account/holder-rewards";
 import { DraftList } from "@/components/builder/draft-list";
 import { VerifiedLaunchList } from "@/components/launch/verified-list";
 import { LaunchResume } from "@/components/launch/launch-progress";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
+import { HomeLink } from "@/components/home/chrome";
 import { Footer } from "@/components/footer";
 import { createMetadata } from "@/lib/metadata";
 import { readSession, type AccountIdentity } from "@/lib/server/auth";
 import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
 import { loadVerifiedLaunches, loadOpenLaunch } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
+import { shortenAddress } from "@/lib/launch/verified-launch";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import type { RewardScope } from "@/lib/rewards/ledger";
 import { cookies } from "next/headers";
@@ -20,8 +28,7 @@ import { Suspense, type ReactNode } from "react";
 
 export const metadata = createMetadata({
   title: "Account",
-  description:
-    "Sign in with a Solana wallet. A connected wallet is not a signed-in account until the server verifies a signature.",
+  description: "Manage your SDKs, launched tokens, API keys and ecosystem rewards in one place.",
   path: "/account",
 });
 
@@ -54,59 +61,39 @@ async function AccountBody({
   const scope = rewardScope(query.scope ?? null);
   if (!account) {
     return (
-      <div className="mt-6 grid gap-5">
-        <h1 className="font-display text-[56px] leading-[1.14] tracking-[-1.6px] max-[561px]:text-[38px]">
-          Not signed in.
-        </h1>
-        <p className="max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
-          Connect a Solana wallet, then approve the sign-in in that wallet.
-          Connection alone does not create an account. Nothing here can mint
-          a token or move funds. Saved SDKs and API keys belong to a
-          signed-in wallet. Preparing a launch requires that sign-in.
-          Nothing here mints a token.
+      <div className="mt-10 grid gap-4">
+        <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.8px] max-[561px]:text-[26px]">
+          Connect your wallet to get started.
+        </h2>
+        <p className="max-w-130 text-[16px] leading-[1.7] text-muted-foreground">
+          Connect your Solana wallet to build, manage and launch SDK-powered applications.
         </p>
         {session.state === "invalid" ? (
           <p className="font-mono text-[11px] text-muted-foreground uppercase">
-            The previous session is no longer valid.
+            The previous session is no longer valid. Approve the sign-in in your wallet to open this account.
           </p>
         ) : null}
-        <WalletButton compact />
+        <div className="w-fit">
+          <WalletButton compact />
+        </div>
       </div>
     );
   }
   return (
-    <div className="mt-6 grid gap-5">
-      <h1 className="font-display text-[56px] leading-[1.14] tracking-[-1.6px] max-[561px]:text-[38px]">
-        Signed in.
-      </h1>
-      <p className="text-[17px] leading-[1.7] break-all text-muted-foreground">
-        {account.walletAddress}
-      </p>
-      <CopyAddress address={account.walletAddress} />
-      <p className="max-w-130 text-[15px] leading-[1.7] text-muted-foreground">
-        This session belongs to the wallet that signed the server
-        challenge. Disconnecting or switching wallets ends it. Private
-        drafts stay private until you test one and save a name. A saved
-        SDK can be submitted for operator review. Approval lists that
-        revision. A submission is not a token launch. A tested SDK can be
-        prepared for launch. Preparation stores artwork and metadata. It
-        does not mint a token. API keys call published SDKs and do not
-        launch a token. Holder rewards and SDK earnings below are
-        accounting records. They do not move funds while the rewards
-        worker is suspended.
-      </p>
-      {isProvisionedOperator(account.walletAddress) ? (
-        <Link
-          href="/admin/library"
-          className="font-mono text-[10px] tracking-[0.04em] uppercase underline"
-        >
-          Review Library
-        </Link>
-      ) : null}
+    <div className="mt-10 grid gap-12">
+      <div className="flex flex-wrap items-center gap-4">
+        <p className="font-mono text-[14px] tracking-[0.02em]">{shortenAddress(account.walletAddress)}</p>
+        <CopyAddress address={account.walletAddress} />
+        {isProvisionedOperator(account.walletAddress) ? (
+          <Link href="/admin/library" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
+            Review Library
+          </Link>
+        ) : null}
+      </div>
+      <DraftList />
       <Suspense fallback={<AccountSectionSkeleton label="Loading launches" />}>
         <AccountLaunches account={account} />
       </Suspense>
-      <DraftList />
       <ApiKeys />
       <Suspense fallback={<AccountSectionSkeleton label="Loading rewards" />}>
         <AccountRewards wallet={account.walletAddress} scope={scope} />
@@ -120,18 +107,19 @@ async function AccountLaunches({ account }: { account: AccountIdentity }): Promi
     loadOpenLaunch(account.id),
     loadVerifiedLaunches({ creator: account.walletAddress }),
   ]);
+  const empty = launches.ok && launches.launches.length === 0;
   return (
-    <section className="grid gap-3">
-      <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">Your launches</h2>
+    <section className="grid gap-5 border-t border-border pt-8" aria-labelledby="my-launches-title">
+      <AccountSectionHeading index="02" title="My Launches" titleId="my-launches-title">
+        Tokens you&apos;ve launched through SDK.
+      </AccountSectionHeading>
       {openLaunch ? <LaunchResume launch={openLaunch} /> : null}
       {launches.ok ? (
-        <VerifiedLaunchList
-          launches={launches.launches}
-          empty="No verified child tokens for this wallet. Preparing a launch does not list one here."
-        />
+        <VerifiedLaunchList launches={launches.launches} empty="Your launched tokens will appear here after verification." />
       ) : (
         <p className="text-[15px] leading-[1.7] text-muted-foreground">Verified launches are unavailable.</p>
       )}
+      {empty ? <HomeLink href="/launch" tone="secondary">Explore Launch</HomeLink> : null}
     </section>
   );
 }

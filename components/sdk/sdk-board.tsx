@@ -154,7 +154,7 @@ export function SdkBoard({
 
       <section className="mt-10">
         <div className="flex items-end justify-between gap-4">
-          <h2 className="text-[22px] leading-none tracking-[-0.4px]">Market</h2>
+          <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Market overview</h2>
           <p className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
             {phase === "prelaunch"
               ? "Not registered"
@@ -172,7 +172,7 @@ export function SdkBoard({
       </section>
 
       <section className="mt-12">
-        <h2 className="text-[22px] leading-none tracking-[-0.4px]">Native Rewards</h2>
+        <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Native SOL Rewards</h2>
         <div className="mt-4 max-w-2xl text-[14px] leading-[1.65] text-muted-foreground">
           <p>{rewardLead}</p>
           <p className="mt-3">{rewardQualify}</p>

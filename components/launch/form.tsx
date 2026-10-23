@@ -26,6 +26,7 @@ import {
   type PrepareSource,
 } from "@/lib/launch/prepare";
 import type { OpenLaunch } from "@/lib/launch/post-launch";
+import { loadBrowserSession, subscribeBrowserSession } from "@/lib/auth/browser-session";
 import { ImagePlus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -45,9 +46,11 @@ const fieldClass =
 export function LaunchForm({
   source,
   rehearsal = false,
+  mintRegistered = false,
 }: {
   source: LaunchSourceView;
   rehearsal?: boolean;
+  mintRegistered?: boolean;
 }): ReactNode {
   const idempotencyKey = useRef(crypto.randomUUID());
   const lock = useRef(false);
@@ -277,6 +280,8 @@ export function LaunchForm({
             TREST rehearsal. This preparation is paired with the registered TREST mint. Signing opens only after preflight and approval of this build.
           </p>
         ) : null}
+        <section className="grid gap-4">
+          <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">Token details</h2>
         <div className="grid items-start gap-4 min-[561px]:grid-cols-[168px_minmax(0,1fr)]">
           <ArtworkField
             inputRef={fileRef}
@@ -355,14 +360,13 @@ export function LaunchForm({
             }}
           />
         </Field>
-        <details className="border border-solid border-border px-3 py-2">
-          <summary className="cursor-pointer font-mono text-[10px] tracking-[0.06em] uppercase">
-            Social links
-            <span className="ml-2 tracking-[0.04em] text-muted-foreground">
-              Optional
-            </span>
-          </summary>
-          <div className="mt-3 grid gap-3 min-[561px]:grid-cols-3">
+        </section>
+        <section className="grid gap-3 border border-solid border-border px-3 py-3">
+          <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">
+            Links
+            <span className="ml-2 tracking-[0.04em] text-muted-foreground">Optional</span>
+          </h2>
+          <div className="grid gap-3 min-[561px]:grid-cols-3">
             <Field label="Website" htmlFor="token-website">
               <input
                 id="token-website"
@@ -406,7 +410,12 @@ export function LaunchForm({
               />
             </Field>
           </div>
-        </details>
+        </section>
+        <section className="grid gap-3">
+          <h2 className="font-mono text-[10px] tracking-[0.06em] uppercase">Launch settings</h2>
+          <p className="text-[14px] leading-[1.5] text-muted-foreground">
+            Paired with {audiencePair(rehearsal).label}. Creator fees {source.feeLabel}.
+          </p>
         <div
           className={
             draft.buying
@@ -452,6 +461,7 @@ export function LaunchForm({
             ? "Optional, bundled into the launch transaction and denominated in TREST."
             : "Optional, bundled into the launch transaction. Developer buy will be quoted when the $SDK launch market is available."}
         </p>
+        </section>
         {notice ? (
           <p role="alert" className="text-[14px] leading-[1.5] text-foreground">
             {notice}
@@ -484,6 +494,7 @@ export function LaunchForm({
           <ConfirmLaunch
             review={confirm}
             rehearsal={rehearsal}
+            mintRegistered={mintRegistered}
             onEdit={() => setConfirmation(null)}
             onTrack={setTracked}
           />
@@ -596,11 +607,13 @@ function ArtworkField({
 function ConfirmLaunch({
   review,
   rehearsal,
+  mintRegistered,
   onEdit,
   onTrack,
 }: {
   review: LaunchReview;
   rehearsal: boolean;
+  mintRegistered: boolean;
   onEdit: () => void;
   onTrack: (launch: OpenLaunch) => void;
 }): ReactNode {
@@ -656,6 +669,7 @@ function ConfirmLaunch({
         ) : null}
         <Row term="Creator fees" value={review.feeLabel} />
         <Row term="Network" value={networkCostCopy()} />
+        <ApprovingWallet />
         <Row term="Originator" value={review.originatorLabel} />
         <Row
           term="Metadata"
@@ -682,10 +696,14 @@ function ConfirmLaunch({
             <RehearsalActions review={review} onTrack={onTrack} />
       ) : (
         <>
-          <LaunchSigningStatus phase="unavailable" />
-          <p id="launch-not-ready" className="text-[13px] leading-[1.5] text-muted-foreground">
-            Public launches stay paired with $SDK. Signing and submission are not available from this screen.
-          </p>
+          <LaunchSigningStatus
+            phase="unavailable"
+            body={
+              mintRegistered
+                ? "Public launches stay paired with $SDK. Signing and submission are not available from this screen."
+                : "Token launching opens when the official $SDK mint is registered."
+            }
+          />
           <div className="mt-4 flex flex-col-reverse gap-2 min-[561px]:flex-row min-[561px]:justify-end">
             <button
               type="button"
@@ -727,13 +745,13 @@ function SdkStrip({ source, rehearsal = false }: { source: LaunchSourceView; reh
     <div className="grid gap-1 border-b border-solid border-border pb-3">
       <div className="flex items-center justify-between gap-3">
         <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
-          Selected SDK
+          Your selected SDK
         </p>
         <Link
           href={rehearsal ? "/launch?rehearsal=trest" : "/launch"}
           className="font-mono text-[10px] tracking-[0.04em] uppercase"
         >
-          Change SDK
+          Choose another SDK
         </Link>
       </div>
       <h2 className="font-display text-[26px] leading-[1.15] tracking-[-0.4px]">
@@ -750,6 +768,18 @@ function SdkStrip({ source, rehearsal = false }: { source: LaunchSourceView; reh
       </p>
     </div>
   );
+}
+
+function ApprovingWallet(): ReactNode {
+  const [address, setAddress] = useState<string | null>(null);
+  useEffect(() => {
+    void loadBrowserSession();
+    return subscribeBrowserSession((next) => {
+      setAddress(next.status === "signed-in" ? next.walletAddress : null);
+    });
+  }, []);
+  const visible = address ? `${address.slice(0, 4)}…${address.slice(-4)}` : "The wallet connected for this launch";
+  return <Row term="Wallet" value={visible} />;
 }
 
 function Field({

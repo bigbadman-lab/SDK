@@ -10,9 +10,37 @@ export const accountMainClass =
 
 export function AccountIntro(): ReactNode {
   return (
-    <span className="block font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">
-      Account
-    </span>
+    <header>
+      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">Your workspace</p>
+      <h1 className="mt-4 font-display text-[56px] leading-[1.14] tracking-[-1.6px] max-[561px]:text-[38px]">
+        Your SDK account.
+      </h1>
+      <p className="mt-4 max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
+        Manage your SDKs, launched tokens, API keys and ecosystem rewards in one place.
+      </p>
+    </header>
+  );
+}
+
+export function AccountSectionHeading({
+  index,
+  title,
+  titleId,
+  children,
+}: {
+  index: string;
+  title: string;
+  titleId?: string;
+  children: string;
+}): ReactNode {
+  return (
+    <div>
+      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">{index}</p>
+      <h2 id={titleId} className="mt-2 font-display text-[32px] leading-[1.15] tracking-[-0.8px] max-[561px]:text-[26px]">
+        {title}
+      </h2>
+      <p className="mt-3 max-w-130 text-[15px] leading-[1.7] text-muted-foreground">{children}</p>
+    </div>
   );
 }
 

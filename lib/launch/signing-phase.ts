@@ -81,7 +81,7 @@ export function signingPhaseCopy(phase: SigningPhase): {
   }
   return {
     title: "Launch unavailable",
-    body: "Token creation requires wallet approval. On-chain launching is not available yet.",
+    body: "Token launching opens when the official $SDK mint is registered.",
     submits: false,
   };
 }

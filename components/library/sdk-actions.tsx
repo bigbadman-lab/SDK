@@ -65,9 +65,9 @@ export function LibraryActions({
   return (
     <div className="grid gap-6">
       <section id="test" className="grid gap-3">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Test this SDK</h2>
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Try this SDK</h2>
         <p className="max-w-130 text-[14px] leading-[1.6] text-muted-foreground">
-          A signed-in wallet runs this published version on the shared engine. The result is for this test only. A test is not a launch.
+          Enter the required inputs and run this SDK using the published version.
         </p>
         {inputs.some((field) => field.example !== undefined) ? (
           <div className="grid gap-2">
@@ -92,12 +92,13 @@ export function LibraryActions({
           </div>
         ) : null}
         {inputs.map((field) => (
-          <label key={field.key} className="grid gap-1 font-mono text-[10px] text-muted-foreground uppercase">
-            {field.key}
-            {field.required ? " · required" : ""}
-            {field.help ? (
-              <span className="font-sans text-[13px] leading-[1.5] text-muted-foreground normal-case">{field.help}</span>
-            ) : null}
+          <label key={field.key} className="grid gap-1">
+            <span className="text-[15px] text-foreground">{field.help ?? field.key}</span>
+            <span className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+              {field.help ? `${field.key} · ` : ""}
+              {field.type}
+              {field.required ? " · required" : ""}
+            </span>
             {field.type === "boolean" ? (
               <select
                 value={values[field.key] ?? "false"}

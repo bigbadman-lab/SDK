@@ -1,4 +1,5 @@
 import { Footer } from "@/components/footer";
+import { HomeLink } from "@/components/home/chrome";
 import { OFFICIAL_SDK_NAMES, libraryHref, libraryQuery, operationLabels, type LibraryQuery } from "@/lib/library/library";
 import { createMetadata } from "@/lib/metadata";
 import { describeBlueprintError } from "@/lib/server/blueprint/http";
@@ -11,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const metadata = createMetadata({
   title: "Library",
   description:
-    "Inspect published SDKs, test them on the shared engine, and remix a private copy. A private draft is not a public listing.",
+    "Discover working SDKs built by the platform and its developer community. Test them, remix them, or launch a token using an existing SDK.",
   path: "/library",
 });
 
@@ -28,12 +29,13 @@ export default async function LibraryPage({
         id="main-content"
         className="mx-auto w-[min(1100px,calc(100%-48px))] scroll-mt-23 pt-16 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-10"
       >
-        <span className="block font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">Library</span>
+        <span className="block font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">Explore SDKs</span>
         <h1 className="mt-6 max-w-160 font-display text-[56px] leading-[1.08] tracking-[-1.6px] max-[561px]:text-[38px]">
-          Public SDKs.
+          Don&apos;t start from zero.
         </h1>
         <p className="mt-5 max-w-150 text-[17px] leading-[1.7] text-muted-foreground">
-          Published official and community SDKs can be inspected, tested, and remixed. A saved private draft stays on your account. A test is not a launch.
+          Discover working SDKs built by the platform and its developer community. Test what they do, remix
+          them into your own creations or launch a token using an existing SDK.
         </p>
         <form method="get" action="/library" className="mt-8 flex flex-wrap items-center gap-2">
           <label className="sr-only" htmlFor="library-search">
@@ -43,7 +45,7 @@ export default async function LibraryPage({
             id="library-search"
             name="q"
             defaultValue={loaded.query.q}
-            placeholder="Search by name or description"
+            placeholder="Search SDKs..."
             className="min-w-0 flex-1 rounded-lg border border-solid border-border bg-card px-3 py-2 text-[14px] max-[561px]:w-full max-[561px]:flex-none"
           />
           <label className="sr-only" htmlFor="library-origin">
@@ -67,15 +69,11 @@ export default async function LibraryPage({
           </button>
         </form>
         {loaded.unavailable ? (
-          <p className="mt-10 text-[15px] leading-[1.7] text-muted-foreground">
-            The Library is unavailable until its tables exist. No SDKs are being shown in their place.
+          <p className="mt-10 max-w-150 text-[15px] leading-[1.7] text-muted-foreground">
+            The SDK Library couldn&apos;t be loaded. Please try again.
           </p>
         ) : loaded.listings.length === 0 ? (
-          <p className="mt-10 max-w-150 text-[15px] leading-[1.7] text-muted-foreground">
-            {loaded.query.origin === "community"
-              ? "No approved community SDKs yet. Pending and rejected submissions stay off this page."
-              : "No published SDKs yet. Official SDKs and approved community SDKs will appear here. A private draft is not published by saving it."}
-          </p>
+          <p className="mt-10 max-w-150 text-[15px] leading-[1.7] text-muted-foreground">{emptyCopy(loaded.query)}</p>
         ) : (
           <ul className="mt-10 grid gap-4 min-[801px]:grid-cols-2">
             {orderedListings(loaded.listings).map((sdk) => (
@@ -95,69 +93,69 @@ export default async function LibraryPage({
             ) : null}
           </div>
         ) : null}
+        <section className="mt-16 border border-solid border-border bg-card px-6 py-8 max-[561px]:px-5">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            Have something worth sharing?
+          </h2>
+          <p className="mt-4 max-w-130 text-[16px] leading-[1.7] text-muted-foreground">
+            Build your own SDK and submit it to the Library for others to discover, test and remix.
+          </p>
+          <div className="mt-6">
+            <HomeLink href="/build" tone="primary">
+              Open Builder
+            </HomeLink>
+          </div>
+        </section>
       </main>
       <Footer />
     </>
   );
 }
 
+function emptyCopy(query: LibraryQuery): string {
+  if (query.q.trim()) return "No SDKs match your search. Try another keyword or browse the full Library.";
+  if (query.origin === "community") return "No community SDKs match your filters.";
+  return "No SDKs match your search. Try another keyword or browse the full Library.";
+}
+
 function SdkCard({ sdk }: { sdk: LibraryCard }): ReactNode {
   const families = operationLabels(sdk.capabilities);
-  const index = catalogIndex(sdk.name);
   return (
-    <article className="relative flex h-full flex-col gap-4 border border-solid border-border bg-card p-6 transition-colors hover:border-accent focus-within:border-accent">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-baseline gap-3">
-          {index ? (
-            <span className="font-display text-[28px] leading-none tracking-[-0.6px] text-muted-foreground">{index}</span>
-          ) : null}
-          <span className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
-            {sdk.origin === "official" ? "Official" : "Community"}
-          </span>
-        </div>
-        <span className="pt-1 font-mono text-[10px] text-muted-foreground uppercase">Version {sdk.versionNumber}</span>
-      </div>
-      <h2 className="text-[28px] leading-[1.15] tracking-[-0.6px]">
-        <Link href={`/library/${sdk.id}`} className="font-display after:absolute after:inset-0">
+    <article className="flex h-full flex-col gap-4 border border-solid border-border bg-card p-6 transition-colors hover:border-accent focus-within:border-accent">
+      <h2 className="text-[28px] leading-[1.15] tracking-[-0.6px] break-words">
+        <Link href={`/library/${sdk.id}`} className="font-display">
           {sdk.name}
         </Link>
       </h2>
       <p className="line-clamp-3 text-[14px] leading-[1.6] text-muted-foreground">{sdk.description}</p>
-      <p className="font-mono text-[10px] tracking-[0.04em] uppercase">By {sdk.originatorLabel}</p>
-      {families.length > 0 ? (
-        <ul className="flex flex-wrap gap-1.5">
-          {families.map((family) => (
-            <li
-              key={family}
-              className="rounded-lg border border-solid border-border px-2 py-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase"
-            >
-              {family}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      <div className="relative z-10 mt-auto flex flex-wrap gap-2 pt-2">
+      <p className="font-mono text-[10px] tracking-[0.06em] uppercase">
+        <span className="text-accent-ink">{sdk.origin === "official" ? "Official" : "Community"}</span>
+        <span className="text-muted-foreground"> · {sdk.originatorLabel}</span>
+      </p>
+      <div className="mt-auto flex flex-wrap gap-2 pt-2">
         <Link
-          href={`/library/${sdk.id}#test`}
-          className="rounded-lg border border-solid border-border bg-card px-3 py-2 font-mono text-[10px] tracking-[0.04em] uppercase"
+          href={`/library/${sdk.id}`}
+          className="rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
         >
-          Test
+          Explore SDK
         </Link>
         <Link
           href={`/library/${sdk.id}#remix`}
-          className="rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase"
+          className="rounded-lg border border-solid border-border bg-card px-3 py-2 font-mono text-[10px] tracking-[0.04em] uppercase"
         >
           Remix
         </Link>
       </div>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="font-mono text-[10px] text-muted-foreground uppercase">Version {sdk.versionNumber}</span>
+        {families.map((family) => (
+          <span key={family} className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+            {family}
+          </span>
+        ))}
+      </div>
     </article>
   );
-}
-
-function catalogIndex(name: string): string | null {
-  const index = officialPosition(name);
-  if (index < 0) return null;
-  return String(index + 1).padStart(2, "0");
 }
 
 function orderedListings(listings: LibraryCard[]): LibraryCard[] {
@@ -193,7 +191,7 @@ async function loadListings(params: { q?: string; origin?: string; page?: string
       query: libraryQuery(params),
       listings: [],
       nextPage: null,
-      unavailable: described.status === 503,
+      unavailable: described.status >= 500,
     };
   }
 }

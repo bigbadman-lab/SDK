@@ -28,6 +28,7 @@ import {
   resolveLaunchQuery,
 } from "@/lib/server/launch/service";
 import { listPublished, readPublished } from "@/lib/server/library/service";
+import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import type { Metadata } from "next";
 import { Suspense, type ReactNode } from "react";
 
@@ -35,9 +36,9 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   ...createMetadata({
-    title: "Launch your SDK",
+    title: "Launch",
     description:
-      "Turn a working SDK into a token paired with $SDK. On-chain launching is not available yet.",
+      "Turn a working SDK into a token-powered application on Solana. Choose your software, customise your token and launch it paired with $SDK.",
     path: "/launch",
   }),
   robots: { index: false, follow: false },
@@ -89,6 +90,7 @@ async function LaunchBody({
     librarySdkId: query.library ?? null,
   });
   const openLaunchPromise = account ? loadOpenLaunch(account.id) : Promise.resolve(null);
+  const officialPromise = loadOfficialSdk();
   let source: Awaited<ReturnType<typeof resolveLaunchQuery>> | null = null;
   let held: {
     name: string;
@@ -134,17 +136,19 @@ async function LaunchBody({
       );
     }
   }
-  const [openLaunch, catalog] = await Promise.all([
+  const [openLaunch, catalog, official] = await Promise.all([
     openLaunchPromise,
     source || held ? Promise.resolve(null) : loadCatalog(account, query, rehearsal),
+    officialPromise,
   ]);
+  const mintRegistered = official.ok && official.phase === "live";
   return (
     <>
-        <p className="mt-3 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
-          {rehearsal
-            ? "TREST rehearsal. Choose an SDK and prepare it against the registered TREST parent."
-            : "Turn your working SDK into a live token paired with $SDK."}
-        </p>
+        {rehearsal ? (
+          <p className="mt-6 text-[15px] leading-[1.6]" role="status">
+            TREST rehearsal. This is a test launch paired with $TREST.
+          </p>
+        ) : null}
         {rehearsalRequested && !rehearsal ? (
           <p className="mt-6 text-[15px] leading-[1.6]" role="status">
             The TREST rehearsal is limited to the provisioned operator. This page stays paired with $SDK.
@@ -166,9 +170,10 @@ async function LaunchBody({
             key={`${source.kind}:${source.draftId ?? source.librarySdkId}:${source.versionId}`}
             source={source}
             rehearsal={rehearsal}
+            mintRegistered={mintRegistered}
           />
         ) : null}
-        {held ? <HeldSdk sdk={held} /> : null}
+        {held ? <HeldSdk sdk={held} mintRegistered={mintRegistered} /> : null}
         {catalog ? (
           <LaunchSelector
             signedIn={account !== null}

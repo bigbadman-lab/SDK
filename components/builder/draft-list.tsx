@@ -1,5 +1,7 @@
 "use client";
 
+import { AccountSectionHeading } from "@/components/account/account-skeleton";
+import { HomeLink } from "@/components/home/chrome";
 import { launchAction } from "@/lib/blueprint/save";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
@@ -207,13 +209,10 @@ function SavedSdkList(): ReactNode {
     : false;
 
   return (
-    <section className="grid gap-3" aria-labelledby="my-sdks-title">
-      <h2
-        id="my-sdks-title"
-        className="font-mono text-[11px] tracking-[0.08em] uppercase"
-      >
-        My SDKs
-      </h2>
+    <section className="grid gap-5 border-t border-border pt-8" aria-labelledby="my-sdks-title">
+      <AccountSectionHeading index="01" title="My SDKs" titleId="my-sdks-title">
+        Your saved SDKs, tests and Library submissions.
+      </AccountSectionHeading>
       {remaining === 0 ? (
         <p className="font-mono text-[11px] text-muted-foreground">
           Three community submissions are allowed each day.
@@ -242,10 +241,12 @@ function SavedSdkList(): ReactNode {
         </div>
       ) : null}
       {drafts && drafts.length === 0 ? (
-        <p className="text-[15px] leading-[1.7] text-muted-foreground">
-          No saved SDKs yet. A blueprint appears here after you test it and
-          choose a name. It is not a launched product.
-        </p>
+        <div className="grid gap-4">
+          <p className="text-[15px] leading-[1.7] text-muted-foreground">
+            No SDKs saved yet. Create your first SDK in the AI Builder.
+          </p>
+          <HomeLink href="/build" tone="secondary">Open Builder</HomeLink>
+        </div>
       ) : null}
       {drafts && drafts.length > 0 ? (
         <ul className="grid gap-4">

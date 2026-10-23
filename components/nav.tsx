@@ -136,10 +136,7 @@ export function Nav(): ReactNode {
           ))}
         </nav>
         <WalletButton compact />
-        <p>
-          Connect your wallet, then approve the sign-in there. On-chain
-          launching is not available yet.
-        </p>
+        <p>Connect your wallet to build, save and manage SDKs.</p>
       </dialog>
     </header>
   );

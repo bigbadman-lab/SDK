@@ -545,7 +545,7 @@ async function resolveDraft(
           ? "Private remix of an official SDK"
           : origin === "community"
             ? "Private remix of a community SDK"
-            : "Private SDK",
+            : "My SDK",
       versionLabel: "Saved revision",
       contentHash: row.content_hash,
       originatorLabel: originator.label,

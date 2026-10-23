@@ -1,6 +1,7 @@
 import { LibraryActions } from "@/components/library/sdk-actions";
 import { RemixButton, RemixNotice, RemixProvider } from "@/components/library/remix-sdk";
 import { Footer } from "@/components/footer";
+import { HomeLink } from "@/components/home/chrome";
 import { isPublicId, operationLabel, operationLabels } from "@/lib/library/library";
 import { officialInputGuide } from "@/lib/library/official";
 import { createMetadata } from "@/lib/metadata";
@@ -88,19 +89,21 @@ function SdkDetail({
     const help = guide?.[field.key];
     return help ? { ...field, help: help.help, example: help.example } : field;
   });
+  const launchHref = `/launch?library=${sdk.id}&version=${sdk.versionId}`;
   return (
     <RemixProvider sdkId={sdk.id} versionId={sdk.versionId}>
       <header className="mt-6">
-        <h1 className="font-display text-[52px] leading-[1.08] tracking-[-1.5px] max-[561px]:text-[36px]">
+        <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
+          {sdk.origin === "official" ? "Official" : "Community"}
+          <span className="text-muted-foreground"> · {sdk.originatorLabel}</span>
+        </p>
+        <h1 className="mt-4 font-display text-[52px] leading-[1.08] tracking-[-1.5px] break-words max-[561px]:text-[36px]">
           {sdk.name}
         </h1>
         <p className="mt-5 max-w-150 text-[17px] leading-[1.7] text-muted-foreground">{sdk.description}</p>
-        <div className="mt-5 flex flex-wrap gap-x-4 gap-y-2 font-mono text-[10px] tracking-[0.04em] uppercase">
-          <span className="text-accent-ink">{sdk.origin === "official" ? "Official" : "Community"}</span>
-          <span>By {sdk.originatorLabel}</span>
-          <span className="text-muted-foreground">Version {sdk.versionNumber}</span>
-          {families.length > 0 ? <span className="text-muted-foreground">{families.join(" · ")}</span> : null}
-        </div>
+        <p className="mt-4 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+          Version {sdk.versionNumber}
+        </p>
         {sdk.versions.length > 1 ? (
           <ul className="mt-4 flex flex-wrap gap-2">
             {sdk.versions.map((version) => (
@@ -118,35 +121,64 @@ function SdkDetail({
             ))}
           </ul>
         ) : null}
-        <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
+        <div className="mt-6 flex flex-wrap items-center gap-3">
+          <HomeLink href="#test" tone="primary">
+            Test SDK
+          </HomeLink>
           <RemixButton place="top" />
-          <a href="#test" className="font-mono text-[11px] tracking-[0.04em] text-muted-foreground uppercase hover:text-accent-ink">
-            Test this version
-          </a>
-          <Link
-            href={`/launch?library=${sdk.id}&version=${sdk.versionId}`}
-            className="font-mono text-[11px] tracking-[0.04em] text-muted-foreground uppercase hover:text-accent-ink"
-          >
-            Prepare a launch
-          </Link>
+          <HomeLink href={launchHref} tone="secondary">
+            Launch a Token
+          </HomeLink>
         </div>
         <RemixNotice place="top" />
-        <p className="mt-3 max-w-xl text-[13px] leading-[1.55] text-muted-foreground">
-          Remix opens a private copy in the Builder. This published SDK stays unchanged.
-        </p>
       </header>
 
       <section className="mt-12 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Accepts</h2>
-        <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">The fields a run of this version asks for.</p>
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">What it does</h2>
+        <p className="mt-4 max-w-150 text-[16px] leading-[1.7] text-muted-foreground">{sdk.description}</p>
+        {families.length > 0 ? (
+          <ul className="mt-5 flex flex-wrap gap-2">
+            {families.map((family) => (
+              <li
+                key={family}
+                className="rounded-lg border border-solid border-border px-2.5 py-1.5 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase"
+              >
+                {family}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+      </section>
+
+      <section className="mt-12 border-t border-border pt-8">
+        <LibraryActions sdkId={sdk.id} versionId={sdk.versionId} inputs={inputs} />
+      </section>
+
+      <section id="remix" className="mt-14 scroll-mt-23 border-t border-border pt-8">
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Remix this SDK</h2>
+        <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">
+          Open an editable version in the AI Builder and make it your own.
+        </p>
+        <div className="mt-5">
+          <RemixButton place="bottom" />
+        </div>
+        <RemixNotice place="bottom" />
+      </section>
+
+      <section className="mt-14 border-t border-border pt-8">
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Developer details</h2>
+        <p className="mt-3 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+          Version {sdk.versionNumber}
+        </p>
+        <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Inputs</h3>
         {sdk.inputs.length === 0 ? (
-          <p className="mt-4 text-[14px] text-muted-foreground">This SDK does not ask for inputs.</p>
+          <p className="mt-3 text-[14px] text-muted-foreground">This SDK does not ask for inputs.</p>
         ) : (
-          <ul className="mt-4 border-t border-border">
+          <ul className="mt-3 border-t border-border">
             {inputs.map((field) => (
               <li key={field.key} className="grid gap-1 border-b border-border py-3">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-[15px]">{field.key}</span>
+                  <span className="text-[15px]">{"help" in field && field.help ? field.help : field.key}</span>
                   <span className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
                     {field.type}
                     {field.required ? " · required" : ""}
@@ -154,34 +186,14 @@ function SdkDetail({
                   </span>
                 </div>
                 {"help" in field && field.help ? (
-                  <p className="max-w-xl text-[14px] leading-[1.55] text-muted-foreground">{field.help}</p>
+                  <p className="font-mono text-[11px] break-all text-muted-foreground">{field.key}</p>
                 ) : null}
               </li>
             ))}
           </ul>
         )}
-      </section>
-
-      <section className="mt-12 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Runs</h2>
-        <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">The steps, in order.</p>
-        <ol className="mt-4 border-t border-border">
-          {sdk.steps.map((step, index) => (
-            <li key={step.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border-b border-border py-3">
-              <span className="pt-1 font-mono text-[10px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
-              <div className="min-w-0">
-                <p className="text-[15px]">{step.id}</p>
-                <p className="mt-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{operationLabel(step.op)}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
-
-      <section className="mt-12 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Returns</h2>
-        <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">What a finished run gives back.</p>
-        <ul className="mt-4 border-t border-border">
+        <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Outputs</h3>
+        <ul className="mt-3 border-t border-border">
           {sdk.outputs.map((output) => (
             <li key={output.key} className="grid gap-1 border-b border-border py-3">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -192,35 +204,26 @@ function SdkDetail({
             </li>
           ))}
         </ul>
-      </section>
-
-      <details className="mt-8 font-mono text-[10px] text-muted-foreground">
-        <summary className="cursor-pointer tracking-[0.04em] uppercase">Blueprint</summary>
-        <p className="mt-2 break-all">Version {sdk.contentHash}</p>
-        <pre className="mt-2 overflow-auto leading-[1.5] break-words whitespace-pre-wrap text-foreground">
-          {JSON.stringify(sdk.blueprint, null, 2)}
-        </pre>
-      </details>
-
-      <section className="mt-12 border-t border-border pt-8">
-        <LibraryActions sdkId={sdk.id} versionId={sdk.versionId} inputs={inputs} />
-      </section>
-
-      <section className="mt-14 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Remix this SDK</h2>
-        <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">
-          Remix opens a private unsaved copy in the Builder. The published SDK stays unchanged, and the copy is not listed until a later review. Preparation of a launch does not mint a token.
-        </p>
-        <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-3">
-          <RemixButton place="bottom" />
-          <Link
-            href={`/launch?library=${sdk.id}&version=${sdk.versionId}`}
-            className="font-mono text-[11px] tracking-[0.04em] text-muted-foreground uppercase hover:text-accent-ink"
-          >
-            Prepare a launch
-          </Link>
-        </div>
-        <RemixNotice place="bottom" />
+        <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Operations</h3>
+        <ol className="mt-3 border-t border-border">
+          {sdk.steps.map((step, index) => (
+            <li key={step.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border-b border-border py-3">
+              <span className="pt-1 font-mono text-[10px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
+              <div className="min-w-0">
+                <p className="text-[15px]">{step.id}</p>
+                <p className="mt-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{operationLabel(step.op)}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <p className="mt-8 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">Content hash</p>
+        <p className="mt-2 font-mono text-[11px] break-all text-muted-foreground">{sdk.contentHash}</p>
+        <details className="mt-6 font-mono text-[10px] text-muted-foreground">
+          <summary className="cursor-pointer tracking-[0.04em] uppercase">Blueprint</summary>
+          <pre className="mt-2 overflow-auto leading-[1.5] break-words whitespace-pre-wrap text-foreground">
+            {JSON.stringify(sdk.blueprint, null, 2)}
+          </pre>
+        </details>
       </section>
     </RemixProvider>
   );

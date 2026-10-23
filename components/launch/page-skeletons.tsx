@@ -38,13 +38,45 @@ export function PairedRowsSkeleton(): ReactNode {
   );
 }
 
+const LAUNCH_STEPS = [
+  {
+    index: "01",
+    title: "Choose your SDK",
+    body: "Select one of your tested SDKs or start with a published SDK from the Library.",
+  },
+  {
+    index: "02",
+    title: "Create your token",
+    body: "Add your token's name, ticker, description and artwork.",
+  },
+  {
+    index: "03",
+    title: "Review and launch",
+    body: "Check your token details, $SDK pairing and applicable fees before approving the transaction in your wallet.",
+  },
+] as const;
+
 export function LaunchIntro(): ReactNode {
   return (
     <>
-      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">Launch</p>
+      <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">Token launchpad</p>
       <h1 className="mt-3 font-display text-[48px] leading-[1.08] tracking-[-1.4px] max-[561px]:text-[36px]">
-        Launch your SDK
+        Launch your next token.
       </h1>
+      <p className="mt-4 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
+        Turn a working SDK into a token-powered application on Solana. Choose your software, customise your token and launch it paired with $SDK.
+      </p>
+      <ol className="mt-8 grid gap-3">
+        {LAUNCH_STEPS.map((step) => (
+          <li key={step.index} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border border-solid border-border bg-card px-4 py-4">
+            <span className="font-mono text-[10px] text-accent-ink">{step.index}</span>
+            <div className="min-w-0">
+              <h2 className="text-[16px] leading-[1.3]">{step.title}</h2>
+              <p className="mt-1 text-[14px] leading-[1.55] text-muted-foreground">{step.body}</p>
+            </div>
+          </li>
+        ))}
+      </ol>
     </>
   );
 }
@@ -52,7 +84,7 @@ export function LaunchIntro(): ReactNode {
 export function LaunchBodySkeleton(): ReactNode {
   return (
     <div className="mt-3" aria-busy="true">
-      <p className="sr-only">Loading launch options</p>
+      <p className="sr-only">Preparing your launch options</p>
       <Bar className="h-4 w-full max-w-120" />
       <Bar className="mt-8 h-3 w-16" />
       <Bar className="mt-3 h-24 w-full" />

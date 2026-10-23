@@ -1,7 +1,13 @@
 import { signingPhaseCopy, type SigningPhase } from "@/lib/launch/signing-phase";
 import type { ReactNode } from "react";
 
-export function LaunchSigningStatus({ phase }: { phase: SigningPhase }): ReactNode {
+export function LaunchSigningStatus({
+  phase,
+  body,
+}: {
+  phase: SigningPhase;
+  body?: string;
+}): ReactNode {
   const copy = signingPhaseCopy(phase);
   return (
     <p
@@ -10,7 +16,7 @@ export function LaunchSigningStatus({ phase }: { phase: SigningPhase }): ReactNo
       data-submits="false"
       className="mt-4 text-[13px] leading-[1.5] text-muted-foreground"
     >
-      {copy.body}
+      {body ?? copy.body}
     </p>
   );
 }

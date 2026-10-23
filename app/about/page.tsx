@@ -1,105 +1,137 @@
 import { Footer } from "@/components/footer";
+import { HomeLink } from "@/components/home/chrome";
 import { createMetadata } from "@/lib/metadata";
+import { nativeRewardLead } from "@/lib/sdk/rewards-copy";
 import type { ReactNode } from "react";
 
 export const metadata = createMetadata({
   title: "About",
   description:
-    "What SDK is, what this website can do today, and what remains unavailable.",
+    "SDK brings software development and token creation together on Solana. Build, publish, and launch working software paired with $SDK.",
   path: "/about",
 });
+
+const frame =
+  "mx-auto w-[min(760px,_calc(100%_-_48px))] scroll-mt-23 max-[561px]:w-[calc(100%_-_32px)]";
 
 export default function AboutPage(): ReactNode {
   return (
     <>
-      <main
-        id="main-content"
-        className="mx-auto w-[min(760px,_calc(100%_-_48px))] scroll-mt-23 pb-22 max-[561px]:w-[calc(100%_-_32px)] max-[561px]:pb-16 [&_[data-ui~='article-body']_a]:underline [&_[data-ui~='article-body']_a]:underline-offset-[3px] [&_code]:font-mono [&_code]:text-[0.92em]"
-      >
-        <header className="pt-16 pb-8 max-[800px]:pt-12 max-[561px]:pt-10 max-[561px]:pb-7 [&_h1]:mt-6 [&_h1]:font-display [&_h1]:text-[56px] [&_h1]:leading-[1.14] [&_h1]:tracking-[-1.6px] [&_h1]:text-balance max-[800px]:[&_h1]:text-[48px] max-[561px]:[&_h1]:mt-5 max-[561px]:[&_h1]:text-[38px] max-[561px]:[&_h1]:leading-[1.16] max-[561px]:[&_h1]:tracking-[-1px]">
+      <main id="main-content" className={`${frame} pt-16 pb-22 max-[561px]:pt-10 max-[561px]:pb-16`}>
+        <header>
           <span className="block font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">
-            About
+            About the platform
           </span>
-          <h1>
-            A product description.
+          <h1 className="mt-6 font-display text-[56px] leading-[1.12] tracking-[-1.6px] text-balance max-[561px]:text-[38px] max-[561px]:leading-[1.16] [&_em]:font-normal [&_em]:text-accent-ink">
+            Software first.
             <br />
-            <em>Not a live launch.</em>
+            <em>Tokens second.</em>
           </h1>
+          <div className="mt-6 grid max-w-150 gap-4 text-[17px] leading-[1.7] text-muted-foreground max-[561px]:text-[16px]">
+            <p>SDK brings software development and token creation together on Solana.</p>
+            <p>
+              Build working SDKs with AI, remix existing tools, publish reusable software or launch tokens
+              connected to real applications.
+            </p>
+            <p>We believe launching software should be as accessible as launching a token.</p>
+          </div>
         </header>
-        <div
-          className="mt-4 [&_h2]:text-[28px] [&_h2]:leading-[1.3] [&_h2]:tracking-[-0.5px] max-[561px]:[&_h2]:text-[25px] [&_p]:mt-4 [&_p]:text-[17px] [&_p]:leading-[1.8] [&_p]:text-pretty [&_p]:text-muted-foreground max-[561px]:[&_p]:text-[16px] [&_section_+_section]:mt-10"
-          data-ui="article-body"
-        >
-          <section>
-            <h2>What SDK is</h2>
+
+        <section className="mt-16 border-t border-border pt-10 max-[561px]:mt-12">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            From idea to application.
+          </h2>
+          <div className="mt-5 grid max-w-150 gap-4 text-[16px] leading-[1.7] text-muted-foreground">
             <p>
-              SDK is a unified place to build a working SDK, test it, and launch
-              a token paired with native $SDK. A verified launch automatically
-              publishes the working, token-associated product. There is no
-              separate publish step for that journey.
+              An idea is where it starts. SDK provides the tools to turn it into working software, test it
+              against real inputs and make it available to others.
             </p>
             <p>
-              Community developers will be able to build, test, and submit a
-              reusable SDK without minting a token. Operator approval makes a
-              library listing that other people can launch. A draft or a library
-              listing is not itself a launched product.
-            </p>
-          </section>
-          <section>
-            <h2>What this website does today</h2>
-            <p>
-              It explains that product and keeps a dark theme by default. You
-              can switch to a light theme, and you can pause motion. Those
-              preferences stay in this browser. A signed-in wallet can describe
-              a private SDK and test that draft. The result stays private. A
-              test does not launch or publish anything.
+              Developers can build from scratch using the conversational AI Builder or start with an existing
+              SDK from the Library.
             </p>
             <p>
-              Wallet connection and sign-in are separate. A session exists
-              only after the server checks a wallet signature. The site does
-              not mint a token, take payment, or show trading or reward
-              activity. Canonical metadata uses the configured public origin
-              when one is set.
+              Every SDK runs through a shared execution engine, giving developers a consistent way to create,
+              test and integrate software.
             </p>
-          </section>
-          <section id="setup" className="scroll-mt-23">
-            <h2>Local setup</h2>
+          </div>
+        </section>
+
+        <section className="mt-16 border-t border-border pt-10 max-[561px]:mt-12">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            Built to be reused.
+          </h2>
+          <div className="mt-5 grid max-w-150 gap-4 text-[16px] leading-[1.7] text-muted-foreground">
+            <p>Software becomes more valuable when others can build on it.</p>
             <p>
-              The app expects Node.js 20.9 or newer and npm. Install from the
-              lockfile with <code>npm ci</code>, then start it with{" "}
-              <code>npm run dev</code>. Public pages do not need provider
-              secrets. A signed-in Builder test needs the Phase 03 tables plus
-              the OpenAI and Helius variables in{" "}
-              <code>.env.example</code>.
+              The SDK Library is home to reusable applications created by the platform and its developer
+              community.
             </p>
-          </section>
-          <section>
-            <h2>Design and photography</h2>
             <p>
-              The interface keeps the Agentframe visual system from React Bits
-              Pro: serif display type, mono labels, the cobalt accent, and the
-              pixel landscape. The landscape is a local copy of Blanca Lake,
-              photographed by{" "}
-              <a
-                href="https://unsplash.com/photos/landscape-photography-of-mountain-surrounded-by-pine-trees-and-body-of-water-4qKVQYOluDk"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Yoshi Takekawa
-              </a>{" "}
-              and used under the{" "}
-              <a
-                href="https://unsplash.com/license"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Unsplash License
-              </a>
-              . Template terms are in the repository LICENSE file. The header
-              and footer use the SDK wordmark.
+              Explore working SDKs, test their capabilities and remix them into something new. Developers can
+              also submit their own creations for publication.
             </p>
-          </section>
-        </div>
+          </div>
+          <div className="mt-6">
+            <HomeLink href="/library" tone="primary">
+              Explore the Library
+            </HomeLink>
+          </div>
+        </section>
+
+        <section className="mt-16 border-t border-border pt-10 max-[561px]:mt-12">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            Launch software, not just tokens.
+          </h2>
+          <div className="mt-5 grid max-w-150 gap-4 text-[16px] leading-[1.7] text-muted-foreground">
+            <p>SDK connects functional software with token creation.</p>
+            <p>
+              Launch an application with a token paired directly to $SDK. Every verified launch receives its
+              own token page, connected to the underlying software.
+            </p>
+            <p>
+              The result is an ecosystem where tokens represent more than a name and a ticker. They connect to
+              applications people can actually use.
+            </p>
+          </div>
+          <div className="mt-6">
+            <HomeLink href="/paired" tone="primary">
+              Explore Paired Tokens
+            </HomeLink>
+          </div>
+        </section>
+
+        <section className="mt-16 border-t border-border pt-10 max-[561px]:mt-12">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            One ecosystem. Powered by $SDK.
+          </h2>
+          <div className="mt-5 grid max-w-150 gap-4 text-[16px] leading-[1.7] text-muted-foreground">
+            <p>$SDK is the native token connecting launches across the platform.</p>
+            <p>Every new token pairs with $SDK. {nativeRewardLead()}</p>
+          </div>
+          <div className="mt-6">
+            <HomeLink href="/sdk" tone="primary">
+              Explore $SDK
+            </HomeLink>
+          </div>
+        </section>
+
+        <section className="mt-16 border border-solid border-border bg-card px-6 py-8 max-[561px]:mt-12 max-[561px]:px-5">
+          <h2 className="font-display text-[32px] leading-[1.2] tracking-[-0.8px] max-[561px]:text-[26px]">
+            Build what&apos;s next.
+          </h2>
+          <p className="mt-4 max-w-130 text-[16px] leading-[1.7] text-muted-foreground">
+            The tools are here. What you create is up to you.
+          </p>
+          <div className="mt-6 flex flex-wrap gap-3">
+            <HomeLink href="/build" tone="primary">
+              Open Builder
+            </HomeLink>
+            <HomeLink href="/library" tone="secondary">
+              Explore Library
+            </HomeLink>
+          </div>
+        </section>
       </main>
       <Footer />
     </>

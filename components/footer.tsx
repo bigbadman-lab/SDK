@@ -18,15 +18,16 @@ const GROUPS = [
     title: "Developers",
     links: [
       { label: "API & Client", href: "/code" },
-      { label: "Submit an SDK", href: "/#publish" },
+      { label: "Submit an SDK", href: "/account" },
+      { label: "Account", href: "/account" },
     ],
   },
   {
     title: "Explore",
     links: [
       { label: "About SDK", href: "/about" },
-      { label: "Account", href: "/account" },
-      { label: "Token Ecosystem", href: "/#ecosystem" },
+      { label: "Ecosystem", href: "/sdk" },
+      { label: "Homepage", href: "/" },
     ],
   },
 ];

@@ -1,5 +1,6 @@
 "use client";
 
+import { AccountSectionHeading } from "@/components/account/account-skeleton";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type KeyRecord = {
@@ -110,13 +111,13 @@ export function ApiKeys(): ReactNode {
   const full = list !== null && list.active >= list.limit;
 
   return (
-    <section className="grid gap-3 border-t border-t-border pt-8" aria-labelledby="api-keys-title">
-      <h2 id="api-keys-title" className="font-mono text-[11px] tracking-[0.08em] uppercase">
-        API keys
-      </h2>
+    <section className="grid gap-5 border-t border-border pt-8" aria-labelledby="api-keys-title">
+      <AccountSectionHeading index="03" title="API Keys" titleId="api-keys-title">
+        Create and manage API keys to run published SDKs in your own applications.
+      </AccountSectionHeading>
       <p className="max-w-130 text-[15px] leading-[1.7] text-muted-foreground">
-        A key calls published SDKs. It cannot sign for this wallet, publish an SDK, or move funds. The secret is shown
-        once, when the key is created.
+        Keys belong to this account and can call any published SDK, within the account limits. The secret is shown once,
+        when the key is created. A key cannot sign for this wallet, publish an SDK, or move funds.
       </p>
       {list === null && !notice ? (
         <div aria-busy="true">
@@ -161,6 +162,11 @@ export function ApiKeys(): ReactNode {
       {full ? (
         <p className="text-[13px] leading-[1.5] text-muted-foreground">
           Revoke a key before creating another. Five active keys is the account limit.
+        </p>
+      ) : null}
+      {list && list.keys.length === 0 ? (
+        <p className="text-[15px] leading-[1.7] text-muted-foreground">
+          Create an API key to start using published SDKs in your own applications.
         </p>
       ) : null}
       {list && list.keys.length > 0 ? (
