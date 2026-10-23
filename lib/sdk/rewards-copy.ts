@@ -16,3 +16,16 @@ export function windowLengthLabel(): string {
   const minutes = WINDOW_MS / 60_000;
   return Number.isInteger(minutes) ? String(minutes) : "";
 }
+
+export function nativeRewardLead(): string {
+  const split = nativeRewardSplit();
+  const minutes = windowLengthLabel();
+  const intro = minutes
+    ? `Every ${minutes} minutes, confirmed native $SDK creator fees are split.`
+    : "Confirmed native $SDK creator fees are split on each allocation window.";
+  if (!split) return intro;
+  if (split.buyback === "0") {
+    return `${intro} ${split.holders}% is allocated to eligible holders as claimable SOL, and ${split.deployer}% is retained by the protocol.`;
+  }
+  return `${intro} ${split.holders}% is allocated to eligible holders as claimable SOL, ${split.buyback}% is reserved for buyback, and ${split.deployer}% is retained by the protocol.`;
+}

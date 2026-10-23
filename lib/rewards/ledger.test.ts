@@ -12,6 +12,7 @@ import {
   retainedDeployerLamports,
   rewardBase,
   splitCreatorFees,
+  splitHistoricalCreatorFees,
   type FeeReceipt,
 } from "./ledger.ts";
 
@@ -38,13 +39,13 @@ function receipt(overrides: Partial<FeeReceipt> = {}): FeeReceipt {
 
 function spend(overrides: Partial<Parameters<typeof authoriseBucketSpend>[0]> = {}) {
   return authoriseBucketSpend({
-    bucket: "buyback",
+    bucket: "holders",
     creditedLamports: "100",
     reserveLamports: "10",
     bucketSpentLamports: "0",
-    amountLamports: "27",
+    amountLamports: "45",
     cycleSpentLamports: "0",
-    cycleCapLamports: "27",
+    cycleCapLamports: "45",
     slippageBps: 100,
     destination: DESTINATION,
     allowedDestinations: [DESTINATION],
@@ -56,10 +57,14 @@ function spend(overrides: Partial<Parameters<typeof authoriseBucketSpend>[0]> = 
   });
 }
 
-test("creator fees split 30/30/40 with the remainder kept by the deployer", () => {
-  assert.deepEqual(splitCreatorFees("100"), { ok: true, holders: "30", buyback: "30", deployer: "40" });
-  assert.deepEqual(splitCreatorFees("10"), { ok: true, holders: "3", buyback: "3", deployer: "4" });
+test("future creator fees split 50/50 and historical TREST fees stay 30/30/40", () => {
+  assert.deepEqual(splitCreatorFees("100"), { ok: true, holders: "50", buyback: "0", deployer: "50" });
+  assert.deepEqual(splitCreatorFees("10"), { ok: true, holders: "5", buyback: "0", deployer: "5" });
+  assert.deepEqual(splitCreatorFees("3"), { ok: true, holders: "1", buyback: "0", deployer: "2" });
   assert.deepEqual(splitCreatorFees("1"), { ok: true, holders: "0", buyback: "0", deployer: "1" });
+  assert.deepEqual(splitHistoricalCreatorFees("100"), { ok: true, holders: "30", buyback: "30", deployer: "40" });
+  assert.deepEqual(splitHistoricalCreatorFees("10"), { ok: true, holders: "3", buyback: "3", deployer: "4" });
+  assert.deepEqual(splitHistoricalCreatorFees("1"), { ok: true, holders: "0", buyback: "0", deployer: "1" });
   const window = accountingWindow(WINDOW_MS + 5);
   assert.deepEqual(window, { startMs: WINDOW_MS, endMs: WINDOW_MS * 2 });
 });
@@ -95,15 +100,16 @@ test("only confirmed creator-vault receipts for the same parent are credited", (
 test("spending stays inside the reserved bucket and ignores wallet deposits", () => {
   const base = rewardBase("100", "10");
   assert.deepEqual(base, { ok: true, base: "90" });
-  assert.deepEqual(splitCreatorFees("90"), { ok: true, holders: "27", buyback: "27", deployer: "36" });
+  assert.deepEqual(splitCreatorFees("90"), { ok: true, holders: "45", buyback: "0", deployer: "45" });
   assert.equal(spend().ok, true);
-  const overBucket = spend({ amountLamports: "28" });
+  const overBucket = spend({ amountLamports: "46" });
+  const futureBuyback = spend({ bucket: "buyback", amountLamports: "1" });
   const walletDeposit = spend({ walletLamports: "999999999", creditedLamports: "0", amountLamports: "1" });
   const destination = spend({ destination: OTHER });
   const program = spend({ programs: [OTHER] });
   const suspended = spend({ suspended: true });
-  const cycle = spend({ cycleSpentLamports: "20", amountLamports: "10", cycleCapLamports: "27" });
-  const slippage = spend({ slippageBps: 5000 });
+  const cycle = spend({ cycleSpentLamports: "40", amountLamports: "10", cycleCapLamports: "45" });
+  const slippage = spend({ bucket: "buyback", slippageBps: 5000, amountLamports: "1" });
   assert.equal(overBucket.ok, false);
   assert.equal(walletDeposit.ok, false);
   assert.equal(destination.ok, false);
@@ -111,8 +117,9 @@ test("spending stays inside the reserved bucket and ignores wallet deposits", ()
   assert.equal(suspended.ok, false);
   assert.equal(cycle.ok, false);
   assert.equal(slippage.ok, false);
-  if (overBucket.ok || walletDeposit.ok || destination.ok || program.ok || suspended.ok || cycle.ok || slippage.ok) return;
+  if (overBucket.ok || futureBuyback.ok || walletDeposit.ok || destination.ok || program.ok || suspended.ok || cycle.ok || slippage.ok) return;
   assert.equal(overBucket.code, "unfunded");
+  assert.equal(futureBuyback.code, "unfunded");
   assert.equal(walletDeposit.code, "unfunded");
   assert.equal(destination.code, "destination");
   assert.equal(program.code, "program");
@@ -120,7 +127,7 @@ test("spending stays inside the reserved bucket and ignores wallet deposits", ()
   assert.equal(cycle.code, "cycle");
   assert.equal(slippage.code, "slippage");
   const retained = retainedDeployerLamports("100", "10");
-  assert.deepEqual(retained, { ok: true, retained: "36", spendable: "0" });
+  assert.deepEqual(retained, { ok: true, retained: "45", spendable: "0" });
 });
 
 test("SOL single-recipient collection pays the creator and does not grant spending rights", () => {

@@ -1,7 +1,7 @@
 import { Footer } from "@/components/footer";
 import { SdkBoard } from "@/components/sdk/sdk-board";
 import { createMetadata } from "@/lib/metadata";
-import { holderMinimumLabel, nativeRewardSplit, windowLengthLabel } from "@/lib/sdk/rewards-copy";
+import { holderMinimumLabel, nativeRewardLead } from "@/lib/sdk/rewards-copy";
 import { loadOfficialMarket } from "@/lib/server/market/official";
 import { loadHolderAllocations, loadOfficialSdk } from "@/lib/server/sdk/official";
 import type { ReactNode } from "react";
@@ -19,8 +19,6 @@ export default async function SdkPage(): Promise<ReactNode> {
   const live = official.ok && official.phase === "live" ? official : null;
   const market = live ? await loadOfficialMarket(live.mint) : null;
   const allocations = live ? await loadHolderAllocations(live.mint, null) : null;
-  const split = nativeRewardSplit();
-  const minutes = windowLengthLabel();
   const phase = official.ok ? official.phase : "unavailable";
 
   return (
@@ -50,14 +48,7 @@ export default async function SdkPage(): Promise<ReactNode> {
           rows={allocations && allocations.ok ? allocations.rows : []}
           nextCursor={allocations && allocations.ok ? allocations.nextCursor : null}
           rewardsOk={phase !== "live" || (allocations?.ok ?? false)}
-          rewardLead={
-            (minutes
-              ? `Every ${minutes} minutes, confirmed native $SDK creator fees are split.`
-              : "Confirmed native $SDK creator fees are split on each allocation window.") +
-            (split
-              ? ` ${split.holders}% is allocated to eligible holders as claimable SOL, ${split.buyback}% is reserved for buyback, and ${split.deployer}% is retained by the protocol.`
-              : "")
-          }
+          rewardLead={nativeRewardLead()}
           rewardQualify={`Wallets holding at least ${holderMinimumLabel()} $SDK qualify for SOL rewards, allocated proportionally to their eligible holdings.`}
         />
       </main>

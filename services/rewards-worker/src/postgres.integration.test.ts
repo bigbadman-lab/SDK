@@ -660,12 +660,12 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   if (!first.ok) return;
   assert.equal(first.state, "allocated");
   if (first.state !== "allocated") return;
-  assert.deepEqual([first.holders, first.buyback, first.deployer, first.base], ["300", "300", "400", "1000"]);
+  assert.deepEqual([first.holders, first.buyback, first.deployer, first.base], ["500", "0", "500", "1000"]);
   assert.equal(await fee("4".repeat(88), "2000"), "ok");
   const second = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(900_000), reserveLamports: "0" });
   assert.equal(second.ok, true);
   if (!second.ok || second.state !== "allocated") return;
-  assert.deepEqual([second.holders, second.buyback, second.deployer], ["600", "600", "800"]);
+  assert.deepEqual([second.holders, second.buyback, second.deployer], ["1000", "0", "1000"]);
   const beforeEmpty = (await store.windows(MINT, "test")).length;
   const third = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_200_000), reserveLamports: "0" });
   assert.deepEqual(third, { ok: true, state: "empty" });
@@ -683,7 +683,7 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   const many = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(1_500_000), reserveLamports: "0" });
   assert.equal(many.ok, true);
   if (!many.ok || many.state !== "allocated") return;
-  assert.deepEqual([many.base, many.holders, many.buyback, many.deployer], ["3000", "900", "900", "1200"]);
+  assert.deepEqual([many.base, many.holders, many.buyback, many.deployer], ["3000", "1500", "0", "1500"]);
   const shared = await db()`
     select count(distinct reward_window_id)::int as windows
     from reward_collections
@@ -769,7 +769,7 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(afterReserve.ok, true);
   if (!afterReserve.ok || afterReserve.state !== "allocated") return;
   assert.equal(afterReserve.withheld, "3000");
-  assert.deepEqual([afterReserve.base, afterReserve.holders, afterReserve.buyback, afterReserve.deployer], ["7000", "2100", "2100", "2800"]);
+  assert.deepEqual([afterReserve.base, afterReserve.holders, afterReserve.buyback, afterReserve.deployer], ["7000", "3500", "0", "3500"]);
   assert.equal(await fee("F".repeat(88), "1000", PRODUCTION_MINT, "production"), "ok");
   const isolated = await store.allocateUnallocated({ parentMint: MINT, scope: "test", windowKey: at(3_300_000), reserveLamports: "0" });
   assert.deepEqual(isolated, { ok: true, state: "empty" });
@@ -1026,11 +1026,11 @@ test("the confirmed collection recovery commits on the migrated schema and prote
     assert.equal(buybackRows[0]?.status, "confirmed");
     assert.equal(buybackRows[0]?.spent, "24037092");
     assert.equal(buybackRows[0]?.token_amount, "99");
-    const historicalReceipt = await recoverySql`
+    const stillDeferred = await recoverySql`
       select allocation_deferred, allocated_at from reward_collections where signature = ${signature}
     `;
-    assert.equal(historicalReceipt[0]?.allocation_deferred, true);
-    assert.equal(historicalReceipt[0]?.allocated_at, null);
+    assert.equal(stillDeferred[0]?.allocation_deferred, true);
+    assert.equal(stillDeferred[0]?.allocated_at, null);
     const windowKey = rewardWindowKey(mint, "test", START + 1);
     assert.ok(windowKey);
     assert.equal(await store.saveReceipt({
@@ -1050,9 +1050,11 @@ test("the confirmed collection recovery commits on the migrated schema and prote
     const ordinary = await store.allocateUnallocated({ parentMint: mint, scope: "test", windowKey, reserveLamports: "0" });
     assert.equal(ordinary.ok, true);
     if (!ordinary.ok || ordinary.state !== "allocated") return;
-    assert.equal(ordinary.holders, "300");
+    assert.equal(ordinary.holders, "500");
+    assert.equal(ordinary.buyback, "0");
+    assert.equal(ordinary.deployer, "500");
     const combined = await store.solObligations(mint, "test");
-    assert.equal(combined.holderSol, "300");
+    assert.equal(combined.holderSol, "500");
     assert.equal(combined.deferredHolderLamports, "24042092");
     const deferredOnly = await store.allocateUnallocated({
       parentMint: mint,
@@ -1070,7 +1072,7 @@ test("the confirmed collection recovery commits on the migrated schema and prote
     assert.equal(handedOff.deferredHolderLamports, "0");
     assert.equal(handedOff.deferredBuybackLamports, "0");
     assert.equal(handedOff.deferredDeployerLamports, "0");
-    assert.equal(handedOff.holderSol, "300");
+    assert.equal(handedOff.holderSol, "500");
   } finally {
     await recoverySql?.end({ timeout: 5 });
     await recoveryDb.stop();

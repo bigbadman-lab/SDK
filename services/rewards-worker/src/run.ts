@@ -1,16 +1,15 @@
-import { accountingWindow, authoriseBucketSpend, buybackSpendAllowed } from "../../../lib/rewards/ledger.ts";
+import { accountingWindow } from "../../../lib/rewards/ledger.ts";
 import { buildSolClaim, buildTokenClaim } from "../../../lib/rewards/claim.ts";
-import { PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID } from "../../../lib/rewards/collect.ts";
-import { buybackBlocked, windowKey } from "../../../lib/rewards/cycle.ts";
+import { windowKey } from "../../../lib/rewards/cycle.ts";
 import { messageSha256, signedTransactionWire, type CompiledTransaction } from "../../../lib/rewards/inspect.ts";
 import { snapshotHolders } from "../../../lib/rewards/holders.ts";
 import { boundClaimMessage, claimAuthorizationMessage, parseBoundClaim, verifyClaimOwnership } from "../../../lib/rewards/ownership.ts";
-import { explainCreatorDelta, reconcileBuyback, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
+import { explainCreatorDelta, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
 import { derivedDeployerAddress, rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
 import { bondingCurveAddress, pollTransactionConfirmation, readCreatorVaults, type Chain, type ObservedTransaction, type SignatureObservation, type VaultLookup } from "./chain.ts";
 import { legacyCollectionRetired } from "./legacy-recovery.ts";
-import { buildCurveBuyback, buildSolCollection, type BuiltInstruction } from "./instructions.ts";
+import { buildSolCollection, type BuiltInstruction } from "./instructions.ts";
 import type { RegisteredParent, RewardControl, RewardsStore, StoredIntent } from "./store.ts";
 
 const RENT_CAP = "50000000";
@@ -49,16 +48,6 @@ async function observeSignature(chain: Chain, signature: string, lookup: VaultLo
   });
 }
 
-function boundedBuyQuote(budget: string, slippageBps: number): string {
-  const cap = BigInt(budget);
-  const scale = BigInt(10_000 + slippageBps);
-  let quote = (cap * BigInt(10_000)) / scale;
-  if (quote <= BigInt(0)) return "1";
-  while ((quote * scale + BigInt(9_999)) / BigInt(10_000) > cap && quote > BigInt(1)) quote -= BigInt(1);
-  return quote.toString();
-}
-const FEE_PROGRAM = "pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ";
-
 type CycleCode =
   | "control"
   | "destination"
@@ -85,7 +74,15 @@ type CycleCode =
   | "vault"
   | "wsol";
 
-export type CycleResult = { ok: true; stage: "idle" | "collected" | "bought" | "recovered"; netLamports: string; tokenCredited: string } | { ok: false; code: CycleCode };
+export type CycleResult =
+  | {
+      ok: true;
+      stage: "idle" | "collected" | "recovered";
+      netLamports: string;
+      tokenCredited: string;
+      holderPolicy?: "no_eligible_holders";
+    }
+  | { ok: false; code: CycleCode };
 
 function bare(instructions: BuiltInstruction[]): CompiledTransaction["instructions"] {
   return instructions.map((instruction) => ({ programId: instruction.programId, keys: instruction.keys, data: instruction.data }));
@@ -426,7 +423,6 @@ async function execute(
   const window = accountingWindow(input.nowMs);
   if (!window) return { ok: false, code: "parent" };
   const collectKey = `collect-${window.startMs}`;
-  const buyKey = `buyback-${window.startMs}`;
   const mint = await input.chain.mint(parent.mintAddress);
   if (!mint || mint.decimals !== parent.decimals || mint.tokenProgram !== parent.tokenProgram) return { ok: false, code: "parent" };
   const vaults = await readCreatorVaults(input.chain, parent.deployerAddress);
@@ -481,7 +477,6 @@ async function execute(
   if (allocation.state === "empty") return { ok: true, stage: "idle", netLamports: "0", tokenCredited: "0" };
   if (allocation.state === "reserved") return { ok: true, stage: "collected", netLamports: "0", tokenCredited: "0" };
   const holders = allocation.holders;
-  const buyback = allocation.buyback;
   const net = allocation.base;
   if (holders !== "0") {
     const existingSnaps = await input.store.snapshots(parent.mintAddress, parent.scope, key);
@@ -498,6 +493,9 @@ async function execute(
         tokenAmount: "0",
       });
       if (!snap.ok) return { ok: false, code: "parent" };
+      if (snap.holders.length === 0) {
+        return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0", holderPolicy: "no_eligible_holders" };
+      }
       await input.store.saveSnapshots(parent.mintAddress, parent.scope, key, snap.holders.map((holder) => ({
         owner: holder.owner,
         balance: holder.balance,
@@ -507,106 +505,7 @@ async function execute(
       })));
     }
   }
-  if (buyback === "0") return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0" };
-  const currentIntents = await input.store.intents(parent.mintAddress, parent.scope);
-  if (buybackBlocked(currentIntents, parent.mintAddress, parent.scope)) return { ok: false, code: "uncertain" };
-  const buyIntent = currentIntents.find((intent) => intent.idempotencyKey === buyKey);
-  if (buyIntent?.signature) {
-    const polled = await observeSignature(input.chain, buyIntent.signature, lookup);
-    const observed = polled.kind === "observed" ? polled.observed : null;
-    if (polled.kind === "failed" || observed?.status === "failed") return { ok: false, code: "failed" };
-    if (!observed || observed.status !== "confirmed") return { ok: false, code: "uncertain" };
-    const tokens = reconcileBuyback({ status: "confirmed", quotedTokenAmount: "1", tokenDelta: observed.tokenDelta });
-    if (!tokens.ok) return { ok: false, code: "unreconciled" };
-    return creditTokens(input.store, parent, key, tokens.credited);
-  }
-  const market = await input.chain.market(parent.mintAddress);
-  if (!market || market.graduated !== parent.graduated) return { ok: false, code: "market" };
-  const wallet = await input.chain.account(parent.deployerAddress);
-  if (!wallet) return { ok: false, code: "unfunded" };
-  const obligations = await input.store.solObligations(parent.mintAddress, parent.scope);
-  const holderLiability = BigInt(obligations.holderSol);
-  const holderPaid = BigInt(obligations.confirmedHolderSol);
-  const unpaidHolders = holderLiability > holderPaid ? holderLiability - holderPaid : BigInt(0);
-  const unspentPrior = BigInt(obligations.buybackSol) - BigInt(obligations.confirmedBuybackSol) - BigInt(buyback);
-  if (unspentPrior < BigInt(0)) return { ok: false, code: "unreconciled" };
-  const covered = buybackSpendAllowed({
-    walletLamports: wallet.lamports,
-    buybackLamports: buyback,
-    reserveLamports: control.reserveLamports,
-    unpaidHolderLamports: unpaidHolders.toString(),
-    deployerRetainedLamports: obligations.deployerRetained,
-    unspentPriorBuybackLamports: unspentPrior.toString(),
-    deferredHolderLamports: obligations.deferredHolderLamports,
-    deferredBuybackLamports: obligations.deferredBuybackLamports,
-    deferredDeployerLamports: obligations.deferredDeployerLamports,
-  });
-  if (!covered.ok) return { ok: false, code: covered.code === "amount" ? "unreconciled" : "unfunded" };
-  const authorised = authoriseBucketSpend({
-    bucket: "buyback",
-    creditedLamports: net,
-    reserveLamports: "0",
-    bucketSpentLamports: "0",
-    amountLamports: buyback,
-    cycleSpentLamports: "0",
-    cycleCapLamports: control.cycleCapLamports,
-    slippageBps: control.slippageBps,
-    destination: parent.deployerAddress,
-    allowedDestinations: [parent.deployerAddress],
-    programs: [PUMP_PROGRAM_ID, PUMP_AMM_PROGRAM_ID, FEE_PROGRAM],
-    allowedPrograms: [PUMP_PROGRAM_ID, PUMP_AMM_PROGRAM_ID, FEE_PROGRAM, parent.tokenProgram],
-    suspended: control.suspended,
-    walletLamports: wallet?.lamports ?? "0",
-  });
-  if (!authorised.ok) return { ok: false, code: authorised.code === "unfunded" ? "unfunded" : "spend" };
-  const quoteLamports = market.graduated ? boundedBuyQuote(buyback, control.slippageBps) : buyback;
-  const built = await buildCurveBuyback({
-    parentMint: parent.mintAddress,
-    deployer: parent.deployerAddress,
-    tokenProgram: parent.tokenProgram,
-    quoteLamports,
-    minimumTokens: "1",
-    slippageBps: control.slippageBps,
-    graduated: market.graduated,
-    pool: market.graduated ? market.pool : null,
-    curve: market.graduated ? null : market.curve,
-  });
-  if (!built.ok) return { ok: false, code: built.code === "graduated_market" ? "market" : "program" };
-  const buyLatest = input.chain.latestBlockhash ? await input.chain.latestBlockhash() : null;
-  const blockhash = buyLatest?.blockhash ?? await input.chain.blockhash();
-  const sent = await broadcast({
-    secret,
-    expectedAddress: input.expectedAddress,
-    suspended: input.suspended,
-    parent,
-    control,
-    intent: { key: buyKey, kind: "buyback", amount: buyback },
-    transaction: { feePayer: parent.deployerAddress, recentBlockhash: blockhash, instructions: bare(built.instructions) },
-    chain: input.chain,
-    store: input.store,
-    lookup,
-    validityHeight: buyLatest?.lastValidBlockHeight ?? null,
-  });
-  if (!sent.ok) return sent;
-  if (sent.observed.status === "failed") return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0" };
-  const tokens = reconcileBuyback({ status: "confirmed", quotedTokenAmount: "1", tokenDelta: sent.observed.tokenDelta });
-  if (!tokens.ok) {
-    await input.store.markIntent(parent.mintAddress, parent.scope, buyKey, "unreconciled", sent.signature);
-    return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0" };
-  }
-  const credited = await creditTokens(input.store, parent, key, tokens.credited);
-  if (!credited.ok) return credited;
-  return { ok: true, stage: "bought", netLamports: net, tokenCredited: tokens.credited };
-}
-
-async function creditTokens(store: RewardsStore, parent: RegisteredParent, windowKey: string, amount: string): Promise<CycleResult> {
-  const rows = await store.snapshots(parent.mintAddress, parent.scope, windowKey);
-  const total = rows.reduce((sum, row) => sum + BigInt(row.balance), BigInt(0));
-  if (total <= BigInt(0)) return { ok: true, stage: "collected", netLamports: "0", tokenCredited: "0" };
-  const shares = rows.map((row) => ({ owner: row.owner, tokenAmount: ((BigInt(amount) * BigInt(row.balance)) / total).toString() }));
-  const saved = await store.creditSnapshotTokens(parent.mintAddress, parent.scope, windowKey, shares);
-  if (saved !== "ok") return { ok: false, code: "unreconciled" };
-  return { ok: true, stage: "bought", netLamports: "0", tokenCredited: amount };
+  return { ok: true, stage: "collected", netLamports: net, tokenCredited: "0" };
 }
 
 export async function submitClaim(input: {

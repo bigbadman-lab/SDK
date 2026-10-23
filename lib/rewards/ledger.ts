@@ -23,7 +23,22 @@ function parseAmount(value: string): bigint | null {
   return BigInt(value);
 }
 
+// Future native windows. Integer division leaves any remainder with the protocol.
+// Buyback is zero: new cycles allocate claimable SOL and do not purchase tokens.
 export function splitCreatorFees(
+  amountLamports: string,
+): { ok: true; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
+  const amount = parseAmount(amountLamports);
+  if (amount === null) return { ok: false, code: "amount" };
+  const holders = (amount * BigInt(50)) / BigInt(100);
+  const buyback = BigInt(0);
+  const deployer = amount - holders - buyback;
+  return { ok: true, holders: holders.toString(), buyback: buyback.toString(), deployer: deployer.toString() };
+}
+
+// TREST windows already stored under 30/30/40. This is for reading that history.
+// New allocations must use splitCreatorFees and must not restate old receipts.
+export function splitHistoricalCreatorFees(
   amountLamports: string,
 ): { ok: true; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
   const amount = parseAmount(amountLamports);
@@ -70,11 +85,14 @@ export function creditedLamports(receipts: readonly FeeReceipt[], parentMint: st
 // The reserve is a standing solvency floor against lifetime creator fees.
 // It is withheld once. Later windows pass the amount already withheld and do not
 // subtract the full reserve again.
-export function planIncrementalAllocation(input: {
-  grossLamports: string;
-  reserveLamports: string;
-  reserveWithheldLamports: string;
-}): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
+function planAllocation(
+  input: {
+    grossLamports: string;
+    reserveLamports: string;
+    reserveWithheldLamports: string;
+  },
+  splitFees: typeof splitCreatorFees,
+): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
   const gross = parseAmount(input.grossLamports);
   const reserve = parseAmount(input.reserveLamports);
   const withheldAlready = parseAmount(input.reserveWithheldLamports);
@@ -87,9 +105,25 @@ export function planIncrementalAllocation(input: {
   if (base === BigInt(0)) {
     return { ok: true, withheld: withheld.toString(), base: "0", holders: "0", buyback: "0", deployer: "0" };
   }
-  const split = splitCreatorFees(base.toString());
+  const split = splitFees(base.toString());
   if (!split.ok) return split;
   return { ok: true, withheld: withheld.toString(), base: base.toString(), holders: split.holders, buyback: split.buyback, deployer: split.deployer };
+}
+
+export function planIncrementalAllocation(input: {
+  grossLamports: string;
+  reserveLamports: string;
+  reserveWithheldLamports: string;
+}): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
+  return planAllocation(input, splitCreatorFees);
+}
+
+export function planHistoricalAllocation(input: {
+  grossLamports: string;
+  reserveLamports: string;
+  reserveWithheldLamports: string;
+}): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
+  return planAllocation(input, splitHistoricalCreatorFees);
 }
 
 export function buybackSpendAllowed(input: {

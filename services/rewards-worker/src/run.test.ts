@@ -56,7 +56,7 @@ function harness(input?: {
   submit?: "submitted" | "uncertain" | "preflight" | "timeout";
   buyStatus?: "confirmed" | "failed";
   deposit?: string;
-  holders?: "fail-once";
+  holders?: "fail-once" | "none";
   signatureState?: "absent" | "present" | "unknown";
   blockhashValid?: "valid" | "expired" | "unknown";
   blockHeight?: string | null;
@@ -76,10 +76,11 @@ function harness(input?: {
   let reads = 0;
   let observations = 0;
   let holderFailures = 0;
+  let vaultBalance = input?.vaultLamports ?? "1890880";
   const chain: Chain = {
     async account(address) {
       if (address === key.address) return { lamports: input?.wallet ?? "5000000000", owner: SYSTEM, data: new Uint8Array() };
-      if (address === vault) return { lamports: input?.vaultLamports ?? "1890880", owner: SYSTEM, data: new Uint8Array() };
+      if (address === vault) return { lamports: vaultBalance, owner: SYSTEM, data: new Uint8Array() };
       return null;
     },
     async rent() {
@@ -92,6 +93,9 @@ function harness(input?: {
       if (input?.holders === "fail-once" && holderFailures === 0) {
         holderFailures += 1;
         return null;
+      }
+      if (input?.holders === "none") {
+        return { observedSlot: "44", accounts: [{ owner: holder.address, mint: TREST, amount: "49999999999" }] };
       }
       return { observedSlot: "44", accounts: [{ owner: holder.address, mint: TREST, amount: "50000000000" }] };
     },
@@ -170,7 +174,18 @@ function harness(input?: {
     control: { suspended: false, reserveLamports: "0", cycleCapLamports: "1000000000", slippageBps: 100 },
     ...(input?.rehearsal === false ? {} : { rehearsal: testRehearsal(input?.blockSideWork ?? false) }),
   });
-  return { key, holder, chain, store, submits, readSignatures, parent };
+  return {
+    key,
+    holder,
+    chain,
+    store,
+    submits,
+    readSignatures,
+    parent,
+    setVault(value: string) {
+      vaultBalance = value;
+    },
+  };
 }
 
 function cycleAt(env: ReturnType<typeof harness>, nowMs: number) {
@@ -210,25 +225,40 @@ test("an unauthorised worker does not read vaults or broadcast", async () => {
   assert.equal(env.submits.length, 0);
 });
 
-test("a confirmed creator-vault receipt funds a 30/30/40 window and a reconciled buyback", async () => {
+test("a confirmed creator-vault receipt funds a 50/50 window and does not buy tokens", async () => {
   const env = harness();
   const result = await cycle(env);
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.stage, "bought");
-  assert.equal(result.tokenCredited, "40");
+  assert.equal(result.stage, "collected");
+  assert.equal(result.tokenCredited, "0");
   const windows = await env.store.windows(TREST, "test");
-  assert.equal(windows[0]?.holders, "298500");
-  assert.equal(windows[0]?.buyback, "298500");
-  assert.equal(windows[0]?.deployer, "398000");
+  assert.equal(windows[0]?.holders, "497500");
+  assert.equal(windows[0]?.buyback, "0");
+  assert.equal(windows[0]?.deployer, "497500");
   const snaps = await env.store.snapshots(TREST, "test", windows[0]?.windowKey ?? "");
   assert.equal(snaps[0]?.owner, env.holder.address);
-  assert.equal(snaps[0]?.solLamports, "298500");
-  assert.equal(snaps[0]?.tokenAmount, "40");
-  assert.equal(env.submits.length, 2);
+  assert.equal(snaps[0]?.solLamports, "497500");
+  assert.equal(snaps[0]?.tokenAmount, "0");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
   const again = await cycle(env);
   assert.equal(again.ok, true);
-  assert.equal(env.submits.length, 2);
+  assert.equal(env.submits.length, 1);
+});
+
+test("fees with no eligible holder stay unassigned and are not given to the protocol", async () => {
+  const env = harness({ holders: "none" });
+  const result = await cycle(env);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.holderPolicy, "no_eligible_holders");
+  const windows = await env.store.windows(TREST, "test");
+  assert.equal(windows[0]?.holders, "497500");
+  assert.equal(windows[0]?.buyback, "0");
+  assert.equal(windows[0]?.deployer, "497500");
+  assert.equal((await env.store.snapshots(TREST, "test", windows[0]?.windowKey ?? "")).length, 0);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
 });
 
 test("missing signing credentials do not broadcast", async () => {
@@ -266,18 +296,19 @@ test("a snapshot failure stops the rehearsal and does not allocate the receipt t
   assert.equal((await env.store.windows(TREST, "test")).length, 1);
 });
 
-test("buyback spending leaves holder, deployer, and reserve balances in the wallet", async () => {
+test("a short deployer wallet still allocates holder SOL and does not buy tokens", async () => {
   const short = harness({ wallet: "298500" });
-  const blocked = await cycle(short);
-  assert.equal(blocked.ok, false);
-  if (blocked.ok) return;
-  assert.equal(blocked.code, "unfunded");
+  const allocated = await cycle(short);
+  assert.equal(allocated.ok, true);
+  if (!allocated.ok) return;
+  assert.equal(allocated.stage, "collected");
+  assert.equal(allocated.tokenCredited, "0");
   assert.equal(short.submits.length, 1);
-  const covered = harness({ wallet: "995000" });
-  const bought = await cycle(covered);
-  assert.equal(bought.ok, true);
-  if (!bought.ok) return;
-  assert.equal(bought.stage, "bought");
+  assert.equal((await short.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
+  const windows = await short.store.windows(TREST, "test");
+  assert.equal(windows[0]?.holders, "497500");
+  assert.equal(windows[0]?.buyback, "0");
+  assert.equal(windows[0]?.deployer, "497500");
 });
 
 test("the reserve is withheld once and a later pass does not allocate the same receipt", async () => {
@@ -293,13 +324,13 @@ test("the reserve is withheld once and a later pass does not allocate the same r
   const windows = await env.store.windows(TREST, "test");
   assert.equal(windows.length, 1);
   assert.equal(windows[0]?.collected, "991000");
-  assert.equal(windows[0]?.holders, "297300");
-  assert.equal(windows[0]?.buyback, "297300");
-  assert.equal(windows[0]?.deployer, "396400");
+  assert.equal(windows[0]?.holders, "495500");
+  assert.equal(windows[0]?.buyback, "0");
+  assert.equal(windows[0]?.deployer, "495500");
   const second = await cycle(env);
   assert.equal(second.ok, true);
   assert.equal((await env.store.windows(TREST, "test")).length, 1);
-  assert.equal(env.submits.length, 2);
+  assert.equal(env.submits.length, 1);
 });
 
 test("an unrelated deposit is excluded from the credited fee", async () => {
@@ -355,29 +386,32 @@ test("a second worker cannot enter a locked cycle", async () => {
   await first;
 });
 
-test("a failed buyback keeps the SOL entitlement and credits no tokens", async () => {
+test("a cycle with no second transaction keeps the SOL entitlement and credits no tokens", async () => {
   const env = harness({ buyStatus: "failed" });
   const result = await cycle(env);
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.code, "failed");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.stage, "collected");
   const windows = await env.store.windows(TREST, "test");
   const snaps = await env.store.snapshots(TREST, "test", windows[0]?.windowKey ?? "");
-  assert.equal(snaps[0]?.solLamports, "298500");
+  assert.equal(snaps[0]?.solLamports, "497500");
   assert.equal(snaps[0]?.tokenAmount, "0");
-  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, false);
 });
 
-test("insufficient deployer SOL does not buy back and does not remove holder SOL", async () => {
+test("a thin deployer balance does not buy back and does not remove holder SOL", async () => {
   const env = harness({ wallet: "1000" });
   const result = await cycle(env);
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.code, "unfunded");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.stage, "collected");
   const windows = await env.store.windows(TREST, "test");
   const snaps = await env.store.snapshots(TREST, "test", windows[0]?.windowKey ?? "");
-  assert.equal(snaps[0]?.solLamports, "298500");
+  assert.equal(snaps[0]?.solLamports, "497500");
+  assert.equal(windows[0]?.deployer, "497500");
   assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
 });
 
 test("a mismatched or suspended signer broadcasts nothing", async () => {
@@ -484,7 +518,9 @@ test("SOL and TREST claims require ownership and cannot be repeated or cross par
     store: env.store,
     chain: env.chain,
   });
-  assert.equal(token.ok, true);
+  assert.equal(token.ok, false);
+  if (token.ok) return;
+  assert.equal(token.code, "amount");
   const productionMessage = claimAuthorizationMessage({
     scope: "production",
     parentMint: TREST,
@@ -514,7 +550,7 @@ test("SOL and TREST claims require ownership and cannot be repeated or cross par
   assert.equal(otherParent.ok, false);
   if (otherParent.ok) return;
   assert.equal(otherParent.code, "parent");
-  assert.equal(env.submits.length, before + 2);
+  assert.equal(env.submits.length, before + 1);
 });
 
 test("an uncertain claim is reconciled without a second transfer", async () => {
@@ -724,8 +760,10 @@ test("a graduated pool buyback is built from chain market state", async () => {
   const result = await cycle(env);
   assert.equal(result.ok, true);
   if (!result.ok) return;
-  assert.equal(result.stage, "bought");
-  assert.equal(result.tokenCredited, "40");
+  assert.equal(result.stage, "collected");
+  assert.equal(result.tokenCredited, "0");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
 });
 
 test("the signer rejects an inserted transfer and an altered collection account", async () => {
@@ -1237,7 +1275,7 @@ test("an upcoming three-window schedule rejects an early tick and accepts the fi
   assert.equal(state?.processed.length, 1);
 });
 
-test("an uncertain buyback stops the rehearsal without another collection", async () => {
+test("an ordinary cycle does not submit a buyback when a later broadcast would be uncertain", async () => {
   const env = harness();
   let attempts = 0;
   env.chain.submit = async (wire) => {
@@ -1247,17 +1285,17 @@ test("an uncertain buyback stops the rehearsal without another collection", asyn
     return { status: "uncertain", code: "timeout", detail: "timeout" };
   };
   const result = await cycle(env);
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.code, "uncertain");
-  assert.equal(env.submits.length, 2);
-  const buyback = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "buyback");
-  assert.equal(buyback?.status, "uncertain");
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.stage, "collected");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
+  env.setVault("890880");
   const later = await cycleAt(env, NEXT_WINDOW);
-  assert.equal(later.ok, false);
-  if (later.ok) return;
-  assert.equal(later.code, "suspended");
-  assert.equal(env.submits.length, 2);
+  assert.equal(later.ok, true);
+  if (!later.ok) return;
+  assert.equal(later.stage, "idle");
+  assert.equal(env.submits.length, 1);
 });
 
 test("a rehearsal database failure does not broadcast", async () => {
@@ -1286,18 +1324,20 @@ test("a rehearsal database failure does not broadcast", async () => {
   assert.equal(closing.submits.length, 0);
 });
 
-test("a failed buyback stops the rehearsal without another collection", async () => {
+test("a failed second observation does not create a buyback or another collection", async () => {
   const env = harness({ buyStatus: "failed" });
   const result = await cycle(env);
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.code, "failed");
-  assert.equal(env.submits.length, 2);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.stage, "collected");
+  assert.equal(env.submits.length, 1);
+  env.setVault("890880");
   const later = await cycleAt(env, NEXT_WINDOW);
-  assert.equal(later.ok, false);
-  if (later.ok) return;
-  assert.equal(later.code, "suspended");
-  assert.equal(env.submits.length, 2);
+  assert.equal(later.ok, true);
+  if (!later.ok) return;
+  assert.equal(later.stage, "idle");
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
 });
 
 test("claims stay unsigned while a rehearsal blocks side work", async () => {
@@ -1342,7 +1382,7 @@ test("a delayed confirmation is observed without a second broadcast", async () =
   const env = harness({ lagReads: 2 });
   const result = await cycle(env);
   assert.equal(result.ok, true);
-  assert.equal(env.submits.length, 2);
+  assert.equal(env.submits.length, 1);
   assert.ok(env.readSignatures.length >= 3);
   assert.equal((await env.store.receipts(TREST, "test")).length, 1);
   const stored = (await env.store.intents(TREST, "test")).find((intent) => intent.kind === "collect");
@@ -1648,3 +1688,4 @@ test("a confirmed collection is reconciled once after a restart and is not broad
   assert.equal(env.submits.length, submits);
   assert.equal((await env.store.receipts(TREST, "test")).length, 1);
 });
+

@@ -1,4 +1,4 @@
-import { planIncrementalAllocation } from "../../../lib/rewards/ledger.ts";
+import { planHistoricalAllocation } from "../../../lib/rewards/ledger.ts";
 import { explainCreatorDelta, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
 import { ammWsolVaultAddress, type Chain, type ObservedTransaction } from "./chain.ts";
 import { TREST_REHEARSAL_MINT, type RewardsStore } from "./store.ts";
@@ -53,7 +53,7 @@ export function historicalHolderSnapshot(): { ok: false; reason: "historical_bal
 }
 
 export function plannedCollectionAllocation(): { ok: true; withheld: string; base: string; holders: string; buyback: string; deployer: string } | { ok: false; code: "amount" } {
-  const planned = planIncrementalAllocation({
+  const planned = planHistoricalAllocation({
     grossLamports: CONFIRMED_COLLECTION.net,
     reserveLamports: CONFIRMED_COLLECTION.reserve,
     reserveWithheldLamports: "0",

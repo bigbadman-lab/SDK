@@ -121,7 +121,7 @@ test("a confirmed creator-vault receipt is credited without counting deposits", 
   assert.equal(mismatch.code, "unreconciled");
 });
 
-test("five-minute windows allocate 30/30/40 once and isolate parents", () => {
+test("five-minute windows allocate 50/50 once and isolate parents", () => {
   const first = allocateWindow({
     parentMint: TREST,
     scope: "test",
@@ -134,9 +134,9 @@ test("five-minute windows allocate 30/30/40 once and isolate parents", () => {
   });
   assert.equal(first.ok, true);
   if (!first.ok) return;
-  assert.equal(first.holders, "30");
-  assert.equal(first.buyback, "30");
-  assert.equal(first.deployer, "40");
+  assert.equal(first.holders, "50");
+  assert.equal(first.buyback, "0");
+  assert.equal(first.deployer, "50");
   assert.equal(windowKey(TREST, "test", WINDOW_MS + 10), first.windowKey);
   const restart = allocateWindow({
     parentMint: TREST,
@@ -165,7 +165,7 @@ test("five-minute windows allocate 30/30/40 once and isolate parents", () => {
   assert.equal(production.ok, true);
   if (!production.ok) return;
   assert.equal(production.duplicate, false);
-  assert.equal(production.holders, "30");
+  assert.equal(production.holders, "50");
   assert.notEqual(production.windowKey, first.windowKey);
   const short = authoriseBucketSpend({
     bucket: "buyback",
@@ -474,25 +474,25 @@ test("incremental windows split only new fees and withhold the reserve once", ()
   const first = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "0", reserveWithheldLamports: "0" });
   assert.equal(first.ok, true);
   if (!first.ok) return;
-  assert.deepEqual([first.holders, first.buyback, first.deployer], ["30", "30", "40"]);
+  assert.deepEqual([first.holders, first.buyback, first.deployer], ["50", "0", "50"]);
   const second = planIncrementalAllocation({ grossLamports: "50", reserveLamports: "0", reserveWithheldLamports: "0" });
   assert.equal(second.ok, true);
   if (!second.ok) return;
-  assert.deepEqual([second.holders, second.buyback, second.deployer], ["15", "15", "20"]);
+  assert.deepEqual([second.holders, second.buyback, second.deployer], ["25", "0", "25"]);
   const opening = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "90", reserveWithheldLamports: "0" });
   assert.equal(opening.ok, true);
   if (!opening.ok) return;
   assert.equal(opening.withheld, "90");
-  assert.deepEqual([opening.holders, opening.buyback, opening.deployer], ["3", "3", "4"]);
+  assert.deepEqual([opening.holders, opening.buyback, opening.deployer], ["5", "0", "5"]);
   const later = planIncrementalAllocation({ grossLamports: "100", reserveLamports: "90", reserveWithheldLamports: "90" });
   assert.equal(later.ok, true);
   if (!later.ok) return;
   assert.equal(later.withheld, "0");
-  assert.deepEqual([later.holders, later.buyback, later.deployer], ["30", "30", "40"]);
+  assert.deepEqual([later.holders, later.buyback, later.deployer], ["50", "0", "50"]);
   const dust = planIncrementalAllocation({ grossLamports: "10", reserveLamports: "0", reserveWithheldLamports: "0" });
   assert.equal(dust.ok, true);
   if (!dust.ok) return;
-  assert.deepEqual([dust.holders, dust.buyback, dust.deployer], ["3", "3", "4"]);
+  assert.deepEqual([dust.holders, dust.buyback, dust.deployer], ["5", "0", "5"]);
   const empty = planIncrementalAllocation({ grossLamports: "0", reserveLamports: "0", reserveWithheldLamports: "0" });
   assert.equal(empty.ok, true);
   if (!empty.ok) return;

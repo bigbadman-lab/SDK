@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { TREST_MINT } from "../launch/verified-launch.ts";
-import { nativeRewardSplit } from "./rewards-copy.ts";
+import { nativeRewardLead, nativeRewardSplit } from "./rewards-copy.ts";
 import {
   acceptOfficialMint,
   allocationCursor,
@@ -46,7 +46,11 @@ test("the official mint rejects an empty row and the TREST mint", () => {
 
 test("holder rewards stay on the ledger split and a five-minute window", () => {
   const split = nativeRewardSplit();
-  assert.deepEqual(split, { holders: "30", buyback: "30", deployer: "40" });
+  assert.deepEqual(split, { holders: "50", buyback: "0", deployer: "50" });
+  assert.equal(
+    nativeRewardLead(),
+    "Every 5 minutes, confirmed native $SDK creator fees are split. 50% is allocated to eligible holders as claimable SOL, and 50% is retained by the protocol.",
+  );
   assert.equal(formatSol("1500000000"), "1.5 SOL");
   assert.equal(formatSol("1"), "0.000000001 SOL");
   assert.equal(formatSol("0"), "0 SOL");
