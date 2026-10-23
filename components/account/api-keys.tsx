@@ -118,6 +118,12 @@ export function ApiKeys(): ReactNode {
         A key calls published SDKs. It cannot sign for this wallet, publish an SDK, or move funds. The secret is shown
         once, when the key is created.
       </p>
+      {list === null && !notice ? (
+        <div aria-busy="true">
+          <p className="sr-only">Loading API keys</p>
+          <span className="block h-10 motion-safe:animate-pulse bg-muted" />
+        </div>
+      ) : null}
       {list ? (
         <p className="font-mono text-[10px] text-muted-foreground uppercase">
           {list.active} of {list.limit} active · {list.usedToday} of 100 API executions today · {list.remaining} remaining

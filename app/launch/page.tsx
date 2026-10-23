@@ -1,6 +1,7 @@
 import { Footer } from "@/components/footer";
 import { LaunchForm } from "@/components/launch/form";
 import { LaunchResume } from "@/components/launch/launch-progress";
+import { LaunchBodySkeleton, LaunchIntro } from "@/components/launch/page-skeletons";
 import { LaunchCapabilityDiagnostic } from "@/components/launch/wallet-capability";
 import {
   HeldSdk,
@@ -28,7 +29,7 @@ import {
 } from "@/lib/server/launch/service";
 import { listPublished, readPublished } from "@/lib/server/library/service";
 import type { Metadata } from "next";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
@@ -42,21 +43,42 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-export default async function LaunchPage({
+const mainClass = "mx-auto w-[min(680px,calc(100%-48px))] scroll-mt-23 pt-12 pb-16 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-8";
+
+type LaunchQuery = {
+  draft?: string;
+  library?: string;
+  version?: string;
+  q?: string;
+  page?: string;
+  rehearsal?: string;
+};
+
+export default function LaunchPage({
   searchParams,
 }: {
-  searchParams: Promise<{
-    draft?: string;
-    library?: string;
-    version?: string;
-    q?: string;
-    page?: string;
-    rehearsal?: string;
-  }>;
+  searchParams: Promise<LaunchQuery>;
+}): ReactNode {
+  return (
+    <>
+      <main id="main-content" className={mainClass}>
+        <LaunchIntro />
+        <Suspense fallback={<LaunchBodySkeleton />}>
+          <LaunchBody searchParams={searchParams} />
+        </Suspense>
+      </main>
+      <Footer />
+    </>
+  );
+}
+
+async function LaunchBody({
+  searchParams,
+}: {
+  searchParams: Promise<LaunchQuery>;
 }): Promise<ReactNode> {
   const query = await searchParams;
   const account = await getCurrentAccount();
-  const openLaunch = account ? await loadOpenLaunch(account.id) : null;
   const rehearsalRequested = query.rehearsal === "trest";
   const rehearsal = Boolean(
     rehearsalRequested && account && isProvisionedOperator(account.walletAddress),
@@ -66,6 +88,7 @@ export default async function LaunchPage({
     draftId: query.draft ?? null,
     librarySdkId: query.library ?? null,
   });
+  const openLaunchPromise = account ? loadOpenLaunch(account.id) : Promise.resolve(null);
   let source: Awaited<ReturnType<typeof resolveLaunchQuery>> | null = null;
   let held: {
     name: string;
@@ -111,19 +134,12 @@ export default async function LaunchPage({
       );
     }
   }
-  const catalog = source || held ? null : await loadCatalog(account, query, rehearsal);
+  const [openLaunch, catalog] = await Promise.all([
+    openLaunchPromise,
+    source || held ? Promise.resolve(null) : loadCatalog(account, query, rehearsal),
+  ]);
   return (
     <>
-      <main
-        id="main-content"
-        className="mx-auto w-[min(680px,calc(100%-48px))] scroll-mt-23 pt-12 pb-16 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-8"
-      >
-        <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
-          Launch
-        </p>
-        <h1 className="mt-3 font-display text-[48px] leading-[1.08] tracking-[-1.4px] max-[561px]:text-[36px]">
-          Launch your SDK
-        </h1>
         <p className="mt-3 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
           {rehearsal
             ? "TREST rehearsal. Choose an SDK and prepare it against the registered TREST parent."
@@ -165,8 +181,6 @@ export default async function LaunchPage({
             rehearsal={rehearsal}
           />
         ) : null}
-      </main>
-      <Footer />
     </>
   );
 }
@@ -184,55 +198,39 @@ async function loadCatalog(
   nextPage: number | null;
 }> {
   const requested = libraryQuery(params);
-  let library: LaunchChoice[] = [];
-  let libraryUnavailable = false;
-  let nextPage: number | null = null;
-  let query: Pick<LibraryQuery, "q" | "page"> = {
-    q: requested.q,
-    page: requested.page,
-  };
-  try {
-    const published = await listPublished({
-      q: params.q ?? null,
-      page: params.page ?? null,
-    });
-    library = published.listings.map((sdk) => toLibraryChoice(sdk, rehearsal));
-    nextPage = published.nextPage;
-    query = { q: published.query.q, page: published.query.page };
-  } catch {
-    libraryUnavailable = true;
-  }
+  const publishedTask = listPublished({
+    q: params.q ?? null,
+    page: params.page ?? null,
+  }).then((published) => ({
+    library: published.listings.map((sdk) => toLibraryChoice(sdk, rehearsal)),
+    libraryUnavailable: false,
+    query: { q: published.query.q, page: published.query.page },
+    nextPage: published.nextPage,
+  })).catch(() => ({
+    library: [] as LaunchChoice[],
+    libraryUnavailable: true,
+    query: { q: requested.q, page: requested.page },
+    nextPage: null as number | null,
+  }));
+  const draftsTask = account
+    ? listDrafts(account).then(
+        (drafts) => drafts,
+        () => null,
+      )
+    : Promise.resolve(null);
+  const [published, drafts] = await Promise.all([publishedTask, draftsTask]);
   if (!account) {
-    return {
-      mine: null,
-      mineUnavailable: false,
-      library,
-      libraryUnavailable,
-      query,
-      nextPage,
-    };
+    return { mine: null, mineUnavailable: false, ...published };
   }
-  try {
-    const drafts = await listDrafts(account);
-    return {
-      mine: drafts
-        .filter(isLaunchEligibleDraft)
-        .filter((draft) => matchesSdkQuery(draft, query.q))
-        .map((draft) => toDraftChoice(draft, rehearsal)),
-      mineUnavailable: false,
-      library,
-      libraryUnavailable,
-      query,
-      nextPage,
-    };
-  } catch {
-    return {
-      mine: null,
-      mineUnavailable: true,
-      library,
-      libraryUnavailable,
-      query,
-      nextPage,
-    };
+  if (!drafts) {
+    return { mine: null, mineUnavailable: true, ...published };
   }
+  return {
+    mine: drafts
+      .filter(isLaunchEligibleDraft)
+      .filter((draft) => matchesSdkQuery(draft, published.query.q))
+      .map((draft) => toDraftChoice(draft, rehearsal)),
+    mineUnavailable: false,
+    ...published,
+  };
 }

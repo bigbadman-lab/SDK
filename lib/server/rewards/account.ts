@@ -31,38 +31,41 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
   });
   try {
     const sql = getSql();
-    const parents = await sql<{ symbol: "SDK" | "TREST"; decimals: number }[]>`
-      select symbol, decimals from parent_registrations where scope = ${scope} limit 1
-    `;
+    const earningsQuery = sql<{ role: "launcher" | "developer"; scope: RewardScope; mint: string; amount: string; signature: string | null }[]>`
+      select receipt.role, distribution.scope, receipt.quote_mint_address as mint, receipt.amount, receipt.signature
+      from child_fee_receipts receipt
+      join child_fee_distributions distribution on distribution.id = receipt.distribution_id
+      where receipt.recipient_address = ${wallet} and distribution.scope = ${scope}
+      order by receipt.created_at desc
+      limit 20
+    `.then(
+      (rows) => rows,
+      (error: unknown) => {
+        if (databaseFailure(error) !== "missing_schema") throw error;
+        return [];
+      },
+    );
+    const [parents, snapshots, claims, windows, earnings] = await Promise.all([
+      sql<{ symbol: "SDK" | "TREST"; decimals: number }[]>`
+        select symbol, decimals from parent_registrations where scope = ${scope} limit 1
+      `,
+      sql<{ owner: string; balance: string; sol_lamports: string; token_amount: string; window_start: Date }[]>`
+        select owner_address as owner, balance, sol_lamports::text, token_amount, window_start
+        from reward_snapshots
+        where scope = ${scope} and owner_address = ${wallet}
+      `,
+      sql<{ asset: "sol" | "parent_token"; amount: string; status: string; signature: string | null }[]>`
+        select liability.asset, liability.amount, claim.status, claim.signature
+        from reward_claims claim
+        join reward_liabilities liability on liability.id = claim.liability_id
+        where claim.scope = ${scope} and claim.claimant = ${wallet}
+      `,
+      sql<{ window_start: Date }[]>`
+        select window_start from reward_windows where scope = ${scope} order by window_start desc limit 1
+      `,
+      earningsQuery,
+    ]);
     const parent = parents[0] ?? null;
-    const snapshots = await sql<{ owner: string; balance: string; sol_lamports: string; token_amount: string; window_start: Date }[]>`
-      select owner_address as owner, balance, sol_lamports::text, token_amount, window_start
-      from reward_snapshots
-      where scope = ${scope} and owner_address = ${wallet}
-    `;
-    const claims = await sql<{ asset: "sol" | "parent_token"; amount: string; status: string; signature: string | null }[]>`
-      select liability.asset, liability.amount, claim.status, claim.signature
-      from reward_claims claim
-      join reward_liabilities liability on liability.id = claim.liability_id
-      where claim.scope = ${scope} and claim.claimant = ${wallet}
-    `;
-    const windows = await sql<{ window_start: Date }[]>`
-      select window_start from reward_windows where scope = ${scope} order by window_start desc limit 1
-    `;
-    let earnings: AccountRewardsView["earnings"] = [];
-    try {
-      const rows = await sql<{ role: "launcher" | "developer"; scope: RewardScope; mint: string; amount: string; signature: string | null }[]>`
-        select receipt.role, distribution.scope, receipt.quote_mint_address as mint, receipt.amount, receipt.signature
-        from child_fee_receipts receipt
-        join child_fee_distributions distribution on distribution.id = receipt.distribution_id
-        where receipt.recipient_address = ${wallet} and distribution.scope = ${scope}
-        order by receipt.created_at desc
-        limit 20
-      `;
-      earnings = rows;
-    } catch (error) {
-      if (databaseFailure(error) !== "missing_schema") throw error;
-    }
     return rewardsView({
       scope,
       symbol: parent?.symbol ?? null,

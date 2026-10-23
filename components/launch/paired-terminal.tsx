@@ -44,6 +44,7 @@ export function PairedTerminal({
 }): ReactNode {
   const [quotes, setQuotes] = useState<Record<string, MarketQuote>>({});
   const [live, setLive] = useState(false);
+  const [pending, setPending] = useState(true);
   const [now, setNow] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -58,20 +59,24 @@ export function PairedTerminal({
     let cancelled = false;
     let timer = 0;
     const load = () => {
-      if (document.hidden) return;
       void fetch("/api/paired/markets", { cache: "no-store" })
         .then(async (response) => {
           const body = (await response.json()) as MarketBody;
           if (cancelled) return;
+          setPending(false);
           setLive(response.ok && body.ok === true);
           if (body.quotes) setQuotes(body.quotes);
         })
         .catch(() => {
-          if (!cancelled) setLive(false);
+          if (cancelled) return;
+          setPending(false);
+          setLive(false);
         });
     };
     load();
-    timer = window.setInterval(load, 2_000);
+    timer = window.setInterval(() => {
+      if (!document.hidden) load();
+    }, 2_000);
     const onVisible = () => {
       if (!document.hidden) load();
     };
@@ -97,7 +102,7 @@ export function PairedTerminal({
     <div>
       <p className="mb-2 flex items-center justify-end gap-2 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${live ? "bg-accent" : "bg-muted-foreground"}`} aria-hidden="true" />
-        {live ? "Live · 2s" : "Market data delayed"}
+        {pending ? "Loading market" : live ? "Live · 2s" : "Market data delayed"}
       </p>
       <div className={`sticky top-16 z-10 grid border-b border-border bg-background/95 py-1.5 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase backdrop-blur min-[801px]:py-2 ${COLUMNS}`}>
         <span>Token</span>
@@ -135,9 +140,9 @@ export function PairedTerminal({
                   if (ok) setCopied(launch.childMint);
                 });
               }} />
-              <Metric value={formatUsd(quote.fdv)} />
-              <Metric value={formatUsd(quote.volumeUsd)} />
-              <Metric value={formatCount(quote.holders)} />
+              <Metric value={formatUsd(quote.fdv)} pending={pending} />
+              <Metric value={formatUsd(quote.volumeUsd)} pending={pending} />
+              <Metric value={formatCount(quote.holders)} pending={pending} />
               <p className="hidden text-right font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase min-[801px]:block">
                 {launch.pairLabel}
                 {launch.scope === "test" ? " · Test" : ""}
@@ -176,7 +181,8 @@ function CopyMint({
   );
 }
 
-function Metric({ value }: { value: string }): ReactNode {
+function Metric({ value, pending }: { value: string; pending: boolean }): ReactNode {
+  if (pending) return <p className="ml-auto h-3 w-10 motion-safe:animate-pulse bg-muted" />;
   return <p className="text-right font-mono text-[11px] leading-none tabular-nums min-[801px]:text-[13px]">{value}</p>;
 }
 
@@ -187,6 +193,6 @@ function TokenMark({ launch }: { launch: VerifiedLaunch }): ReactNode {
   return (
     // Gateway hosts are chosen at pin time, so this cannot be limited to one Next image domain.
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={launch.imageUrl} alt="" className="h-6 w-6 shrink-0 rounded-md bg-card object-cover min-[801px]:h-8 min-[801px]:w-8" />
+    <img src={launch.imageUrl} alt="" width={32} height={32} decoding="async" loading="lazy" className="h-6 w-6 shrink-0 rounded-md bg-card object-cover min-[801px]:h-8 min-[801px]:w-8" />
   );
 }

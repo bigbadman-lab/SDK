@@ -1,29 +1,18 @@
 import { Footer } from "@/components/footer";
+import { TokenPageSkeleton } from "@/components/launch/page-skeletons";
 import { TokenExperience } from "@/components/launch/token-experience";
-import { createMetadata, siteConfig } from "@/lib/metadata";
-import { launchByMint, type PublishedTokenSdk } from "@/lib/launch/verified-launch";
-import { officialInputGuide } from "@/lib/library/official";
-import { loadPublishedTokenSdk, loadVerifiedLaunches } from "@/lib/server/launch/discover";
+import { TokenSdkPanel } from "@/components/launch/token-sdk-panel";
+import { createMetadata } from "@/lib/metadata";
+import { launchByMint } from "@/lib/launch/verified-launch";
+import { loadVerifiedLaunches } from "@/lib/server/launch/discover";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
 const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-
-function withInputGuides(sdk: PublishedTokenSdk | null): PublishedTokenSdk | null {
-  if (!sdk) return null;
-  const guide = officialInputGuide(sdk.name);
-  if (!guide) return sdk;
-  return {
-    ...sdk,
-    inputs: sdk.inputs.map((field) => {
-      const help = guide[field.key];
-      return help ? { ...field, help: help.help, example: help.example } : field;
-    }),
-  };
-}
+const mainClass = "mx-auto w-[min(980px,calc(100%-48px))] scroll-mt-23 pt-10 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-6";
 
 export async function generateMetadata({
   params,
@@ -43,7 +32,24 @@ export async function generateMetadata({
   });
 }
 
-export default async function TokenPage({
+export default function TokenPage({
+  params,
+}: {
+  params: Promise<{ mint: string }>;
+}): ReactNode {
+  return (
+    <>
+      <main id="main-content" className={mainClass}>
+        <Suspense fallback={<TokenPageSkeleton />}>
+          <TokenPageBody params={params} />
+        </Suspense>
+      </main>
+      <Footer />
+    </>
+  );
+}
+
+async function TokenPageBody({
   params,
 }: {
   params: Promise<{ mint: string }>;
@@ -52,26 +58,14 @@ export default async function TokenPage({
   if (!MINT.test(mint)) notFound();
   const loaded = await loadVerifiedLaunches({ mint });
   if (!loaded.ok) {
-    return (
-      <>
-        <main id="main-content" className="mx-auto w-[min(760px,calc(100%-48px))] pt-16 pb-22 max-[561px]:w-[calc(100%-32px)]">
-          <p className="text-[15px] leading-[1.7] text-muted-foreground">This token page is unavailable.</p>
-        </main>
-        <Footer />
-      </>
-    );
+    return <p className="text-[15px] leading-[1.7] text-muted-foreground">This token page is unavailable.</p>;
   }
   const launch = launchByMint(loaded.launches, mint);
   if (!launch) notFound();
   return (
-    <>
-      <main
-        id="main-content"
-        className="mx-auto w-[min(980px,calc(100%-48px))] scroll-mt-23 pt-10 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-6"
-      >
-        <TokenExperience launch={launch} sdk={withInputGuides(await loadPublishedTokenSdk(launch.librarySdkId))} baseUrl={siteConfig.url ?? "https://sdk.fund"} />
-      </main>
-      <Footer />
-    </>
+    <div className="grid gap-8 min-[801px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] min-[801px]:gap-10">
+      <TokenExperience launch={launch} />
+      {await TokenSdkPanel({ librarySdkId: launch.librarySdkId, sdkName: launch.sdkName })}
+    </div>
   );
 }

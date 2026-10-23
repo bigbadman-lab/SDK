@@ -235,6 +235,12 @@ function SavedSdkList(): ReactNode {
           {notice}
         </p>
       ) : null}
+      {drafts === null && !notice ? (
+        <div aria-busy="true">
+          <p className="sr-only">Loading saved SDKs</p>
+          <span className="block h-16 motion-safe:animate-pulse bg-muted" />
+        </div>
+      ) : null}
       {drafts && drafts.length === 0 ? (
         <p className="text-[15px] leading-[1.7] text-muted-foreground">
           No saved SDKs yet. A blueprint appears here after you test it and

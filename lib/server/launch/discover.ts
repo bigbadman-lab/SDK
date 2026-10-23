@@ -1,20 +1,57 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { toOpenLaunch, type OpenLaunch } from "@/lib/launch/post-launch";
 import { selectOpenSubmission, selectVerifiedLaunches } from "@/lib/launch/registry";
 import type { PublishedTokenSdk, VerifiedLaunch } from "@/lib/launch/verified-launch";
 import { isPublicId } from "@/lib/library/library";
 import { databaseFailure, getSql } from "@/lib/server/db";
 
-export async function loadVerifiedLaunches(filter: {
-  creator?: string | null;
-  mint?: string | null;
-} = {}): Promise<{ ok: true; launches: VerifiedLaunch[] } | { ok: false; code: "missing_schema" | "unavailable" }> {
+const VERIFIED_FRESH_MS = 8_000;
+const verifiedCache = new Map<string, { at: number; launches: VerifiedLaunch[] }>();
+
+function rememberedLaunches(key: string): VerifiedLaunch[] | null {
+  const hit = verifiedCache.get(key);
+  if (!hit || Date.now() - hit.at > VERIFIED_FRESH_MS) return null;
+  verifiedCache.delete(key);
+  verifiedCache.set(key, hit);
+  return hit.launches;
+}
+
+function rememberLaunches(key: string, launches: VerifiedLaunch[]): void {
+  verifiedCache.delete(key);
+  if (verifiedCache.size > 40) {
+    const oldest = verifiedCache.keys().next().value;
+    if (oldest) verifiedCache.delete(oldest);
+  }
+  verifiedCache.set(key, { at: Date.now(), launches });
+}
+
+const readVerifiedLaunches = cache(async (
+  creator: string,
+  mint: string,
+): Promise<{ ok: true; launches: VerifiedLaunch[] } | { ok: false; code: "missing_schema" | "unavailable" }> => {
+  const key = `${creator}\n${mint}`;
+  const remembered = rememberedLaunches(key);
+  if (remembered) return { ok: true, launches: remembered };
   try {
-    return { ok: true, launches: await selectVerifiedLaunches(getSql(), filter) };
+    const launches = await selectVerifiedLaunches(getSql(), {
+      creator: creator || null,
+      mint: mint || null,
+    });
+    rememberLaunches(key, launches);
+    return { ok: true, launches };
   } catch (error) {
     return { ok: false, code: databaseFailure(error) === "missing_schema" ? "missing_schema" : "unavailable" };
   }
+});
+
+export function loadVerifiedLaunches(filter: {
+  creator?: string | null;
+  mint?: string | null;
+} = {}): Promise<{ ok: true; launches: VerifiedLaunch[] } | { ok: false; code: "missing_schema" | "unavailable" }> {
+  return readVerifiedLaunches(filter.creator ?? "", filter.mint ?? "");
 }
 
 function sdkInputs(value: unknown): PublishedTokenSdk["inputs"] {
@@ -30,7 +67,7 @@ function sdkInputs(value: unknown): PublishedTokenSdk["inputs"] {
   });
 }
 
-export async function loadPublishedTokenSdk(librarySdkId: string | null): Promise<PublishedTokenSdk | null> {
+export const loadPublishedTokenSdk = cache(async (librarySdkId: string | null): Promise<PublishedTokenSdk | null> => {
   if (!librarySdkId) return null;
   try {
     const rows = await getSql()<
@@ -63,7 +100,7 @@ export async function loadPublishedTokenSdk(librarySdkId: string | null): Promis
   } catch {
     return null;
   }
-}
+});
 
 export async function loadOpenLaunch(accountId: string): Promise<OpenLaunch | null> {
   try {

@@ -1,15 +1,12 @@
 "use client";
 
-import { TokenSdkTest } from "@/components/launch/token-sdk-test";
 import { formatAge, formatCount, formatUsd, type MarketQuote } from "@/lib/market/quote";
 import {
   explorerUrl,
   formatVerifiedAt,
   shortenAddress,
-  type PublishedTokenSdk,
   type VerifiedLaunch,
 } from "@/lib/launch/verified-launch";
-import Link from "next/link";
 import { useTheme } from "next-themes";
 import { useEffect, useState, type ReactNode } from "react";
 
@@ -39,17 +36,10 @@ async function copyText(value: string): Promise<boolean> {
   }
 }
 
-export function TokenExperience({
-  launch,
-  sdk,
-  baseUrl,
-}: {
-  launch: VerifiedLaunch;
-  sdk: PublishedTokenSdk | null;
-  baseUrl: string;
-}): ReactNode {
+export function TokenExperience({ launch }: { launch: VerifiedLaunch }): ReactNode {
   const [quote, setQuote] = useState<MarketQuote>(EMPTY);
   const [live, setLive] = useState(false);
+  const [pending, setPending] = useState(true);
   const [now, setNow] = useState<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -63,21 +53,25 @@ export function TokenExperience({
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      if (document.hidden) return;
       const url = `/api/paired/markets?mint=${encodeURIComponent(launch.childMint)}`;
       void fetch(url, { cache: "no-store" })
         .then(async (response) => {
           const body = (await response.json()) as MarketBody;
           if (cancelled) return;
+          setPending(false);
           setLive(response.ok && body.ok === true);
           setQuote(body.quotes?.[launch.childMint] ?? EMPTY);
         })
         .catch(() => {
-          if (!cancelled) setLive(false);
+          if (cancelled) return;
+          setPending(false);
+          setLive(false);
         });
     };
     load();
-    const timer = window.setInterval(load, 2_000);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) load();
+    }, 2_000);
     const onVisible = () => {
       if (!document.hidden) load();
     };
@@ -101,12 +95,8 @@ export function TokenExperience({
     });
   }
 
-  const snippet = sdk ? clientSnippet(sdk, baseUrl) : "";
-
   return (
-    <div className="grid gap-8">
-    <div className="grid gap-8 min-[801px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] min-[801px]:gap-10">
-      <section>
+      <section className="min-w-0">
         <div className="flex items-center gap-3">
           <TokenMark launch={launch} />
           <div className="min-w-0">
@@ -130,13 +120,13 @@ export function TokenExperience({
           {copied === launch.childMint ? "Copied" : launch.childMint}
         </button>
         <div className="mt-4 grid grid-cols-3 gap-2 border-y border-border py-3">
-          <Stat label="FDV" value={formatUsd(quote.fdv)} />
-          <Stat label="Vol 24h" value={formatUsd(quote.volumeUsd)} />
-          <Stat label="Holders" value={formatCount(quote.holders)} />
+          <Stat label="FDV" value={formatUsd(quote.fdv)} pending={pending} />
+          <Stat label="Vol 24h" value={formatUsd(quote.volumeUsd)} pending={pending} />
+          <Stat label="Holders" value={formatCount(quote.holders)} pending={pending} />
         </div>
         <p className="mt-2 flex items-center gap-2 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${live ? "bg-accent" : "bg-muted-foreground"}`} aria-hidden="true" />
-          {live ? "Live · 2s" : "Market data delayed"}
+          {pending ? "Loading market" : live ? "Live · 2s" : "Market data delayed"}
         </p>
         <TokenChart mint={launch.childMint} symbol={launch.symbol} />
         <dl className="mt-6 grid gap-2 text-[13px]">
@@ -156,103 +146,8 @@ export function TokenExperience({
             </dd>
           </div>
         </dl>
+        <p className="sr-only" aria-live="polite">{copied ? "Copied" : ""}</p>
       </section>
-      <section>
-        <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">This token&apos;s SDK</p>
-        <h2 className="mt-2 text-[24px] leading-none tracking-[-0.4px]">{sdk?.name ?? launch.sdkName}</h2>
-        {sdk ? (
-          <>
-            <p className="mt-2 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
-              {sdk.origin === "official" ? "Official" : "Community"} · {sdk.originatorLabel} · Version {sdk.versionNumber}
-            </p>
-            <p className="mt-3 text-[14px] leading-[1.55] text-muted-foreground">{sdk.description}</p>
-            <p className="mt-3 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
-              {sdk.inputs.length === 0
-                ? "No inputs"
-                : `Asks for ${sdk.inputs.map((field) => field.key).join(", ")}`}
-            </p>
-            <ul className="mt-4 border-y border-border">
-              <Access
-                label="Library"
-                title={sdk.name}
-                href={`/library/${sdk.id}`}
-                body="Open the Library page to read the full SDK or remix it."
-              />
-              <li className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3 border-b border-border py-3">
-                <span className="pt-0.5 font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">API</span>
-                <div className="min-w-0">
-                  <button
-                    type="button"
-                    className="font-mono text-[12px] break-all text-left hover:text-accent-ink"
-                    aria-label={`Copy SDK id ${sdk.id}`}
-                    onClick={() => copy(sdk.id)}
-                  >
-                    {copied === sdk.id ? "Copied" : sdk.id}
-                  </button>
-                  <p className="mt-1 text-[12px] leading-[1.45] text-muted-foreground">
-                    POST /api/v1/sdk/execute with an Account API key. Version {sdk.versionNumber} is current. Omit version to run the latest.
-                  </p>
-                </div>
-              </li>
-              <li className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3 py-3">
-                <span className="pt-0.5 font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">Client</span>
-                <div className="min-w-0">
-                  <p className="text-[12px] leading-[1.45] text-muted-foreground">
-                    The universal client is in this repository and is not on NPM.{" "}
-                    <Link href="/account" className="underline">Create a key</Link>
-                    {" · "}
-                    <Link href="/code" className="underline">Client guide</Link>
-                  </p>
-                  <div className="mt-2 flex items-center justify-between gap-3">
-                    <p className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">Run this SDK</p>
-                    <button type="button" className="font-mono text-[10px] tracking-[0.04em] uppercase" onClick={() => copy(snippet)}>
-                      {copied === snippet ? "Copied" : "Copy"}
-                    </button>
-                  </div>
-                  <pre className="mt-2 overflow-x-auto border border-border bg-card p-3 font-mono text-[11px] leading-[1.55]">{snippet}</pre>
-                </div>
-              </li>
-            </ul>
-          </>
-        ) : (
-          <p className="mt-3 text-[14px] leading-[1.55] text-muted-foreground">
-            {launch.sdkName} is private to its launcher. It is not in the Library, and an API key cannot run it.
-          </p>
-        )}
-      </section>
-      <p className="sr-only" aria-live="polite">{copied ? "Copied" : ""}</p>
-    </div>
-    {sdk ? <TokenSdkTest sdk={sdk} /> : null}
-    </div>
-  );
-}
-
-function clientSnippet(sdk: PublishedTokenSdk, baseUrl: string): string {
-  const fields = sdk.inputs.map((field) => `    ${field.key}: ""`).join(",\n");
-  const input = fields.length === 0 ? "  input: {}," : `  input: {\n${fields},\n  },`;
-  return `import { SDKClient } from "sdk-universal-client";
-
-const client = new SDKClient({
-  apiKey: process.env.SDK_API_KEY ?? "",
-  baseUrl: ${JSON.stringify(baseUrl)},
-});
-
-const result = await client.run({
-  sdkId: ${JSON.stringify(sdk.id)},
-  version: ${sdk.versionNumber},
-${input}
-});`;
-}
-
-function Access({ label, title, href, body }: { label: string; title: string; href: string; body: string }): ReactNode {
-  return (
-    <li className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3 border-b border-border py-3">
-      <span className="pt-0.5 font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">{label}</span>
-      <div>
-        <Link href={href} className="text-[14px] hover:text-accent-ink">{title}</Link>
-        <p className="mt-1 text-[12px] leading-[1.45] text-muted-foreground">{body}</p>
-      </div>
-    </li>
   );
 }
 
@@ -260,6 +155,16 @@ function TokenChart({ mint, symbol }: { mint: string; symbol: string }): ReactNo
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme === "light" ? "light" : "dark";
   const src = `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartDefaultOnMobile=1&chartTheme=${theme}&theme=${theme}&chartStyle=1&chartType=usd&interval=15`;
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const start = () => setReady(true);
+    if (typeof requestIdleCallback === "function") {
+      const id = requestIdleCallback(start, { timeout: 1_200 });
+      return () => cancelIdleCallback(id);
+    }
+    const timer = window.setTimeout(start, 400);
+    return () => window.clearTimeout(timer);
+  }, []);
   return (
     <div className="mt-4">
       <div className="mb-2 flex items-center justify-between gap-3">
@@ -272,21 +177,29 @@ function TokenChart({ mint, symbol }: { mint: string; symbol: string }): ReactNo
           DexScreener
         </a>
       </div>
-      <iframe
-        title={`${symbol} chart`}
-        src={src}
-        className="h-[280px] w-full border border-border bg-card max-[561px]:h-[220px]"
-        loading="lazy"
-      />
+      {ready ? (
+        <iframe
+          title={`${symbol} chart`}
+          src={src}
+          className="h-[280px] w-full border border-border bg-card max-[561px]:h-[220px]"
+          loading="lazy"
+        />
+      ) : (
+        <div className="h-[280px] w-full border border-border bg-card motion-safe:animate-pulse max-[561px]:h-[220px]" aria-hidden="true" />
+      )}
     </div>
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }): ReactNode {
+function Stat({ label, value, pending }: { label: string; value: string; pending: boolean }): ReactNode {
   return (
     <p className="min-w-0">
       <span className="block font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{label}</span>
-      <span className="mt-1 block font-mono text-[16px] leading-none tabular-nums max-[561px]:text-[14px]">{value}</span>
+      {pending ? (
+        <span className="mt-1 block h-4 w-14 motion-safe:animate-pulse bg-muted" />
+      ) : (
+        <span className="mt-1 block font-mono text-[16px] leading-none tabular-nums max-[561px]:text-[14px]">{value}</span>
+      )}
     </p>
   );
 }
@@ -315,6 +228,6 @@ function TokenMark({ launch }: { launch: VerifiedLaunch }): ReactNode {
   return (
     // Gateway hosts are chosen at pin time, so this cannot be limited to one Next image domain.
     // eslint-disable-next-line @next/next/no-img-element
-    <img src={launch.imageUrl} alt="" className="h-14 w-14 shrink-0 rounded-md bg-card object-cover" />
+    <img src={launch.imageUrl} alt="" width={56} height={56} decoding="async" fetchPriority="high" className="h-14 w-14 shrink-0 rounded-md bg-card object-cover" />
   );
 }
