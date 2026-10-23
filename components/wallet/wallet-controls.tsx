@@ -3,7 +3,6 @@
 import { useAppKit, useAppKitAccount, useDisconnect } from "@reown/appkit/react";
 import { ProviderController } from "@reown/appkit-controllers";
 import bs58 from "bs58";
-import { X } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -36,7 +35,6 @@ type SessionState =
 
 const buttonClass =
   "inline-flex min-h-8.5 items-center justify-center gap-2 rounded-lg border border-solid px-3 py-2 font-mono text-[11px] leading-[1.4] font-medium tracking-[0.015em] uppercase";
-const headerActionClass = `${buttonClass} w-[9.75rem] shrink-0 px-2`;
 
 function shorten(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
@@ -236,15 +234,14 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
     address === session.walletAddress;
   const awaitingSignature = isConnected && !signedIn;
   const hintId = useId();
-  const actionClass = compact ? buttonClass : headerActionClass;
   const hint = pending ? "Check your wallet." : "Approve once more in your wallet.";
 
   return (
-    <div className={compact ? "grid gap-3" : "grid w-full justify-items-end gap-1"}>
-      <div className={compact ? "grid gap-2" : "flex w-full items-center justify-end gap-1.5"}>
+    <div className={compact ? "grid gap-3" : "grid justify-items-end gap-1"}>
+      <div className={compact ? "grid gap-2" : "flex items-center justify-end gap-1.5"}>
         {!isConnected ? (
           <button
-            className={`${actionClass} border-accent bg-accent text-accent-foreground`}
+            className={`${buttonClass} border-accent bg-accent text-accent-foreground`}
             type="button"
             onClick={() => void open()}
           >
@@ -259,15 +256,15 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
             ) : null}
             {signedIn ? (
               <a
-                className={`${actionClass} border-border bg-card`}
+                className={`${buttonClass} border-border bg-card`}
                 href="/account"
-                title={address ?? undefined}
+                title={address ?? "Account"}
               >
                 Account
               </a>
             ) : (
               <button
-                className={`${actionClass} border-accent bg-accent text-accent-foreground disabled:opacity-60`}
+                className={`${buttonClass} border-accent bg-accent text-accent-foreground disabled:opacity-60`}
                 type="button"
                 disabled={pending || session.status === "loading"}
                 onClick={() => void signIn()}
@@ -276,27 +273,14 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
                 Sign in wallet
               </button>
             )}
-            {compact ? (
-              <button
-                className={`${buttonClass} border-border bg-card`}
-                type="button"
-                disabled={pending}
-                onClick={() => void disconnectWallet()}
-              >
-                Disconnect
-              </button>
-            ) : (
-              <button
-                className="grid h-8.5 w-8.5 shrink-0 place-items-center rounded-lg border border-solid border-border bg-card text-foreground disabled:opacity-60"
-                type="button"
-                disabled={pending}
-                aria-label="Disconnect"
-                title="Disconnect"
-                onClick={() => void disconnectWallet()}
-              >
-                <X size={14} />
-              </button>
-            )}
+            <button
+              className={`${buttonClass} border-border bg-card`}
+              type="button"
+              disabled={pending}
+              onClick={() => void disconnectWallet()}
+            >
+              Disconnect
+            </button>
           </>
         )}
       </div>

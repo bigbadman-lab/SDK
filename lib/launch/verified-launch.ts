@@ -68,8 +68,9 @@ export type PublishedTokenSdk = {
   description: string;
   origin: "official" | "community";
   originatorLabel: string;
+  versionId: string;
   versionNumber: number;
-  inputs: { key: string; type: string; required: boolean }[];
+  inputs: { key: string; type: string; required: boolean; values: string[]; help?: string; example?: string }[];
 };
 
 export type VerifiedLaunch = {

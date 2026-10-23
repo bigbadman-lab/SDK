@@ -3,13 +3,15 @@ import { FinalCta } from "@/components/final-cta";
 import { Footer } from "@/components/footer";
 import { Hero } from "@/components/hero";
 import { Journeys } from "@/components/journeys";
-import { Nav } from "@/components/nav";
 import { Reveal } from "@/components/reveal";
 import { Scope } from "@/components/scope";
 import { StructuredData } from "@/components/structured-data";
 import { createMetadata, siteConfig } from "@/lib/metadata";
+import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+
+export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   ...createMetadata({
@@ -20,14 +22,16 @@ export const metadata: Metadata = {
   title: { absolute: "SDK" },
 };
 
-export default function HomePage(): ReactNode {
+export default async function HomePage(): Promise<ReactNode> {
+  const official = await loadOfficialSdk();
+  const mint = official.ok && official.phase === "live" ? official.mint : null;
+
   return (
     <>
       <StructuredData />
       <span id="top" />
-      <Nav />
       <main id="main-content" className="scroll-mt-23">
-        <Hero />
+        <Hero mint={mint} />
         <BuilderIntro />
         <Reveal>
           <Journeys />

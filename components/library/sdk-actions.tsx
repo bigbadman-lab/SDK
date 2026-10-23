@@ -2,7 +2,6 @@
 
 import { WalletButton } from "@/components/wallet/wallet-button";
 import type { LibraryInput } from "@/lib/library/library";
-import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
 
 type Trace = { stepId: string; status: string; durationMs: number; errorCode?: string };
@@ -26,15 +25,14 @@ export function LibraryActions({
   versionId: string;
   inputs: LibraryField[];
 }): ReactNode {
-  const router = useRouter();
   const [values, setValues] = useState<Record<string, string>>({});
-  const [pending, setPending] = useState<"test" | "remix" | null>(null);
+  const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
 
   async function testSdk(): Promise<void> {
     if (pending) return;
-    setPending("test");
+    setPending(true);
     setNotice(null);
     setRun(null);
     try {
@@ -60,42 +58,14 @@ export function LibraryActions({
     } catch {
       setNotice("The test did not run.");
     } finally {
-      setPending(null);
-    }
-  }
-
-  async function remixSdk(): Promise<void> {
-    if (pending) return;
-    setPending("remix");
-    setNotice(null);
-    try {
-      const response = await fetch(`/api/library/${sdkId}/remix`, {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ versionId }),
-      });
-      const body = (await response.json()) as { draftId?: string; error?: string };
-      if (response.status === 401) {
-        setNotice("Sign in to remix this SDK.");
-        return;
-      }
-      if (!response.ok || !body.draftId) {
-        setNotice(body.error ?? "The remix could not be opened.");
-        return;
-      }
-      router.push(`/build?draft=${encodeURIComponent(body.draftId)}`);
-    } catch {
-      setNotice("The remix could not be opened.");
-    } finally {
-      setPending(null);
+      setPending(false);
     }
   }
 
   return (
     <div className="grid gap-6">
-      <section id="test" className="grid gap-3 border-t border-t-border pt-6">
-        <h2 className="text-[20px]">Test this SDK</h2>
+      <section id="test" className="grid gap-3">
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Test this SDK</h2>
         <p className="max-w-130 text-[14px] leading-[1.6] text-muted-foreground">
           A signed-in wallet runs this published version on the shared engine. The result is for this test only. A test is not a launch.
         </p>
@@ -168,25 +138,11 @@ export function LibraryActions({
         ))}
         <button
           type="button"
-          disabled={pending !== null}
+          disabled={pending}
           onClick={() => void testSdk()}
           className="justify-self-start rounded-lg border border-solid border-border bg-background px-3 py-2 font-mono text-[10px] tracking-[0.04em] uppercase disabled:opacity-60"
         >
-          {pending === "test" ? "Testing" : "Test SDK"}
-        </button>
-      </section>
-      <section id="remix" className="grid gap-3 border-t border-t-border pt-6">
-        <h2 className="text-[20px]">Remix this SDK</h2>
-        <p className="max-w-130 text-[14px] leading-[1.6] text-muted-foreground">
-          Remix opens a private unsaved copy in the Builder. The published SDK stays unchanged, and the copy is not listed until a later review.
-        </p>
-        <button
-          type="button"
-          disabled={pending !== null}
-          onClick={() => void remixSdk()}
-          className="justify-self-start rounded-lg border border-solid border-accent bg-accent px-3 py-2 font-mono text-[10px] tracking-[0.04em] text-accent-foreground uppercase disabled:opacity-60"
-        >
-          {pending === "remix" ? "Opening" : "Remix SDK"}
+          {pending ? "Testing" : "Test SDK"}
         </button>
       </section>
       {notice ? (

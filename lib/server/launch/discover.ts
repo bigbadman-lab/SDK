@@ -3,6 +3,7 @@ import "server-only";
 import { toOpenLaunch, type OpenLaunch } from "@/lib/launch/post-launch";
 import { selectOpenSubmission, selectVerifiedLaunches } from "@/lib/launch/registry";
 import type { PublishedTokenSdk, VerifiedLaunch } from "@/lib/launch/verified-launch";
+import { isPublicId } from "@/lib/library/library";
 import { databaseFailure, getSql } from "@/lib/server/db";
 
 export async function loadVerifiedLaunches(filter: {
@@ -21,11 +22,11 @@ function sdkInputs(value: unknown): PublishedTokenSdk["inputs"] {
   return Object.entries(value).flatMap(([key, field]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || !field || typeof field !== "object" || Array.isArray(field)) return [];
     const record = field as Record<string, unknown>;
-    return [{
-      key,
-      type: typeof record.type === "string" ? record.type : "string",
-      required: record.required === true,
-    }];
+    const type = typeof record.type === "string" ? record.type : "string";
+    const values = type === "enum" && Array.isArray(record.values)
+      ? record.values.filter((item): item is string => typeof item === "string" && item.length > 0 && item.length <= 80).slice(0, 40)
+      : [];
+    return [{ key, type, required: record.required === true, values }];
   });
 }
 
@@ -33,7 +34,11 @@ export async function loadPublishedTokenSdk(librarySdkId: string | null): Promis
   if (!librarySdkId) return null;
   try {
     const rows = await getSql()<
-      (Omit<PublishedTokenSdk, "inputs" | "versionNumber"> & { versionNumber: number | string; inputs: unknown })[]
+      (Omit<PublishedTokenSdk, "inputs" | "versionNumber" | "versionId"> & {
+        versionId: string;
+        versionNumber: number | string;
+        inputs: unknown;
+      })[]
     >`
       select
         lib.id,
@@ -41,6 +46,7 @@ export async function loadPublishedTokenSdk(librarySdkId: string | null): Promis
         lib.description,
         lib.origin,
         lib.originator_label as "originatorLabel",
+        v.id as "versionId",
         v.version_number as "versionNumber",
         v.blueprint->'inputs' as inputs
       from library_sdks lib
@@ -50,7 +56,7 @@ export async function loadPublishedTokenSdk(librarySdkId: string | null): Promis
         and lib.origin in ('official', 'community')
     `;
     const row = rows[0];
-    if (!row || (row.origin !== "official" && row.origin !== "community")) return null;
+    if (!row || (row.origin !== "official" && row.origin !== "community") || !isPublicId(row.versionId)) return null;
     const versionNumber = Number(row.versionNumber);
     if (!Number.isInteger(versionNumber) || versionNumber < 1) return null;
     return { ...row, versionNumber, inputs: sdkInputs(row.inputs) };

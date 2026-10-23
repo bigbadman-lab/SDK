@@ -1,5 +1,4 @@
 import { Footer } from "@/components/footer";
-import { Nav } from "@/components/nav";
 import { OFFICIAL_SDK_NAMES, libraryHref, libraryQuery, operationLabels, type LibraryQuery } from "@/lib/library/library";
 import { createMetadata } from "@/lib/metadata";
 import { describeBlueprintError } from "@/lib/server/blueprint/http";
@@ -25,7 +24,6 @@ export default async function LibraryPage({
   const loaded = await loadListings(params);
   return (
     <>
-      <Nav />
       <main
         id="main-content"
         className="mx-auto w-[min(1100px,calc(100%-48px))] scroll-mt-23 pt-16 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-10"

@@ -1,5 +1,4 @@
 import { Footer } from "@/components/footer";
-import { Nav } from "@/components/nav";
 import { SdkBoard } from "@/components/sdk/sdk-board";
 import { createMetadata } from "@/lib/metadata";
 import { holderMinimumLabel, nativeRewardSplit, windowLengthLabel } from "@/lib/sdk/rewards-copy";
@@ -26,7 +25,6 @@ export default async function SdkPage(): Promise<ReactNode> {
 
   return (
     <>
-      <Nav />
       <main
         id="main-content"
         className="mx-auto w-[min(980px,calc(100%-48px))] scroll-mt-23 pt-12 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-8"

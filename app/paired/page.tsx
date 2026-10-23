@@ -1,6 +1,5 @@
 import { Footer } from "@/components/footer";
 import { PairedTerminal } from "@/components/launch/paired-terminal";
-import { Nav } from "@/components/nav";
 import { createMetadata } from "@/lib/metadata";
 import { loadVerifiedLaunches } from "@/lib/server/launch/discover";
 import type { ReactNode } from "react";
@@ -17,7 +16,6 @@ export default async function PairedPage(): Promise<ReactNode> {
   const loaded = await loadVerifiedLaunches();
   return (
     <>
-      <Nav />
       <main
         id="main-content"
         className="mx-auto w-[min(1100px,calc(100%-48px))] scroll-mt-23 pt-8 pb-16 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-4"

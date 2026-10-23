@@ -1,3 +1,4 @@
+import { Nav } from "@/components/nav";
 import { Providers } from "@/components/providers";
 import { SessionTouch } from "@/components/session-touch";
 import { SkipToContent } from "@/components/skip-to-content";
@@ -52,6 +53,7 @@ export default function RootLayout({
         <Providers>
           <SkipToContent />
           <SessionTouch />
+          <Nav />
           {children}
           <ThemeSwitch />
         </Providers>

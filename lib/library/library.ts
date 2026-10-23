@@ -158,6 +158,10 @@ export function remixCopy(input: {
   };
 }
 
+export function operationLabel(op: string): string {
+  return Object.hasOwn(OPERATION_LABELS, op) ? OPERATION_LABELS[op as Operation] : op;
+}
+
 export function operationLabels(capabilities: readonly string[]): string[] {
   const labels: string[] = [];
   for (const capability of capabilities) {

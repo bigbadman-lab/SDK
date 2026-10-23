@@ -6,7 +6,6 @@ import { LaunchResume } from "@/components/launch/launch-progress";
 import { CopyAddress } from "@/components/wallet/copy-address";
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { Footer } from "@/components/footer";
-import { Logo } from "@/components/logo";
 import { createMetadata } from "@/lib/metadata";
 import { readSession } from "@/lib/server/auth";
 import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
@@ -40,12 +39,6 @@ export default async function AccountPage({
 
   return (
     <>
-      <div className="mx-auto flex min-h-20 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between gap-6 border-b border-b-border py-5 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
-        <Link href="/" aria-label="SDK home">
-          <Logo />
-        </Link>
-        <WalletButton />
-      </div>
       <main
         id="main-content"
         className="mx-auto w-[min(760px,_calc(100%_-_48px))] scroll-mt-23 pt-16 pb-22 max-[561px]:w-[calc(100%_-_32px)] max-[561px]:pt-10"

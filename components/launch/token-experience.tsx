@@ -1,5 +1,6 @@
 "use client";
 
+import { TokenSdkTest } from "@/components/launch/token-sdk-test";
 import { formatAge, formatCount, formatUsd, type MarketQuote } from "@/lib/market/quote";
 import {
   explorerUrl,
@@ -9,6 +10,7 @@ import {
   type VerifiedLaunch,
 } from "@/lib/launch/verified-launch";
 import Link from "next/link";
+import { useTheme } from "next-themes";
 import { useEffect, useState, type ReactNode } from "react";
 
 type MarketBody = { ok?: boolean; quotes?: Record<string, MarketQuote> };
@@ -102,6 +104,7 @@ export function TokenExperience({
   const snippet = sdk ? clientSnippet(sdk, baseUrl) : "";
 
   return (
+    <div className="grid gap-8">
     <div className="grid gap-8 min-[801px]:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] min-[801px]:gap-10">
       <section>
         <div className="flex items-center gap-3">
@@ -135,6 +138,7 @@ export function TokenExperience({
           <span className={`inline-block h-1.5 w-1.5 rounded-full ${live ? "bg-accent" : "bg-muted-foreground"}`} aria-hidden="true" />
           {live ? "Live · 2s" : "Market data delayed"}
         </p>
+        <TokenChart mint={launch.childMint} symbol={launch.symbol} />
         <dl className="mt-6 grid gap-2 text-[13px]">
           <Fact term="Creator" value={shortenAddress(launch.creator)} />
           <Fact term="Verified" value={formatVerifiedAt(launch.verifiedAt)} />
@@ -172,7 +176,7 @@ export function TokenExperience({
                 label="Library"
                 title={sdk.name}
                 href={`/library/${sdk.id}`}
-                body="Read what it accepts, test it while signed in, or remix it."
+                body="Open the Library page to read the full SDK or remix it."
               />
               <li className="grid grid-cols-[4.5rem_minmax(0,1fr)] items-start gap-3 border-b border-border py-3">
                 <span className="pt-0.5 font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">API</span>
@@ -218,6 +222,8 @@ export function TokenExperience({
       </section>
       <p className="sr-only" aria-live="polite">{copied ? "Copied" : ""}</p>
     </div>
+    {sdk ? <TokenSdkTest sdk={sdk} /> : null}
+    </div>
   );
 }
 
@@ -247,6 +253,32 @@ function Access({ label, title, href, body }: { label: string; title: string; hr
         <p className="mt-1 text-[12px] leading-[1.45] text-muted-foreground">{body}</p>
       </div>
     </li>
+  );
+}
+
+function TokenChart({ mint, symbol }: { mint: string; symbol: string }): ReactNode {
+  const { resolvedTheme } = useTheme();
+  const theme = resolvedTheme === "light" ? "light" : "dark";
+  const src = `https://dexscreener.com/solana/${encodeURIComponent(mint)}?embed=1&loadChartSettings=0&trades=0&tabs=0&info=0&chartLeftToolbar=0&chartDefaultOnMobile=1&chartTheme=${theme}&theme=${theme}&chartStyle=1&chartType=usd&interval=15`;
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">Chart</p>
+        <a
+          className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase hover:text-accent-ink"
+          href={`https://dexscreener.com/solana/${encodeURIComponent(mint)}`}
+          rel="noreferrer"
+        >
+          DexScreener
+        </a>
+      </div>
+      <iframe
+        title={`${symbol} chart`}
+        src={src}
+        className="h-[280px] w-full border border-border bg-card max-[561px]:h-[220px]"
+        loading="lazy"
+      />
+    </div>
   );
 }
 

@@ -1,8 +1,8 @@
 import { Footer } from "@/components/footer";
 import { TokenExperience } from "@/components/launch/token-experience";
-import { Nav } from "@/components/nav";
 import { createMetadata, siteConfig } from "@/lib/metadata";
-import { launchByMint } from "@/lib/launch/verified-launch";
+import { launchByMint, type PublishedTokenSdk } from "@/lib/launch/verified-launch";
+import { officialInputGuide } from "@/lib/library/official";
 import { loadPublishedTokenSdk, loadVerifiedLaunches } from "@/lib/server/launch/discover";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
@@ -11,6 +11,19 @@ import type { ReactNode } from "react";
 export const dynamic = "force-dynamic";
 
 const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+
+function withInputGuides(sdk: PublishedTokenSdk | null): PublishedTokenSdk | null {
+  if (!sdk) return null;
+  const guide = officialInputGuide(sdk.name);
+  if (!guide) return sdk;
+  return {
+    ...sdk,
+    inputs: sdk.inputs.map((field) => {
+      const help = guide[field.key];
+      return help ? { ...field, help: help.help, example: help.example } : field;
+    }),
+  };
+}
 
 export async function generateMetadata({
   params,
@@ -41,7 +54,6 @@ export default async function TokenPage({
   if (!loaded.ok) {
     return (
       <>
-        <Nav />
         <main id="main-content" className="mx-auto w-[min(760px,calc(100%-48px))] pt-16 pb-22 max-[561px]:w-[calc(100%-32px)]">
           <p className="text-[15px] leading-[1.7] text-muted-foreground">This token page is unavailable.</p>
         </main>
@@ -53,12 +65,11 @@ export default async function TokenPage({
   if (!launch) notFound();
   return (
     <>
-      <Nav />
       <main
         id="main-content"
         className="mx-auto w-[min(980px,calc(100%-48px))] scroll-mt-23 pt-10 pb-22 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-24px)] max-[561px]:pt-6"
       >
-        <TokenExperience launch={launch} sdk={await loadPublishedTokenSdk(launch.librarySdkId)} baseUrl={siteConfig.url ?? "https://sdk.fund"} />
+        <TokenExperience launch={launch} sdk={withInputGuides(await loadPublishedTokenSdk(launch.librarySdkId))} baseUrl={siteConfig.url ?? "https://sdk.fund"} />
       </main>
       <Footer />
     </>

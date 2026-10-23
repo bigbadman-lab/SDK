@@ -9,7 +9,6 @@ import {
   toLibraryChoice,
   type LaunchChoice,
 } from "@/components/launch/selector";
-import { Nav } from "@/components/nav";
 import {
   isLaunchEligibleDraft,
   launchPageMode,
@@ -115,7 +114,6 @@ export default async function LaunchPage({
   const catalog = source || held ? null : await loadCatalog(account, query, rehearsal);
   return (
     <>
-      <Nav />
       <main
         id="main-content"
         className="mx-auto w-[min(680px,calc(100%-48px))] scroll-mt-23 pt-12 pb-16 max-[800px]:w-[calc(100%-40px)] max-[561px]:w-[calc(100%-32px)] max-[561px]:pt-8"

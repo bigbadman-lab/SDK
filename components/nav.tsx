@@ -59,37 +59,16 @@ export function Nav(): ReactNode {
       className="sticky top-0 z-60 h-16 overflow-x-clip bg-[color-mix(in_srgb,_var(--background)_96%,_transparent)] [backdrop-filter:blur(12px)] [&[data-ui~='is-scrolled']]:shadow-[0_1px_0_var(--border)]"
       data-ui={scrolled ? "is-scrolled" : ""}
     >
-      <div className="relative mx-auto flex h-16 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)] min-[801px]:grid min-[801px]:grid-cols-[auto_minmax(0,1fr)_12.25rem] min-[801px]:gap-6">
-        <Link
-          href="/#top"
-          aria-label="SDK home"
-          className="relative z-10 inline-flex"
-        >
+      <div className="pointer-events-none relative z-20 mx-auto flex h-16 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
+        <Link href="/#top" aria-label="SDK home" className="pointer-events-auto inline-flex">
           <Logo />
         </Link>
-        <nav
-          className="z-10 flex min-w-0 items-center justify-center gap-7 overflow-hidden max-[1051px]:gap-4 max-[900px]:gap-3 max-[800px]:hidden [&_a]:relative [&_a]:py-3 [&_a]:font-mono [&_a]:text-[11px] [&_a]:[line-height:normal] [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:uppercase [&_a]:not-italic [&_a]:transition-opacity [&_a]:duration-[180ms] [&_a]:ease-[ease] [&_a::after]:absolute [&_a::after]:right-0 [&_a::after]:bottom-1.25 [&_a::after]:left-0 [&_a::after]:h-0.5 [&_a::after]:[transform-origin:left] [&_a::after]:[transform:scaleX(0)] [&_a::after]:bg-accent [&_a::after]:transition-transform [&_a::after]:duration-[250ms] [&_a::after]:ease-[ease] [&_a::after]:[content:''] [&_a:hover]:opacity-100 [&_a:hover::after]:[transform:scaleX(1)]"
-          data-ui="desktop-nav"
-          aria-label="Main navigation"
-        >
-          {LINKS.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={
-                link.href === "/launch" ? "text-accent-ink" : undefined
-              }
-            >
-              {link.label}
-            </Link>
-          ))}
-        </nav>
-        <div className="relative z-10 flex w-[12.25rem] items-center justify-end max-[800px]:hidden">
+        <div className="pointer-events-auto flex shrink-0 items-center justify-end max-[800px]:hidden">
           <WalletButton />
         </div>
         <button
           ref={trigger}
-          className="hidden max-[800px]:grid max-[800px]:h-8 max-[800px]:w-8 max-[800px]:place-items-center"
+          className="pointer-events-auto hidden max-[800px]:grid max-[800px]:h-8 max-[800px]:w-8 max-[800px]:place-items-center"
           aria-expanded={open}
           aria-controls="mobile-navigation"
           aria-label="Open navigation"
@@ -98,6 +77,23 @@ export function Nav(): ReactNode {
           <Menu size={22} />
         </button>
       </div>
+      <nav
+        className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center max-[800px]:hidden"
+        data-ui="desktop-nav"
+        aria-label="Main navigation"
+      >
+        <div className="flex items-center gap-7 max-[1051px]:gap-4 max-[900px]:gap-3 [&_a]:pointer-events-auto [&_a]:relative [&_a]:py-3 [&_a]:font-mono [&_a]:text-[11px] [&_a]:[line-height:normal] [&_a]:font-medium [&_a]:whitespace-nowrap [&_a]:uppercase [&_a]:not-italic [&_a]:transition-opacity [&_a]:duration-[180ms] [&_a]:ease-[ease] [&_a::after]:absolute [&_a::after]:right-0 [&_a::after]:bottom-1.25 [&_a::after]:left-0 [&_a::after]:h-0.5 [&_a::after]:[transform-origin:left] [&_a::after]:[transform:scaleX(0)] [&_a::after]:bg-accent [&_a::after]:transition-transform [&_a::after]:duration-[250ms] [&_a::after]:ease-[ease] [&_a::after]:[content:''] [&_a:hover]:opacity-100 [&_a:hover::after]:[transform:scaleX(1)]">
+          {LINKS.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className={link.href === "/launch" ? "text-accent-ink" : undefined}
+            >
+              {link.label}
+            </Link>
+          ))}
+        </div>
+      </nav>
       <dialog
         onKeyDown={trapDialogFocus}
         className="m-auto max-h-[calc(100svh_-_32px)] w-[min(500px,_calc(100%_-_32px))] overflow-auto rounded-xl border border-solid border-border bg-card p-6 text-foreground backdrop:bg-[#00000055] backdrop:[backdrop-filter:blur(5px)] [&_>_p]:mt-4 [&_>_p]:text-[12px] [&_>_p]:text-muted-foreground [&_nav]:mx-0 [&_nav]:mt-4 [&_nav]:mb-7 [&_nav_a]:flex [&_nav_a]:items-center [&_nav_a]:gap-3.5 [&_nav_a]:border-b [&_nav_a]:border-b-border [&_nav_a]:px-0 [&_nav_a]:py-5 [&_nav_a]:text-[22px] [&_nav_a_>_span]:font-mono [&_nav_a_>_span]:text-[10px] [&_nav_a_>_span]:[line-height:normal] [&_nav_a_>_span]:font-normal [&_nav_a_>_span]:text-muted-foreground [&_nav_a_>_span]:not-italic [&_nav_a_>_svg]:ml-auto"

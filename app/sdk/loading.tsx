@@ -1,11 +1,9 @@
 import { Footer } from "@/components/footer";
-import { Nav } from "@/components/nav";
 import type { ReactNode } from "react";
 
 export default function Loading(): ReactNode {
   return (
     <>
-      <Nav />
       <main id="main-content" className="mx-auto w-[min(980px,calc(100%-48px))] pt-12 pb-22 max-[561px]:w-[calc(100%-24px)]">
         <div className="h-3 w-24 animate-pulse bg-card" />
         <div className="mt-5 h-16 max-w-xl animate-pulse bg-card" />

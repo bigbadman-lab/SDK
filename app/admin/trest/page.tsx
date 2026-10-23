@@ -1,8 +1,6 @@
 import { TrestForm } from "@/components/admin/trest-form";
 import { RewardsMonitor } from "@/components/admin/rewards-monitor";
 import { Footer } from "@/components/footer";
-import { Logo } from "@/components/logo";
-import { WalletButton } from "@/components/wallet/wallet-button";
 import { createMetadata } from "@/lib/metadata";
 import { SESSION_COOKIE } from "@/lib/auth/session";
 import { readSession } from "@/lib/server/auth";
@@ -34,12 +32,6 @@ export default async function TrestParentPage(): Promise<ReactNode> {
 
   return (
     <>
-      <div className="mx-auto flex min-h-20 w-[min(1100px,_calc(100%_-_48px))] items-center justify-between gap-6 border-b border-b-border py-5 max-[800px]:w-[calc(100%_-_40px)] max-[561px]:w-[calc(100%_-_32px)]">
-        <Link href="/" aria-label="SDK home">
-          <Logo />
-        </Link>
-        <WalletButton />
-      </div>
       <main
         id="main-content"
         className="mx-auto w-[min(860px,_calc(100%_-_48px))] scroll-mt-23 pt-16 pb-22 max-[561px]:w-[calc(100%_-_32px)] max-[561px]:pt-10"
