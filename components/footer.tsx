@@ -26,6 +26,7 @@ const GROUPS = [
     title: "Explore",
     links: [
       { label: "About SDK", href: "/about" },
+      { label: "Whitepaper", href: "/whitepaper" },
       { label: "Ecosystem", href: "/sdk" },
       { label: "Homepage", href: "/" },
     ],
