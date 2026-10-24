@@ -8,14 +8,13 @@ import { Footer } from "@/components/footer";
 import { Hero } from "@/components/hero";
 import { Reveal } from "@/components/reveal";
 import { StructuredData } from "@/components/structured-data";
-import { createMetadata } from "@/lib/metadata";
+import { createMetadata, siteConfig } from "@/lib/metadata";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 
 export const dynamic = "force-dynamic";
 
-const description =
-  "Create working SDKs with AI, remix existing tools, or bring your own code. Turn software into token-powered applications on Solana, all paired with $SDK.";
+const description = siteConfig.description;
 
 export const metadata: Metadata = {
   ...createMetadata({

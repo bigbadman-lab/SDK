@@ -37,7 +37,7 @@ export function ensureAppKit(): boolean {
       description:
         "Sign in with a Solana wallet. Connection is not a token launch.",
       url: origin,
-      icons: [`${origin}/icon.svg`],
+      icons: [`${origin}/images/sdkpair.png`],
     },
     themeMode: "dark" as const,
     features: {

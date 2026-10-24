@@ -1,16 +1,16 @@
 {
   "name": "SDK",
   "short_name": "SDK",
-  "description": "Build a working SDK, test it, and launch a token paired with $SDK.",
+  "description": "Create working SDKs with AI, remix existing tools, or bring your own code. Turn software into token-powered applications on Solana, all paired with $SDK.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#111111",
   "theme_color": "#111111",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/images/sdkpair.png",
+      "sizes": "1080x1080",
+      "type": "image/png",
       "purpose": "any"
     }
   ]

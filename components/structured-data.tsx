@@ -9,6 +9,13 @@ export function StructuredData({ description = siteConfig.description }: { descr
     name: siteConfig.name,
     url: siteConfig.url,
     description,
+    image: new URL(siteConfig.ogImage, siteConfig.url).toString(),
+    publisher: {
+      "@type": "Organization",
+      name: siteConfig.name,
+      url: siteConfig.url,
+      logo: new URL(siteConfig.icon, siteConfig.url).toString(),
+    },
   };
   return (
     <script
