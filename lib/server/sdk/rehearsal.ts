@@ -9,6 +9,11 @@ import {
 } from "@/lib/sdk/rehearsal";
 import { getSql } from "@/lib/server/db";
 
+export type RehearsalParent =
+  | { ok: true; phase: "live"; mint: string; decimals: number }
+  | { ok: true; phase: "missing" }
+  | { ok: false };
+
 export type RehearsalSdk =
   | {
       ok: true;
@@ -21,10 +26,9 @@ export type RehearsalSdk =
   | { ok: true; phase: "missing" }
   | { ok: false };
 
-export async function loadRehearsalSdk(nowMs = Date.now()): Promise<RehearsalSdk> {
+export async function loadRehearsalParent(): Promise<RehearsalParent> {
   try {
-    const sql = getSql();
-    const parents = await sql<{ decimals: number; eligible: boolean; feeMode: string }[]>`
+    const parents = await getSql()<{ decimals: number; eligible: boolean; feeMode: string }[]>`
       select decimals, eligible, fee_mode as "feeMode"
       from parent_registrations
       where scope = 'test' and symbol = 'TREST' and mint_address = ${TREST_MINT}
@@ -33,6 +37,17 @@ export async function loadRehearsalSdk(nowMs = Date.now()): Promise<RehearsalSdk
     if (parents.length !== 1 || !parent?.eligible || parent.feeMode !== "single_recipient" || parent.decimals !== 6) {
       return { ok: true, phase: "missing" };
     }
+    return { ok: true, phase: "live", mint: TREST_MINT, decimals: parent.decimals };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export async function loadRehearsalSdk(nowMs = Date.now()): Promise<RehearsalSdk> {
+  try {
+    const parent = await loadRehearsalParent();
+    if (!parent.ok || parent.phase !== "live") return parent;
+    const sql = getSql();
     const collections = await sql<{ netLamports: string; deferred: boolean }[]>`
       select net_lamports::text as "netLamports", allocation_deferred as deferred
       from reward_collections
@@ -154,7 +169,7 @@ export async function loadRehearsalSdk(nowMs = Date.now()): Promise<RehearsalSdk
           protocolLamports: recoveries[0].protocolLamports,
         }
       : null;
-    return { ok: true, phase: "live", mint: TREST_MINT, decimals: parent.decimals, figures, historical };
+    return { ok: true, phase: "live", mint: parent.mint, decimals: parent.decimals, figures, historical };
   } catch {
     return { ok: false };
   }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { readSdkRouteScope } from "@/lib/sdk/rehearsal";
 import { loadOfficialMarket } from "@/lib/server/market/official";
-import { loadRehearsalSdk } from "@/lib/server/sdk/rehearsal";
+import { loadRehearsalParent } from "@/lib/server/sdk/rehearsal";
 import { loadOfficialSdk } from "@/lib/server/sdk/official";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   const scope = raw === null ? "production" : readSdkRouteScope(raw);
   if (!scope) return NextResponse.json({ ok: false, phase: "unavailable" }, { status: 400 });
   if (scope === "test") {
-    const rehearsal = await loadRehearsalSdk();
+    const rehearsal = await loadRehearsalParent();
     if (!rehearsal.ok) return NextResponse.json({ ok: false, phase: "unavailable" }, { status: 503 });
     if (rehearsal.phase !== "live") return NextResponse.json({ ok: true, phase: "prelaunch", quote: null, updatedAt: null });
     const market = await loadOfficialMarket(rehearsal.mint);

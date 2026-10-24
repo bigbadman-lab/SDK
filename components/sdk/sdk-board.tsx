@@ -15,8 +15,20 @@ import {
 } from "@/lib/sdk/official";
 import { explorerUrl, shortenAddress } from "@/lib/launch/verified-launch";
 import type { HistoricalRecoveryView, RehearsalFigures, RehearsalWindowStatus, SdkRouteScope } from "@/lib/sdk/rehearsal";
+import {
+  appendAllocationRows,
+  mergeAllocationRows,
+  REWARD_REFRESH_MS,
+  readAllocationRows,
+  readRewardRefresh,
+  rewardRefreshEnabled,
+  rewardRefreshPath,
+  settleRewardPoll,
+  startRewardPoll,
+  type RewardPollState,
+} from "@/lib/sdk/reward-refresh";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 type Phase = "prelaunch" | "live" | "unavailable";
 
@@ -61,8 +73,14 @@ export function SdkBoard({
   const [copied, setCopied] = useState(false);
   const [allocations, setAllocations] = useState(rows);
   const [cursor, setCursor] = useState(nextCursor);
+  const [rewardSummary, setRewardSummary] = useState(summary);
+  const [rewardFigures, setRewardFigures] = useState(figures);
+  const [rewardRowsOk, setRewardRowsOk] = useState(rewardsOk);
+  const [rewardsCheckedAt, setRewardsCheckedAt] = useState<number | null>(null);
+  const [rewardsDelayed, setRewardsDelayed] = useState(false);
   const [more, setMore] = useState(false);
   const [moreFailed, setMoreFailed] = useState(false);
+  const paged = useRef(false);
 
   useEffect(() => {
     if (phase !== "live") return;
@@ -103,6 +121,59 @@ export function SdkBoard({
   }, [phase, scope]);
 
   useEffect(() => {
+    if (!rewardRefreshEnabled(phase)) return;
+    let cancelled = false;
+    let poll: RewardPollState = { generation: 0, inFlight: false };
+    let abort: AbortController | null = null;
+    const load = (reason: "interval" | "visible") => {
+      if (cancelled) return;
+      const next = startRewardPoll(poll, { hidden: document.hidden, reason });
+      if (next.action === "skip") return;
+      if (poll.inFlight) abort?.abort();
+      poll = next.state;
+      const requestId = next.requestId;
+      const controller = new AbortController();
+      abort = controller;
+      void fetch(rewardRefreshPath(scope), { cache: "no-store", signal: controller.signal })
+        .then(async (response) => {
+          const body: unknown = await response.json().catch(() => null);
+          const settled = settleRewardPoll(poll, requestId);
+          if (settled.apply) poll = settled.state;
+          if (cancelled || !settled.apply) return;
+          const payload = response.ok ? readRewardRefresh(body, scope) : null;
+          if (!payload || (scope === "test" && !payload.figures)) {
+            setRewardsDelayed(true);
+            return;
+          }
+          setRewardSummary(payload.summary);
+          if (payload.figures) setRewardFigures(payload.figures);
+          setAllocations((current) => paged.current ? mergeAllocationRows(current, payload.rows) : payload.rows);
+          if (!paged.current) setCursor(payload.nextCursor);
+          setRewardRowsOk(true);
+          setRewardsCheckedAt(Date.now());
+          setRewardsDelayed(false);
+        })
+        .catch((error: unknown) => {
+          if (cancelled || (error instanceof DOMException && error.name === "AbortError")) return;
+          const settled = settleRewardPoll(poll, requestId);
+          if (settled.apply) poll = settled.state;
+          if (!cancelled && settled.apply) setRewardsDelayed(true);
+        });
+    };
+    const timer = window.setInterval(() => load("interval"), REWARD_REFRESH_MS);
+    const onVisible = () => {
+      if (!document.hidden) load("visible");
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      abort?.abort();
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [phase, scope]);
+
+  useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1_200);
     return () => window.clearTimeout(timer);
@@ -121,13 +192,14 @@ export function SdkBoard({
     try {
       const scopeQuery = scope === "test" ? "&scope=test" : "";
       const response = await fetch(`/api/sdk/allocations?cursor=${encodeURIComponent(cursor)}${scopeQuery}`, { cache: "no-store" });
-      const body = (await response.json()) as { ok?: boolean; rows?: SdkAllocation[]; nextCursor?: string | null };
-      if (!response.ok || body.ok !== true || !Array.isArray(body.rows)) {
+      const body = (await response.json()) as { ok?: boolean; rows?: unknown; nextCursor?: unknown };
+      const next = response.ok && body.ok === true ? readAllocationRows(body.rows) : null;
+      if (!next) {
         setMoreFailed(true);
         return;
       }
-      const next = body.rows.filter(isAllocation);
-      setAllocations((current) => [...current, ...next]);
+      paged.current = true;
+      setAllocations((current) => appendAllocationRows(current, next));
       setCursor(typeof body.nextCursor === "string" ? body.nextCursor : null);
     } catch {
       setMoreFailed(true);
@@ -137,7 +209,7 @@ export function SdkBoard({
   }
 
   const shown = phase === "live" && marketOk ? (quote ?? EMPTY_QUOTE) : EMPTY_QUOTE;
-  const rewardSummary = phase === "live" && rewardsOk ? summary : null;
+  const shownSummary = phase === "live" && rewardRowsOk ? rewardSummary : null;
 
   return (
     <>
@@ -190,7 +262,17 @@ export function SdkBoard({
       </section>
 
       <section className="mt-12">
-        <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Native SOL Rewards</h2>
+        <div className="flex items-end justify-between gap-4">
+          <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Native SOL Rewards</h2>
+          {phase === "live" ? (
+            <p className="text-right font-mono text-[10px] leading-[1.45] tracking-[0.04em] text-muted-foreground">
+              Live · Updates automatically
+              <span className="mt-1 block min-h-4 normal-case">
+                {rewardsDelayed ? "Update delayed" : rewardsCheckedAt !== null ? formatUtcStamp(rewardsCheckedAt) : "\u00a0"}
+              </span>
+            </p>
+          ) : null}
+        </div>
         <div className="mt-4 max-w-2xl text-[14px] leading-[1.65] text-muted-foreground">
           <p>{rewardLead}</p>
           <p className="mt-3">{rewardQualify}</p>
@@ -201,15 +283,15 @@ export function SdkBoard({
             </p>
           ) : null}
         </div>
-        {scope === "test" ? <RehearsalFiguresPanel figures={figures} historical={historical} /> : (
+        {scope === "test" ? <RehearsalFiguresPanel figures={rewardFigures} historical={historical} /> : (
           <div className="mt-4 grid gap-px border border-border bg-border min-[801px]:grid-cols-3">
-            <Metric label="Allocated to holders" value={rewardSummary ? formatSol(rewardSummary.totalLamports) : "—"} />
-            <Metric label="Last 24 hours" value={rewardSummary ? formatSol(rewardSummary.dayLamports) : "—"} />
+            <Metric label="Allocated to holders" value={shownSummary ? formatSol(shownSummary.totalLamports) : "—"} />
+            <Metric label="Last 24 hours" value={shownSummary ? formatSol(shownSummary.dayLamports) : "—"} />
             <Metric
               label="Latest window"
               value={
-                rewardSummary?.latestWindowStart && rewardSummary.latestWindowEnd
-                  ? formatWindow(rewardSummary.latestWindowStart, rewardSummary.latestWindowEnd)
+                shownSummary?.latestWindowStart && shownSummary.latestWindowEnd
+                  ? formatWindow(shownSummary.latestWindowStart, shownSummary.latestWindowEnd)
                   : "—"
               }
             />
@@ -219,7 +301,7 @@ export function SdkBoard({
           phase={phase}
           decimals={decimals}
           rows={allocations}
-          rewardsOk={rewardsOk}
+          rewardsOk={rewardRowsOk}
           tokenSymbol={tokenSymbol}
         />
         {cursor ? (
@@ -234,7 +316,7 @@ export function SdkBoard({
         ) : null}
         {moreFailed ? <p className="mt-2 text-[13px] text-muted-foreground">More allocations could not be loaded.</p> : null}
       </section>
-      <p className="sr-only" aria-live="polite">{copied ? "Mint address copied" : ""}</p>
+      <p className="sr-only" aria-live="polite">{copied ? "Mint address copied" : rewardsDelayed ? "Rewards update delayed" : ""}</p>
     </>
   );
 }
@@ -419,19 +501,6 @@ function Mini({ label, value }: { label: string; value: string }): ReactNode {
       <span className="block font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{label}</span>
       <span className="mt-1 block font-mono text-[11px] leading-[1.35] tabular-nums">{value}</span>
     </p>
-  );
-}
-
-function isAllocation(value: unknown): value is SdkAllocation {
-  if (!value || typeof value !== "object") return false;
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.id === "string" &&
-    typeof row.windowStart === "string" &&
-    typeof row.windowEnd === "string" &&
-    typeof row.owner === "string" &&
-    typeof row.balance === "string" &&
-    typeof row.solLamports === "string"
   );
 }
 
