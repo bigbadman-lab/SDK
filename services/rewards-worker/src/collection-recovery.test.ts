@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 
-import { planIncrementalAllocation } from "../../../lib/rewards/ledger.ts";
+import { windowKey } from "../../../lib/rewards/cycle.ts";
+import { buybackSpendAllowed, planIncrementalAllocation } from "../../../lib/rewards/ledger.ts";
 import { classifySignatureStatus, pollTransactionConfirmation, type Chain, type ObservedTransaction } from "./chain.ts";
 import { cliMain } from "./collection-recovery-cli.ts";
 import {
@@ -288,7 +289,6 @@ test("a future rehearsal cannot overlap or bypass unresolved financial state", (
     starts: later,
     unresolvedIntents: 1,
     unallocatedReceipts: 0,
-    claimableLiabilities: 0,
   }), "unresolved");
   assert.equal(admitNextRehearsal({
     existing: [stopped],
@@ -296,7 +296,6 @@ test("a future rehearsal cannot overlap or bypass unresolved financial state", (
     starts: stopped.starts,
     unresolvedIntents: 0,
     unallocatedReceipts: 0,
-    claimableLiabilities: 0,
   }), "overlap");
   assert.equal(admitNextRehearsal({
     existing: [{ ...stopped, status: "open" }],
@@ -304,7 +303,6 @@ test("a future rehearsal cannot overlap or bypass unresolved financial state", (
     starts: later,
     unresolvedIntents: 0,
     unallocatedReceipts: 0,
-    claimableLiabilities: 0,
   }), "overlap");
   assert.equal(admitNextRehearsal({
     existing: [stopped],
@@ -312,7 +310,6 @@ test("a future rehearsal cannot overlap or bypass unresolved financial state", (
     starts: later,
     unresolvedIntents: 0,
     unallocatedReceipts: 1,
-    claimableLiabilities: 0,
   }), "unresolved");
   assert.equal(admitNextRehearsal({
     existing: [stopped],
@@ -320,16 +317,188 @@ test("a future rehearsal cannot overlap or bypass unresolved financial state", (
     starts: later,
     unresolvedIntents: 0,
     unallocatedReceipts: 0,
-    claimableLiabilities: 0,
   }), "ok");
+  assert.equal(admitNextRehearsal({
+    existing: [stopped],
+    generation: 4,
+    starts: later,
+    unresolvedIntents: 0,
+    unallocatedReceipts: 0,
+  }), "rejected");
   assert.equal(admitNextRehearsal({
     existing: [stopped],
     generation: 1,
     starts: later,
     unresolvedIntents: 0,
     unallocatedReceipts: 0,
-    claimableLiabilities: 0,
   }), "duplicate");
+});
+
+test("a deferred historical receipt stays out of the next window while claimable rewards continue", async () => {
+  const store = await stoppedStore();
+  const recovered = await recoverConfirmedCollection({
+    authorised: true,
+    approval: COLLECTION_RECOVERY_APPROVAL,
+    operator: "trest-07k",
+    reason: "confirmed collection had no receipt",
+    store,
+    chain: chain().chain,
+  });
+  assert.equal(recovered.ok, true);
+  const next = Array.from({ length: 6 }, (_, index) => START + WINDOW * (3 + index));
+  assert.equal(await store.registerRehearsal({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowStartsMs: next,
+    generation: 2,
+    requireUpcoming: false,
+  }), "ok");
+  assert.equal(await store.registerRehearsal({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "production",
+    windowStartsMs: next,
+    generation: 1,
+  }), "rejected");
+  const freshKey = windowKey(TREST_REHEARSAL_MINT, "test", next[0] ?? START);
+  assert.ok(freshKey);
+  assert.equal(await store.saveReceipt({
+    signature: "K".repeat(88),
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    amountLamports: "1000",
+    slot: "46",
+    confirmed: true,
+    source: "creator_vault",
+    gross: "1000",
+    fee: "0",
+    native: "1000",
+    wsolConverted: "0",
+    rentExcluded: "0",
+  }), "ok");
+  const allocated = await store.allocateUnallocated({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowKey: freshKey,
+    reserveLamports: "0",
+  });
+  assert.equal(allocated.ok, true);
+  if (!allocated.ok || allocated.state !== "allocated") return;
+  assert.equal(allocated.holders, "500");
+  assert.equal(allocated.buyback, "0");
+  assert.equal(allocated.deployer, "500");
+  const historicalKey = windowKey(TREST_REHEARSAL_MINT, "test", START + 1);
+  assert.equal((await store.snapshots(TREST_REHEARSAL_MINT, "test", historicalKey ?? "")).length, 0);
+  assert.equal(await store.saveSnapshots(TREST_REHEARSAL_MINT, "test", freshKey, [{
+    owner: "holder-now",
+    balance: "50000000000",
+    solLamports: "500",
+    tokenAmount: "0",
+    cutoffSlot: "46",
+  }]), "ok");
+  assert.equal((await store.snapshots(TREST_REHEARSAL_MINT, "test", freshKey))[0]?.owner, "holder-now");
+  assert.equal((await store.snapshots(TREST_REHEARSAL_MINT, "test", historicalKey ?? "")).length, 0);
+  const untouched = await store.allocateUnallocated({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowKey: windowKey(TREST_REHEARSAL_MINT, "test", START + WINDOW * 4) ?? "",
+    reserveLamports: CONFIRMED_COLLECTION.reserve,
+  });
+  assert.deepEqual(untouched, { ok: true, state: "empty" });
+  const obligations = await store.solObligations(TREST_REHEARSAL_MINT, "test");
+  assert.equal(obligations.holderSol, "500");
+  assert.equal(obligations.buybackSol, "0");
+  assert.equal(obligations.deployerRetained, "500");
+  assert.equal(obligations.deferredHolderLamports, CONFIRMED_COLLECTION.holders);
+  assert.equal(obligations.deferredBuybackLamports, CONFIRMED_COLLECTION.buyback);
+  assert.equal(obligations.deferredDeployerLamports, CONFIRMED_COLLECTION.deployerRetained);
+  const protectedFloor = {
+    reserveLamports: CONFIRMED_COLLECTION.reserve,
+    unpaidHolderLamports: obligations.holderSol,
+    deployerRetainedLamports: obligations.deployerRetained,
+    unspentPriorBuybackLamports: obligations.buybackSol,
+    deferredHolderLamports: obligations.deferredHolderLamports,
+    deferredBuybackLamports: obligations.deferredBuybackLamports,
+    deferredDeployerLamports: obligations.deferredDeployerLamports,
+  };
+  const floor = BigInt(CONFIRMED_COLLECTION.reserve) + BigInt(obligations.holderSol) + BigInt(obligations.deployerRetained) + BigInt(obligations.buybackSol) + BigInt(CONFIRMED_COLLECTION.holders) + BigInt(CONFIRMED_COLLECTION.buyback) + BigInt(CONFIRMED_COLLECTION.deployerRetained);
+  assert.deepEqual(buybackSpendAllowed({ walletLamports: floor.toString(), buybackLamports: "1", ...protectedFloor }), { ok: false, code: "unfunded" });
+  assert.equal(buybackSpendAllowed({ walletLamports: (floor + BigInt(1)).toString(), buybackLamports: "1", ...protectedFloor }).ok, true);
+  for (const windowStartMs of next) {
+    assert.equal((await store.claimRehearsalWindow({ parentMint: TREST_REHEARSAL_MINT, scope: "test", windowStartMs })).ok, true);
+    assert.equal(await store.finishRehearsalWindow({ parentMint: TREST_REHEARSAL_MINT, scope: "test", windowStartMs, outcome: "ok" }), "ok");
+  }
+  assert.equal((await store.rehearsalState(TREST_REHEARSAL_MINT, "test"))?.status, "closed");
+  const afterClaims = Array.from({ length: 3 }, (_, index) => (next[5] ?? START) + WINDOW * (index + 1));
+  assert.equal(await store.registerRehearsal({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowStartsMs: afterClaims,
+    generation: 3,
+    requireUpcoming: false,
+  }), "ok");
+});
+
+test("the next collection does not withhold the recovered historical reserve again", async () => {
+  const store = await stoppedStore();
+  const recovered = await recoverConfirmedCollection({
+    ...recoveryInput,
+    store,
+    chain: chain().chain,
+  });
+  assert.equal(recovered.ok, true);
+  const key = windowKey(TREST_REHEARSAL_MINT, "test", START + WINDOW * 6 + 1);
+  assert.ok(key);
+  assert.equal(await store.saveReceipt({
+    signature: "L".repeat(88),
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    amountLamports: "8753187",
+    slot: "47",
+    confirmed: true,
+    source: "creator_vault",
+    gross: "8758187",
+    fee: "5000",
+    native: "8753187",
+    wsolConverted: "0",
+    rentExcluded: "0",
+  }), "ok");
+  const allocated = await store.allocateUnallocated({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowKey: key,
+    reserveLamports: "5000000",
+  });
+  assert.equal(allocated.ok, true);
+  if (!allocated.ok || allocated.state !== "allocated") return;
+  assert.equal(allocated.withheld, "0");
+  assert.equal(allocated.base, "8753187");
+  assert.equal(allocated.holders, "4376593");
+  assert.equal(allocated.buyback, "0");
+  assert.equal(allocated.deployer, "4376594");
+  const receipts = await store.receipts(TREST_REHEARSAL_MINT, "test");
+  const historical = receipts.find((receipt) => receipt.signature === CONFIRMED_COLLECTION.signature);
+  assert.equal(historical?.amountLamports, "85140307");
+  assert.equal(await store.saveReceipt({
+    signature: "M".repeat(88),
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    amountLamports: "1000",
+    slot: "48",
+    confirmed: true,
+    source: "creator_vault",
+    gross: "1000",
+    fee: "0",
+    native: "1000",
+    wsolConverted: "0",
+    rentExcluded: "0",
+  }), "ok");
+  assert.equal(await store.registerRehearsal({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "test",
+    windowStartsMs: [START + WINDOW * 9, START + WINDOW * 10, START + WINDOW * 11],
+    generation: 2,
+    requireUpcoming: false,
+  }), "rejected");
 });
 
 test("the recovery command stays operator-only and the worker entrypoints do not import it", async () => {

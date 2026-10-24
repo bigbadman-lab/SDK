@@ -1,4 +1,4 @@
-// Operator-only registration for the one TREST three-window rehearsal.
+// Operator-only registration for one bounded TREST rehearsal.
 // The rewards worker never imports this file. Do not set
 // TREST_REHEARSAL_REGISTRATION_AUTHORIZED on Render. This command does not
 // read a signing key, unsuspend a control, or broadcast.
@@ -13,6 +13,8 @@ type Database = ReturnType<typeof postgres>;
 type Env = Record<string, string | undefined>;
 
 export const REHEARSAL_APPROVAL = "TREST-07I-THREE-WINDOW-REHEARSAL";
+export const SIX_WINDOW_APPROVAL = "TREST-07L-SIX-WINDOW-REHEARSAL";
+export const DAY_REHEARSAL_APPROVAL = "TREST-08B-DAY-REHEARSAL";
 export const DEFAULT_LEAD_MINUTES = 10;
 export const MAX_LEAD_MINUTES = 180;
 export const WORKER_SERVICE_ID = "srv-dbbrdfgu01pc738pd27g";
@@ -43,15 +45,22 @@ function rejected(code: string): { code: number; out: string } {
   return { code: 2, out: `rejected ${code}` };
 }
 
-export function selectRehearsalWindows(nowMs: number, leadMinutes: number): [number, number, number] | null {
+export function selectRehearsalWindows(nowMs: number, leadMinutes: number, windows: 3 | 6 | 288 = 3): number[] | null {
   if (!Number.isInteger(nowMs) || nowMs <= 0) return null;
   if (!Number.isInteger(leadMinutes) || leadMinutes < DEFAULT_LEAD_MINUTES || leadMinutes > MAX_LEAD_MINUTES) return null;
   const earliest = nowMs + leadMinutes * 60_000;
   const remainder = earliest % WINDOW_MS;
   const first = remainder === 0 ? earliest : earliest + (WINDOW_MS - remainder);
-  const starts = validRehearsalStarts([first, first + WINDOW_MS, first + WINDOW_MS * 2]);
-  if (!starts || starts[0] <= nowMs) return null;
+  const starts = validRehearsalStarts(Array.from({ length: windows }, (_, index) => first + WINDOW_MS * index));
+  if (!starts || (starts[0] ?? 0) <= nowMs) return null;
   return starts;
+}
+
+function windowCount(approval: string): 3 | 6 | 288 | null {
+  if (approval === REHEARSAL_APPROVAL) return 3;
+  if (approval === SIX_WINDOW_APPROVAL) return 6;
+  if (approval === DAY_REHEARSAL_APPROVAL) return 288;
+  return null;
 }
 
 function parseLead(value: string | undefined): number | null {
@@ -103,14 +112,22 @@ function suspended(evidence: SuspensionEvidence | null): evidence is SuspensionE
     && evidence.executionAuthorisedHealth === false;
 }
 
-function scheduleText(kind: "dry-run" | "ok" | "reconciled", nowMs: number, starts: readonly [number, number, number], existing: number, accepted: boolean): string {
+function scheduleText(kind: "dry-run" | "ok" | "reconciled", nowMs: number, starts: readonly number[], existing: number, accepted: boolean): string {
+  const labels = ["first", "second", "third", "fourth", "fifth", "sixth"];
+  const first = starts[0] ?? nowMs;
+  const finalStart = starts[starts.length - 1] ?? first;
+  const windowLines = starts.length > labels.length
+    ? [
+        `windows=${starts.length}`,
+        `first=${new Date(first).toISOString()}`,
+        `final=${new Date(finalStart + WINDOW_MS).toISOString()}`,
+      ]
+    : starts.map((start, index) => `${labels[index] ?? "window"}=${new Date(start).toISOString()}`);
   const lines = [
     kind,
     `database_utc=${new Date(nowMs).toISOString()}`,
-    `first=${new Date(starts[0]).toISOString()}`,
-    `second=${new Date(starts[1]).toISOString()}`,
-    `third=${new Date(starts[2]).toISOString()}`,
-    `lead_ms=${starts[0] - nowMs}`,
+    ...windowLines,
+    `lead_ms=${first - nowMs}`,
     `existing=${existing}`,
     `accepted=${accepted ? "yes" : "no"}`,
   ];
@@ -118,11 +135,12 @@ function scheduleText(kind: "dry-run" | "ok" | "reconciled", nowMs: number, star
   return lines.join("\n");
 }
 
-function matchesSchedule(state: RehearsalState, starts: readonly [number, number, number]): boolean {
+function matchesSchedule(state: RehearsalState, starts: readonly number[], generation: number): boolean {
   return state.status === "open"
+    && state.generation === generation
     && state.processed.length === 0
     && state.blocksSideWork
-    && state.windowStartsMs.length === 3
+    && state.windowStartsMs.length === starts.length
     && state.windowStartsMs.every((start, index) => start === starts[index]);
 }
 
@@ -199,7 +217,8 @@ export async function cliMain(argv: string[], env: Env, io: RehearsalIo = {}): P
     if (args === "lead") return rejected("lead");
     if (!args) return rejected("argument");
     if (!args.dryRun && env.TREST_REHEARSAL_REGISTRATION_AUTHORIZED !== "true") return rejected("authorisation");
-    if (args.approval !== REHEARSAL_APPROVAL) return rejected("approval");
+    const windows = windowCount(args.approval);
+    if (!windows) return rejected("approval");
     if (!OPERATOR.test(args.operator)) return rejected("operator");
     if (args.reason.trim().length === 0 || args.reason.length > 240) return rejected("reason");
     opened = io.store && io.now && io.fence ? null : await openDatabase(env);
@@ -213,13 +232,15 @@ export async function cliMain(argv: string[], env: Env, io: RehearsalIo = {}): P
     const control = await store.control(TREST_REHEARSAL_MINT, "test");
     if (!control?.suspended) return rejected("suspended");
     const existing = await store.rehearsalState(TREST_REHEARSAL_MINT, "test");
-    if (!args.dryRun && existing) return rejected("existing");
+    if (!args.dryRun && existing?.status === "open") return rejected("existing");
     const nowMs = io.now ? await io.now() : opened ? await databaseNow(opened.sql) : null;
     if (nowMs === null) return rejected("clock");
-    const starts = selectRehearsalWindows(nowMs, args.leadMinutes);
+    const starts = selectRehearsalWindows(nowMs, args.leadMinutes, windows);
     if (!starts) return rejected("schedule");
+    const generation = existing ? existing.generation + 1 : 1;
+    const accepted = existing?.status !== "open";
     if (args.dryRun) {
-      return { code: 0, out: scheduleText("dry-run", nowMs, starts, existing ? 1 : 0, existing === null) };
+      return { code: 0, out: scheduleText("dry-run", nowMs, starts, existing ? 1 : 0, accepted) };
     }
     let registered: "ok" | "rejected" | "duplicate" | "lost";
     try {
@@ -229,6 +250,7 @@ export async function cliMain(argv: string[], env: Env, io: RehearsalIo = {}): P
         windowStartsMs: starts,
         nowMs,
         requireUpcoming: true,
+        generation,
       });
     } catch {
       registered = "lost";
@@ -236,11 +258,11 @@ export async function cliMain(argv: string[], env: Env, io: RehearsalIo = {}): P
     const saved = await store.rehearsalState(TREST_REHEARSAL_MINT, "test");
     if (registered === "duplicate") return rejected("existing");
     if (registered === "lost") {
-      if (saved && matchesSchedule(saved, starts)) return { code: 0, out: scheduleText("reconciled", nowMs, starts, 1, true) };
+      if (saved && matchesSchedule(saved, starts, generation)) return { code: 0, out: scheduleText("reconciled", nowMs, starts, 1, true) };
       return rejected(saved ? "uncertain" : "registration");
     }
-    if (registered !== "ok" || !saved || !matchesSchedule(saved, starts)) return rejected(saved ? "uncertain" : "registration");
-    return { code: 0, out: scheduleText("ok", nowMs, starts, 1, true) };
+    if (registered !== "ok" || !saved || !matchesSchedule(saved, starts, generation)) return rejected(saved ? "uncertain" : "registration");
+    return { code: 0, out: scheduleText("ok", nowMs, starts, existing ? 1 : 0, true) };
   } catch {
     return rejected("configuration");
   } finally {

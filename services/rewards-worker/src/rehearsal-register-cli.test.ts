@@ -12,6 +12,7 @@ import { createSql } from "./postgres.ts";
 import {
   databaseNow,
   DEFAULT_LEAD_MINUTES,
+  DAY_REHEARSAL_APPROVAL,
   REHEARSAL_APPROVAL,
   rehearsalFencePresent,
   selectRehearsalWindows,
@@ -19,7 +20,7 @@ import {
   type RehearsalIo,
   type SuspensionEvidence,
 } from "./rehearsal-register-cli.ts";
-import { memoryStore, TREST_REHEARSAL_MINT, type RegisteredParent, type RewardsStore } from "./store.ts";
+import { memoryStore, TREST_REHEARSAL_MINT, validRehearsalStarts, type RegisteredParent, type RewardsStore } from "./store.ts";
 
 const DEPLOYER = "5hAjFTvs7FoM2evWEMLU3GnNcQFJNk89RcaPbcsyp8rR";
 const SYSTEM = "11111111111111111111111111111111";
@@ -116,6 +117,10 @@ test("window selection uses the database instant and a bounded lead", () => {
   assert.equal(selectRehearsalWindows(NOW, 9), null);
   assert.equal(selectRehearsalWindows(NOW, 181), null);
   assert.equal(selectRehearsalWindows(NOW, 15)?.[0], Date.UTC(2026, 9, 21, 15, 25, 0));
+  const six = selectRehearsalWindows(NOW, DEFAULT_LEAD_MINUTES, 6);
+  assert.equal(six?.length, 6);
+  assert.equal(six?.[5], (six?.[0] ?? 0) + WINDOW_MS * 5);
+  assert.equal(selectRehearsalWindows(NOW, DEFAULT_LEAD_MINUTES, 3)?.length, 3);
 });
 
 test("dry-run previews three keys and does not write", async () => {
@@ -231,8 +236,15 @@ test("an existing open or closed schedule is never replaced", async () => {
   }
   assert.equal((await closed.rehearsalState(TREST_REHEARSAL_MINT, "test"))?.status, "closed");
   const again = await cliMain(command(), environment(), io(closed));
-  assert.equal(again.out, "rejected existing");
-  assert.equal((await closed.rehearsalState(TREST_REHEARSAL_MINT, "test"))?.status, "closed");
+  assert.equal(again.code, 0);
+  assert.match(again.out, /^ok/);
+  const followed = await closed.rehearsalState(TREST_REHEARSAL_MINT, "test");
+  assert.equal(followed?.status, "open");
+  assert.equal(followed?.generation, 2);
+  assert.equal(followed?.windowStartsMs[0], Date.UTC(2026, 9, 21, 15, 20, 0));
+  const replaced = await closed.claimRehearsalWindow({ parentMint: TREST_REHEARSAL_MINT, scope: "test", windowStartMs: start });
+  assert.equal(replaced.ok, false);
+  if (!replaced.ok) assert.equal(replaced.code, "schedule");
 });
 
 test("one registration is immutable and a lost response is reconciled without a repeat", async () => {
@@ -402,7 +414,9 @@ test("disposable PostgreSQL supplies the clock and accepts one schedule", async 
       );
     `);
     const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
-    const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
+    const files = (await readdir(migrationDir))
+      .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql")
+      .sort();
     for (const file of files) await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
     const observed = await databaseNow(sql);
     const direct = await sql.unsafe<{ ms: string }[]>("select (floor(extract(epoch from clock_timestamp()) * 1000))::bigint::text as ms");
@@ -478,4 +492,40 @@ test("disposable PostgreSQL supplies the clock and accepts one schedule", async 
     await database.stop();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("a day rehearsal authorises 288 windows and leaves execution suspended", async () => {
+  const selected = selectRehearsalWindows(NOW, DEFAULT_LEAD_MINUTES, 288);
+  assert.equal(selected?.length, 288);
+  const first = selected?.[0] ?? 0;
+  assert.equal(selected?.[287], first + 287 * WINDOW_MS);
+  const drifted = [...(selected ?? [])];
+  drifted[3] = (drifted[3] ?? 0) + 1;
+  assert.equal(validRehearsalStarts(drifted), null);
+  assert.equal(validRehearsalStarts((selected ?? []).slice(0, 287)), null);
+  assert.equal(validRehearsalStarts([...(selected ?? []), (selected?.[287] ?? 0) + WINDOW_MS]), null);
+  const store = fixture();
+  const args = ["node", "rehearsal-register-cli.ts", "--approval", DAY_REHEARSAL_APPROVAL, "--operator", "operator-1", "--reason", "Register the day rehearsal."];
+  const preview = await cliMain([...args, "--dry-run"], environment({ TREST_REHEARSAL_REGISTRATION_AUTHORIZED: undefined }), io(store));
+  assert.equal(preview.code, 0);
+  assert.match(preview.out, /windows=288/);
+  assert.match(preview.out, /first=/);
+  assert.match(preview.out, /final=/);
+  const created = await cliMain(args, environment(), io(store));
+  assert.equal(created.code, 0);
+  safe(created.out);
+  const saved = await store.rehearsalState(TREST_REHEARSAL_MINT, "test");
+  assert.equal(saved?.windowStartsMs.length, 288);
+  assert.equal(saved?.status, "open");
+  assert.equal(saved?.claimsAllowed, true);
+  assert.equal(saved?.blocksSideWork, true);
+  assert.equal((await control(store))?.suspended, true);
+  const overlap = await cliMain(args, environment(), io(store));
+  assert.equal(overlap.out, "rejected existing");
+  assert.equal(await store.registerRehearsal({
+    parentMint: TREST_REHEARSAL_MINT,
+    scope: "production",
+    windowStartsMs: selected ?? [],
+    requireUpcoming: false,
+  }), "rejected");
 });

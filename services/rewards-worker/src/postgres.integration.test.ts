@@ -57,8 +57,10 @@ before(async () => {
     );
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
-  const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  assert.deepEqual(files.slice(-12), [
+  const files = (await readdir(migrationDir))
+    .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql")
+    .sort();
+  assert.deepEqual(files.slice(-13), [
     "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
@@ -71,6 +73,7 @@ before(async () => {
     "20261021160000_trest07f_legacy_recovery.sql",
     "20261021180000_trest07i_rehearsal_windows.sql",
     "20261021190000_trest07j_confirmation_recovery.sql",
+    "20261024120000_trest08b_day_rehearsal.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
@@ -874,7 +877,9 @@ test("the confirmed collection recovery commits on the migrated schema and prote
       );
     `);
     const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
-    const files = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
+    const files = (await readdir(migrationDir))
+      .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql")
+      .sort();
     for (const file of files) await recoverySql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
     await recoverySql`
       insert into parent_registrations (
@@ -1063,6 +1068,76 @@ test("the confirmed collection recovery commits on the migrated schema and prote
       reserveLamports: "5000000",
     });
     assert.deepEqual(deferredOnly, { ok: true, state: "empty" });
+    const firstGeneration = [START, START + 300_000, START + 600_000];
+    assert.equal(await store.registerRehearsal({
+      parentMint: mint,
+      scope: "test",
+      windowStartsMs: firstGeneration,
+      generation: 1,
+      requireUpcoming: false,
+    }), "ok");
+    for (const windowStartMs of firstGeneration) {
+      assert.equal((await store.claimRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs })).ok, true);
+      assert.equal(await store.finishRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs, outcome: "ok" }), "ok");
+    }
+    assert.equal((await store.rehearsalState(mint, "test"))?.status, "closed");
+    const six = Array.from({ length: 6 }, (_, index) => START + 900_000 + index * 300_000);
+    assert.equal(await store.registerRehearsal({
+      parentMint: mint,
+      scope: "test",
+      windowStartsMs: six,
+      generation: 2,
+      requireUpcoming: false,
+    }), "ok");
+    const continued = await store.rehearsalState(mint, "test");
+    assert.equal(continued?.generation, 2);
+    assert.equal(continued?.status, "open");
+    assert.equal(continued?.windowStartsMs.length, 6);
+    const historical = await recoverySql`
+      select allocation_deferred, allocated_at
+      from reward_collections
+      where signature = ${signature}
+    `;
+    assert.equal(historical[0]?.allocation_deferred, true);
+    assert.equal(historical[0]?.allocated_at, null);
+    for (const windowStartMs of six.slice(0, 3)) {
+      assert.equal((await store.claimRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs })).ok, true);
+      assert.equal(await store.finishRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs, outcome: "ok" }), "ok");
+    }
+    assert.equal((await store.rehearsalState(mint, "test"))?.status, "open");
+    for (const windowStartMs of six.slice(3)) {
+      assert.equal((await store.claimRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs })).ok, true);
+      assert.equal(await store.finishRehearsalWindow({ parentMint: mint, scope: "test", windowStartMs, outcome: "ok" }), "ok");
+    }
+    assert.equal((await store.rehearsalState(mint, "test"))?.status, "closed");
+    assert.equal(await store.saveReceipt({
+      signature: "J".repeat(88),
+      parentMint: mint,
+      scope: "test",
+      amountLamports: "1000",
+      slot: "46",
+      confirmed: true,
+      source: "creator_vault",
+      gross: "1000",
+      fee: "0",
+      native: "1000",
+      wsolConverted: "0",
+      rentExcluded: "0",
+    }), "ok");
+    assert.equal(await store.registerRehearsal({
+      parentMint: mint,
+      scope: "test",
+      windowStartsMs: Array.from({ length: 3 }, (_, index) => START + 2_700_000 + index * 300_000),
+      generation: 3,
+      requireUpcoming: false,
+    }), "rejected");
+    assert.equal(await store.registerRehearsal({
+      parentMint: mint,
+      scope: "test",
+      windowStartsMs: Array.from({ length: 3 }, (_, index) => START + 2_700_000 + index * 300_000),
+      generation: 4,
+      requireUpcoming: false,
+    }), "rejected");
     await recoverySql`
       update reward_collections
       set allocated_at = now(), reserve_withheld_lamports = amount_lamports

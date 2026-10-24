@@ -17,12 +17,12 @@ export function windowLengthLabel(): string {
   return Number.isInteger(minutes) ? String(minutes) : "";
 }
 
-export function nativeRewardLead(): string {
+export function nativeRewardLead(symbol = "$SDK"): string {
   const split = nativeRewardSplit();
   const minutes = windowLengthLabel();
   const intro = minutes
-    ? `Every ${minutes} minutes, confirmed native $SDK creator fees are split.`
-    : "Confirmed native $SDK creator fees are split on each allocation window.";
+    ? `Every ${minutes} minutes, confirmed native ${symbol} creator fees are split.`
+    : `Confirmed native ${symbol} creator fees are split on each allocation window.`;
   if (!split) return intro;
   if (split.buyback === "0") {
     return `${intro} ${split.holders}% is allocated to eligible holders as claimable SOL, and ${split.deployer}% is retained by the protocol.`;

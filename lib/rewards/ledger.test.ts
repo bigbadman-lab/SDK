@@ -9,6 +9,8 @@ import {
   authoriseBucketSpend,
   creditFee,
   creditedLamports,
+  planIncrementalAllocation,
+  recognizedReserveWithheld,
   retainedDeployerLamports,
   rewardBase,
   splitCreatorFees,
@@ -150,4 +152,81 @@ test("SOL single-recipient collection pays the creator and does not grant spendi
   assert.equal(holders.ok, false);
   if (holders.ok) return;
   assert.equal(holders.path, "holder_rewards");
+});
+
+test("the historical standing reserve is recognised once", () => {
+  const historical = recognizedReserveWithheld({
+    reserveLamports: "5000000",
+    allocated: [],
+    recoveries: [{ signature: "historical", reserveWithheldLamports: "5000000" }],
+  });
+  assert.deepEqual(historical, { ok: true, withheld: "5000000" });
+  const next = planIncrementalAllocation({
+    grossLamports: "8753187",
+    reserveLamports: "5000000",
+    reserveWithheldLamports: historical.ok ? historical.withheld : "0",
+  });
+  assert.equal(next.ok, true);
+  if (!next.ok) return;
+  assert.equal(next.withheld, "0");
+  assert.equal(next.base, "8753187");
+  assert.equal(next.holders, "4376593");
+  assert.equal(next.buyback, "0");
+  assert.equal(next.deployer, "4376594");
+  const duplicate = recognizedReserveWithheld({
+    reserveLamports: "5000000",
+    allocated: [],
+    recoveries: [
+      { signature: "historical", reserveWithheldLamports: "5000000" },
+      { signature: "historical", reserveWithheldLamports: "5000000" },
+    ],
+  });
+  assert.deepEqual(duplicate, historical);
+  const conflict = recognizedReserveWithheld({
+    reserveLamports: "5000000",
+    allocated: [],
+    recoveries: [
+      { signature: "historical", reserveWithheldLamports: "5000000" },
+      { signature: "historical", reserveWithheldLamports: "1" },
+    ],
+  });
+  assert.deepEqual(conflict, { ok: false, code: "amount" });
+  const fresh = recognizedReserveWithheld({ reserveLamports: "5000000", allocated: [], recoveries: [] });
+  const opening = planIncrementalAllocation({
+    grossLamports: "100",
+    reserveLamports: "5000000",
+    reserveWithheldLamports: fresh.ok ? fresh.withheld : "1",
+  });
+  assert.equal(opening.ok, true);
+  if (!opening.ok) return;
+  assert.equal(opening.withheld, "100");
+  assert.equal(opening.base, "0");
+  const partial = recognizedReserveWithheld({
+    reserveLamports: "5000000",
+    allocated: [{ signature: "modern", reserveWithheldLamports: "2000000" }],
+    recoveries: [],
+  });
+  const remainder = planIncrementalAllocation({
+    grossLamports: "10000000",
+    reserveLamports: "5000000",
+    reserveWithheldLamports: partial.ok ? partial.withheld : "0",
+  });
+  assert.equal(remainder.ok, true);
+  if (!remainder.ok) return;
+  assert.equal(remainder.withheld, "3000000");
+  assert.equal(remainder.holders, "3500000");
+  assert.equal(remainder.buyback, "0");
+  assert.equal(remainder.deployer, "3500000");
+  const empty = planIncrementalAllocation({
+    grossLamports: "0",
+    reserveLamports: "5000000",
+    reserveWithheldLamports: "5000000",
+  });
+  assert.deepEqual(empty, { ok: true, withheld: "0", base: "0", holders: "0", buyback: "0", deployer: "0" });
+  const shared = recognizedReserveWithheld({
+    reserveLamports: "5000000",
+    allocated: [{ signature: "historical", reserveWithheldLamports: "5000000" }],
+    recoveries: [{ signature: "historical", reserveWithheldLamports: "5000000" }],
+  });
+  assert.deepEqual(shared, { ok: true, withheld: "5000000" });
 });

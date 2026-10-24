@@ -1,7 +1,7 @@
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
 import { legacyCollectionRetired, matchesLegacyCollection } from "./legacy-recovery.ts";
 import type { ExecutionIntent, IntentStatus } from "../../../lib/rewards/cycle.ts";
-import { planIncrementalAllocation, WINDOW_MS, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
+import { planIncrementalAllocation, recognizedReserveWithheld, WINDOW_MS, type FeeReceipt, type RewardScope } from "../../../lib/rewards/ledger.ts";
 
 export const TREST_REHEARSAL_MINT = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
 export const DEFERRED_BUYBACK_KEY = "buyback-1792603200000";
@@ -28,9 +28,11 @@ export type RehearsalAdmission =
 
 export type RehearsalState = {
   status: "open" | "stopped" | "closed";
+  generation: number;
   windowStartsMs: number[];
-  processed: { windowStartMs: number; outcome: "claimed" | "ok" | "stopped" }[];
+  processed: { windowStartMs: number; outcome: "claimed" | "ok" | "stopped" | "skipped" }[];
   blocksSideWork: boolean;
+  claimsAllowed: boolean;
 };
 
 export type RehearsalRegistration = {
@@ -43,13 +45,15 @@ export type RehearsalRegistration = {
   generation?: number;
 };
 
-export function validRehearsalStarts(starts: readonly number[]): [number, number, number] | null {
-  if (starts.length !== 3) return null;
-  const [first, second, third] = starts;
-  if (first === undefined || second === undefined || third === undefined) return null;
-  if (![first, second, third].every((value) => Number.isInteger(value) && value > 0 && value % WINDOW_MS === 0)) return null;
-  if (second !== first + WINDOW_MS || third !== second + WINDOW_MS) return null;
-  return [first, second, third];
+export function validRehearsalStarts(starts: readonly number[]): number[] | null {
+  if (starts.length !== 3 && starts.length !== 6 && starts.length !== 288) return null;
+  const first = starts[0];
+  if (first === undefined || !Number.isInteger(first) || first <= 0 || first % WINDOW_MS !== 0) return null;
+  for (let index = 1; index < starts.length; index += 1) {
+    const value = starts[index];
+    if (value !== first + index * WINDOW_MS) return null;
+  }
+  return [...starts];
 }
 
 export type RegisteredParent = {
@@ -245,7 +249,7 @@ export type RewardsStore = {
   unlock(parentMint: string, scope: RewardScope, holder: string): Promise<void>;
   registerRehearsal(input: RehearsalRegistration): Promise<"ok" | "rejected" | "duplicate">;
   claimRehearsalWindow(input: { parentMint: string; scope: RewardScope; windowStartMs: number }): Promise<RehearsalAdmission>;
-  finishRehearsalWindow(input: { parentMint: string; scope: RewardScope; windowStartMs: number; outcome: "ok" | "stopped" }): Promise<"ok" | "order">;
+  finishRehearsalWindow(input: { parentMint: string; scope: RewardScope; windowStartMs: number; outcome: "ok" | "stopped" | "skipped" }): Promise<"ok" | "order">;
   rehearsalState(parentMint: string, scope: RewardScope): Promise<RehearsalState | null>;
   rehearsalBlocksSideWork(parentMint: string, scope: RewardScope): Promise<boolean>;
 };
@@ -260,17 +264,16 @@ export function admitNextRehearsal(input: {
   starts: readonly number[];
   unresolvedIntents: number;
   unallocatedReceipts: number;
-  claimableLiabilities: number;
 }): RehearsalGenerationDecision {
   if (!validRehearsalStarts(input.starts)) return "rejected";
   if (!Number.isInteger(input.generation) || input.generation < 1 || input.generation > 100) return "rejected";
-  if (input.existing.some((row) => row.status === "open")) return "overlap";
   if (input.existing.some((row) => row.generation === input.generation)) return "duplicate";
+  if (input.existing.some((row) => row.status === "open")) return "overlap";
   const max = input.existing.reduce((highest, row) => Math.max(highest, row.generation), 0);
   if (input.generation !== max + 1) return "rejected";
   if (input.generation > 1) {
     if (input.existing.some((row) => row.starts.some((start) => input.starts.includes(start)))) return "overlap";
-    if (input.unresolvedIntents > 0 || input.unallocatedReceipts > 0 || input.claimableLiabilities > 0) return "unresolved";
+    if (input.unresolvedIntents > 0 || input.unallocatedReceipts > 0) return "unresolved";
   }
   return "ok";
 }
@@ -291,8 +294,8 @@ export function memoryStore(seed: {
   type MemoryRehearsal = {
     generation: number;
     status: "open" | "stopped" | "closed";
-    starts: [number, number, number];
-    windows: Map<number, "claimed" | "ok" | "stopped">;
+    starts: number[];
+    windows: Map<number, "claimed" | "ok" | "stopped" | "skipped">;
     blockSideWork: boolean;
   };
   const rehearsals: MemoryRehearsal[] = [];
@@ -380,13 +383,20 @@ export function memoryStore(seed: {
           existingWindowKeys: [],
         });
         if (!guard.ok) return { ok: false, code: "duplicate" };
-        const withheldAlready = receipts
-          .filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && receipt.allocated)
-          .reduce((total, receipt) => total + BigInt(receipt.reserveWithheld), BigInt(0));
+        const recognized = recognizedReserveWithheld({
+          reserveLamports: input.reserveLamports,
+          allocated: receipts
+            .filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && receipt.allocated)
+            .map((receipt) => ({ signature: receipt.signature, reserveWithheldLamports: receipt.reserveWithheld })),
+          recoveries: collectionRecoveries
+            .filter((recovery) => recovery.parentMint === input.parentMint && recovery.scope === input.scope)
+            .map((recovery) => ({ signature: recovery.signature, reserveWithheldLamports: recovery.reserveLamports })),
+        });
+        if (!recognized.ok) return { ok: false, code: "amount" };
         const planned = planIncrementalAllocation({
           grossLamports: open.reduce((total, receipt) => total + BigInt(receipt.amountLamports), BigInt(0)).toString(),
           reserveLamports: input.reserveLamports,
-          reserveWithheldLamports: withheldAlready.toString(),
+          reserveWithheldLamports: recognized.withheld,
         });
         if (!planned.ok) return { ok: false, code: "amount" };
         let remaining = BigInt(planned.withheld);
@@ -689,7 +699,8 @@ export function memoryStore(seed: {
       return exclusive(() => {
         const starts = validRehearsalStarts(input.windowStartsMs);
         if (!starts || input.scope !== "test" || input.parentMint !== seed.parent.mintAddress) return "rejected";
-        if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
+        const firstStart = starts[0];
+        if (firstStart === undefined || (input.requireUpcoming && (!Number.isInteger(input.nowMs) || firstStart <= (input.nowMs ?? 0)))) return "rejected";
         const generation = input.generation ?? 1;
         const unresolvedIntents = intents.filter((intent) =>
           intent.parentMint === input.parentMint
@@ -702,8 +713,7 @@ export function memoryStore(seed: {
           generation,
           starts,
           unresolvedIntents,
-          unallocatedReceipts: receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated).length,
-          claimableLiabilities: windows.filter((row) => row.parentMint === input.parentMint && row.scope === input.scope).length,
+          unallocatedReceipts: receipts.filter((receipt) => receipt.parentMint === input.parentMint && receipt.scope === input.scope && !receipt.allocated && !receipt.allocationDeferred).length,
         });
         if (decision === "duplicate") return "duplicate";
         if (decision !== "ok") return "rejected";
@@ -727,7 +737,7 @@ export function memoryStore(seed: {
         if (rehearsal.status === "closed") return { ok: false, code: "closed" };
         if (!rehearsal.starts.includes(input.windowStartMs)) return { ok: false, code: "schedule" };
         const existing = rehearsal.windows.get(input.windowStartMs);
-        if (existing === "ok") return { ok: true, admission: "replay" };
+        if (existing === "ok" || existing === "skipped") return { ok: true, admission: "replay" };
         if (existing === "stopped") {
           rehearsal.status = "stopped";
           suspendControl();
@@ -754,7 +764,10 @@ export function memoryStore(seed: {
           suspendControl();
           return "ok";
         }
-        if (rehearsal.starts.every((start) => rehearsal.windows.get(start) === "ok")) {
+        if (rehearsal.starts.every((start) => {
+          const outcome = rehearsal.windows.get(start);
+          return outcome === "ok" || outcome === "skipped";
+        })) {
           rehearsal.status = "closed";
           suspendControl();
         }
@@ -766,9 +779,11 @@ export function memoryStore(seed: {
       if (!rehearsal || parentMint !== seed.parent.mintAddress || scope !== seed.parent.scope) return null;
       return {
         status: rehearsal.status,
+        generation: rehearsal.generation,
         windowStartsMs: [...rehearsal.starts],
         processed: [...rehearsal.windows].map(([windowStartMs, outcome]) => ({ windowStartMs, outcome })),
         blocksSideWork: rehearsal.blockSideWork,
+        claimsAllowed: rehearsal.status === "open",
       };
     },
     async rehearsalBlocksSideWork(parentMint, scope) {

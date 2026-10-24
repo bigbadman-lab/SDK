@@ -110,6 +110,41 @@ function planAllocation(
   return { ok: true, withheld: withheld.toString(), base: base.toString(), holders: split.holders, buyback: split.buyback, deployer: split.deployer };
 }
 
+// Allocated collections and historical recoveries both record reserve already withheld.
+// The same signature is counted once. A recovery is ignored when that receipt was
+// later allocated, so the standing reserve cannot be charged a second time.
+export function recognizedReserveWithheld(input: {
+  reserveLamports: string;
+  allocated: readonly { signature: string; reserveWithheldLamports: string }[];
+  recoveries: readonly { signature: string; reserveWithheldLamports: string }[];
+}): { ok: true; withheld: string } | { ok: false; code: "amount" } {
+  const reserve = parseAmount(input.reserveLamports);
+  if (reserve === null) return { ok: false, code: "amount" };
+  const read = (
+    rows: readonly { signature: string; reserveWithheldLamports: string }[],
+  ): Map<string, bigint> | null => {
+    const amounts = new Map<string, bigint>();
+    for (const row of rows) {
+      const amount = parseAmount(row.reserveWithheldLamports);
+      if (!row.signature || amount === null) return null;
+      const prior = amounts.get(row.signature);
+      if (prior !== undefined && prior !== amount) return null;
+      amounts.set(row.signature, amount);
+    }
+    return amounts;
+  };
+  const allocated = read(input.allocated);
+  const recoveries = read(input.recoveries);
+  if (!allocated || !recoveries) return { ok: false, code: "amount" };
+  let total = BigInt(0);
+  for (const amount of allocated.values()) total += amount;
+  for (const [signature, amount] of recoveries) {
+    if (allocated.has(signature)) continue;
+    total += amount;
+  }
+  return { ok: true, withheld: (total > reserve ? reserve : total).toString() };
+}
+
 export function planIncrementalAllocation(input: {
   grossLamports: string;
   reserveLamports: string;

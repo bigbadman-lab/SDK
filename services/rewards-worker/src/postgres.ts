@@ -1,8 +1,8 @@
 import postgres from "postgres";
 
 import { allocateWindow, windowKey } from "../../../lib/rewards/cycle.ts";
-import { planIncrementalAllocation, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
-import { DEFERRED_BUYBACK_BUDGET, DEFERRED_BUYBACK_KEY, DEFERRED_COLLECTION_SIGNATURE, TREST_REHEARSAL_MINT, validRehearsalStarts, type CollectionRecovery, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
+import { planIncrementalAllocation, recognizedReserveWithheld, type FeeReceipt } from "../../../lib/rewards/ledger.ts";
+import { admitNextRehearsal, DEFERRED_BUYBACK_BUDGET, DEFERRED_BUYBACK_KEY, DEFERRED_COLLECTION_SIGNATURE, TREST_REHEARSAL_MINT, validRehearsalStarts, type CollectionRecovery, type LegacyRecovery, type RegisteredParent, type RewardControl, type RewardsStore, type StoredClaim, type StoredIntent, type StoredSnapshot, type WindowAllocation } from "./store.ts";
 import { matchesLegacyCollection } from "./legacy-recovery.ts";
 
 type Sql = ReturnType<typeof postgres>;
@@ -186,15 +186,26 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           existingWindowKeys: [],
         });
         if (!guard.ok) throw new AllocationStop("duplicate");
-        const withheldRows = await tx<{ withheld: string }[]>`
-          select coalesce(sum(reserve_withheld_lamports), 0)::text as withheld
+        const allocatedReserves = await tx<{ signature: string; reserveWithheldLamports: string }[]>`
+          select signature, reserve_withheld_lamports::text as "reserveWithheldLamports"
           from reward_collections
           where parent_mint_address = ${input.parentMint} and scope = ${input.scope} and allocated_at is not null
         `;
+        const recoveredReserves = await tx<{ signature: string; reserveWithheldLamports: string }[]>`
+          select signature, reserve_withheld_lamports::text as "reserveWithheldLamports"
+          from reward_collection_recoveries
+          where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+        `;
+        const recognized = recognizedReserveWithheld({
+          reserveLamports: input.reserveLamports,
+          allocated: allocatedReserves,
+          recoveries: recoveredReserves,
+        });
+        if (!recognized.ok) throw new AllocationStop("amount");
         const planned = planIncrementalAllocation({
           grossLamports: gross.toString(),
           reserveLamports: input.reserveLamports,
-          reserveWithheldLamports: withheldRows[0]?.withheld ?? "0",
+          reserveWithheldLamports: recognized.withheld,
         });
         if (!planned.ok) throw new AllocationStop("amount");
         let remaining = BigInt(planned.withheld);
@@ -820,9 +831,52 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
     async registerRehearsal(input) {
       const starts = validRehearsalStarts(input.windowStartsMs);
       if (!starts || input.scope !== "test" || input.parentMint !== TREST_REHEARSAL_MINT) return "rejected";
-      if (input.requireUpcoming && (!Number.isInteger(input.nowMs) || starts[0] <= (input.nowMs ?? 0))) return "rejected";
+      const first = starts[0];
+      if (first === undefined || (input.requireUpcoming && (!Number.isInteger(input.nowMs) || first <= (input.nowMs ?? 0)))) return "rejected";
       const generation = input.generation ?? 1;
-      if (!Number.isInteger(generation) || generation < 1 || generation > 100) return "rejected";
+      const existing = await sql<{ generation: number; status: "open" | "stopped" | "closed"; starts: string[] }[]>`
+        select generation, status, window_start_ms::text[] as starts
+        from reward_rehearsals
+        where parent_mint_address = ${input.parentMint} and scope = ${input.scope}
+      `;
+      const unresolved = await sql<{ count: number }[]>`
+        select count(*)::int as count
+        from reward_intents intent
+        where intent.parent_mint_address = ${input.parentMint}
+          and intent.scope = ${input.scope}
+          and intent.status in ('submitted', 'uncertain', 'unreconciled')
+          and not exists (
+            select 1
+            from reward_legacy_recoveries recovery
+            where recovery.parent_mint_address = intent.parent_mint_address
+              and recovery.scope = intent.scope
+              and recovery.idempotency_key = intent.idempotency_key
+              and recovery.signature = intent.signature
+              and recovery.prior_status = 'uncertain'
+          )
+      `;
+      const unallocated = await sql<{ count: number }[]>`
+        select count(*)::int as count
+        from reward_collections
+        where parent_mint_address = ${input.parentMint}
+          and scope = ${input.scope}
+          and status = 'confirmed'
+          and allocated_at is null
+          and allocation_deferred = false
+      `;
+      const decision = admitNextRehearsal({
+        existing: existing.map((row) => ({
+          generation: Number(row.generation),
+          status: row.status,
+          starts: row.starts.map((value) => Number(value)),
+        })),
+        generation,
+        starts,
+        unresolvedIntents: Number(unresolved[0]?.count ?? 0),
+        unallocatedReceipts: Number(unallocated[0]?.count ?? 0),
+      });
+      if (decision === "duplicate") return "duplicate";
+      if (decision !== "ok") return "rejected";
       try {
         const rows = await sql<{ id: string }[]>`
           insert into reward_rehearsals (parent_mint_address, scope, status, window_start_ms, generation)
@@ -830,7 +884,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
             ${input.parentMint},
             'test',
             'open',
-            array[${starts[0]}::bigint, ${starts[1]}::bigint, ${starts[2]}::bigint],
+            ${sql.array(starts)}::bigint[],
             ${generation}
           )
           on conflict (parent_mint_address, scope, generation) do nothing
@@ -864,12 +918,12 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
           returning outcome
         `;
         if (inserted[0]) return { ok: true as const, admission: "execute" as const };
-        const existing = await tx<{ outcome: "claimed" | "ok" | "stopped" }[]>`
+        const existing = await tx<{ outcome: "claimed" | "ok" | "stopped" | "skipped" }[]>`
           select outcome
           from reward_rehearsal_windows
           where rehearsal_id = ${row.id}::uuid and window_start_ms = ${input.windowStartMs}
         `;
-        if (existing[0]?.outcome === "ok") return { ok: true as const, admission: "replay" as const };
+        if (existing[0]?.outcome === "ok" || existing[0]?.outcome === "skipped") return { ok: true as const, admission: "replay" as const };
         if (existing[0]?.outcome === "claimed") return { ok: false as const, code: "claimed" as const };
         await tx`
           update reward_rehearsal_windows
@@ -903,7 +957,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         `;
         const row = rows[0];
         if (!row) return "order" as const;
-        if (row.status === "open" && (input.outcome === "ok" || input.outcome === "stopped")) {
+        if (row.status === "open" && (input.outcome === "ok" || input.outcome === "stopped" || input.outcome === "skipped")) {
           await tx`
             update reward_rehearsal_windows
             set outcome = ${input.outcome}
@@ -922,8 +976,12 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
               select (
                 select count(*)::int
                 from reward_rehearsal_windows
-                where rehearsal_id = ${row.id}::uuid and outcome = 'ok'
-              ) = 3 as ready
+                where rehearsal_id = ${row.id}::uuid and outcome in ('ok', 'skipped')
+              ) = (
+                select cardinality(window_start_ms)
+                from reward_rehearsals
+                where id = ${row.id}::uuid
+              ) as ready
             `;
             if (done[0]?.ready) {
               await tx`
@@ -948,8 +1006,8 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
       });
     },
     async rehearsalState(parentMint, scope) {
-      const rows = await sql<{ id: string; status: "open" | "stopped" | "closed"; starts: string[] }[]>`
-        select id::text, status, window_start_ms::text[] as starts
+      const rows = await sql<{ id: string; generation: number; status: "open" | "stopped" | "closed"; starts: string[] }[]>`
+        select id::text, generation, status, window_start_ms::text[] as starts
         from reward_rehearsals
         where parent_mint_address = ${parentMint} and scope = ${scope}
         order by case when status = 'open' then 0 else 1 end, generation desc
@@ -957,16 +1015,18 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
       `;
       const row = rows[0];
       if (!row) return null;
-      const processed = await sql<{ windowStartMs: string; outcome: "claimed" | "ok" | "stopped" }[]>`
+      const processed = await sql<{ windowStartMs: string; outcome: "claimed" | "ok" | "stopped" | "skipped" }[]>`
         select w.window_start_ms::text as "windowStartMs", w.outcome
         from reward_rehearsal_windows w
         where w.rehearsal_id = ${row.id}::uuid
       `;
       return {
         status: row.status,
+        generation: Number(row.generation),
         windowStartsMs: row.starts.map((value) => Number(value)),
         processed: processed.map((item) => ({ windowStartMs: Number(item.windowStartMs), outcome: item.outcome })),
         blocksSideWork: true,
+        claimsAllowed: row.status === "open",
       };
     },
     async rehearsalBlocksSideWork(parentMint, scope) {

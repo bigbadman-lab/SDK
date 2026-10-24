@@ -229,6 +229,70 @@ async function broadcast(input: {
   return { ok: true, observed: polled.observed, signature: signed.signature };
 }
 
+async function skipMissedRehearsalWindows(input: {
+  nowMs: number;
+  parentMint: string;
+  scope: "test";
+  store: RewardsStore;
+}): Promise<{ ok: true } | { ok: false; code: CycleCode }> {
+  const rehearsal = await input.store.rehearsalState(input.parentMint, input.scope);
+  if (!rehearsal || rehearsal.status !== "open") return { ok: true };
+  const current = accountingWindow(input.nowMs);
+  if (!current) return { ok: false, code: "schedule" };
+  const known = new Map(rehearsal.processed.map((row) => [row.windowStartMs, row.outcome]));
+  const intents = await input.store.intents(input.parentMint, input.scope);
+  for (const start of rehearsal.windowStartsMs) {
+    if (start >= current.startMs) break;
+    const outcome = known.get(start);
+    if (outcome === "ok" || outcome === "skipped") continue;
+    if (outcome === "stopped") return { ok: false, code: "stopped" };
+    const collect = intents.find((intent) => intent.idempotencyKey === `collect-${start}`);
+    const unsafe = collect !== undefined && (
+      collect.status === "submitted"
+      || collect.status === "uncertain"
+      || collect.status === "unreconciled"
+      || collect.status === "failed"
+    );
+    if (unsafe || outcome === "claimed") {
+      if (!outcome) {
+        const admission = await input.store.claimRehearsalWindow({
+          parentMint: input.parentMint,
+          scope: input.scope,
+          windowStartMs: start,
+        });
+        if (!admission.ok && admission.code !== "claimed") {
+          return { ok: false, code: admission.code === "absent" ? "rehearsal" : admission.code };
+        }
+      }
+      await input.store.finishRehearsalWindow({
+        parentMint: input.parentMint,
+        scope: input.scope,
+        windowStartMs: start,
+        outcome: "stopped",
+      });
+      return { ok: false, code: unsafe ? "uncertain" : "stopped" };
+    }
+    const admission = await input.store.claimRehearsalWindow({
+      parentMint: input.parentMint,
+      scope: input.scope,
+      windowStartMs: start,
+    });
+    if (!admission.ok) {
+      if (admission.code === "claimed") return { ok: false, code: "unreconciled" };
+      return { ok: false, code: admission.code === "absent" ? "rehearsal" : admission.code };
+    }
+    if (admission.admission === "replay") continue;
+    const finished = await input.store.finishRehearsalWindow({
+      parentMint: input.parentMint,
+      scope: input.scope,
+      windowStartMs: start,
+      outcome: "skipped",
+    });
+    if (finished !== "ok") return { ok: false, code: "unreconciled" };
+  }
+  return { ok: true };
+}
+
 export async function runCycle(input: {
   nowMs: number;
   holder: string;
@@ -261,6 +325,15 @@ export async function runCycle(input: {
   const lease = await input.store.tryLock(parent.mintAddress, parent.scope, input.holder, input.nowMs);
   if (lease === "locked") return { ok: false, code: "locked" };
   try {
+    const skipped = await skipMissedRehearsalWindows({
+      nowMs: input.nowMs,
+      parentMint: parent.mintAddress,
+      scope: "test",
+      store: input.store,
+    });
+    if (!skipped.ok) return skipped;
+    const rehearsed = await input.store.rehearsalState(parent.mintAddress, parent.scope);
+    if (rehearsed && rehearsed.status !== "open") return { ok: false, code: rehearsed.status };
     const admission = await input.store.claimRehearsalWindow({
       parentMint: parent.mintAddress,
       scope: parent.scope,
@@ -536,7 +609,7 @@ export async function submitClaim(input: {
   }
   if (input.scope === "test") {
     const rehearsal = await input.store.rehearsalState(input.parentMint, input.scope);
-    if (!rehearsal || rehearsal.blocksSideWork) return { ok: false, code: "rehearsal" };
+    if (!rehearsal || !rehearsal.claimsAllowed) return { ok: false, code: "rehearsal" };
   }
   const bound = parseBoundClaim(input.message);
   const expected = bound

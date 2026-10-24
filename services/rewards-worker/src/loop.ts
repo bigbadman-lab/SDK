@@ -92,7 +92,7 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
       if (!parent.ok) return;
       const rehearsal = await store.rehearsalState(parent.mintAddress, "test");
-      if (!rehearsal || rehearsal.blocksSideWork) return;
+      if (!rehearsal || !rehearsal.claimsAllowed) return;
       const challenges = await sql<
         {
           wallet_address: string;

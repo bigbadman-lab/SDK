@@ -60,7 +60,8 @@ test("a suspended tick performs no claim or child signing", async () => {
 test("the rewards loop fences claims and child distributions and does not sweep", async () => {
   const source = await readFile(new URL("./loop.ts", import.meta.url), "utf8");
   assert.equal(source.split("rehearsalState").length - 1, 2);
-  assert.equal(source.split("blocksSideWork").length - 1, 2);
+  assert.equal(source.split("claimsAllowed").length - 1, 1);
+  assert.equal(source.split("blocksSideWork").length - 1, 1);
   assert.equal(source.includes("kill-wallet"), false);
   assert.equal(source.includes("emergency_sweeps"), false);
 });

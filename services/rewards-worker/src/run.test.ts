@@ -1194,18 +1194,21 @@ test("three empty windows close the rehearsal and a fourth key does not broadcas
   assert.equal((await env.store.rehearsalState(TREST, "test"))?.processed.length, 3);
 });
 
-test("a skipped authorised key is not replaced and an outside key does not count", async () => {
+test("a skipped authorised key is accounted and an outside key does not count", async () => {
   const env = harness({ vaultLamports: "890880" });
   const start = NOW - (NOW % WINDOW);
   const third = await cycleAt(env, start + 2 * WINDOW);
   assert.equal(third.ok, true);
+  const state = await env.store.rehearsalState(TREST, "test");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start)?.outcome, "skipped");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start + WINDOW)?.outcome, "skipped");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start + 2 * WINDOW)?.outcome, "ok");
+  assert.equal(state?.status, "closed");
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
   const outside = await cycleAt(env, start + 3 * WINDOW);
   assert.equal(outside.ok, false);
   if (outside.ok) return;
-  assert.equal(outside.code, "schedule");
-  const state = await env.store.rehearsalState(TREST, "test");
-  assert.equal(state?.processed.length, 1);
-  assert.equal(state?.processed[0]?.windowStartMs, start + 2 * WINDOW);
+  assert.equal(outside.code, "suspended");
   assert.equal(env.submits.length, 0);
 });
 
@@ -1340,7 +1343,7 @@ test("a failed second observation does not create a buyback or another collectio
   assert.equal((await env.store.intents(TREST, "test")).some((intent) => intent.kind === "buyback"), false);
 });
 
-test("claims stay unsigned while a rehearsal blocks side work", async () => {
+test("an open rehearsal can pay a holder claim while child side work stays blocked", async () => {
   const env = harness({ blockSideWork: true });
   const funded = await cycle(env);
   assert.equal(funded.ok, true);
@@ -1372,10 +1375,10 @@ test("claims stay unsigned while a rehearsal blocks side work", async () => {
     store: env.store,
     chain: env.chain,
   });
-  assert.equal(claim.ok, false);
-  if (claim.ok) return;
-  assert.equal(claim.code, "rehearsal");
-  assert.equal(env.submits.length, before);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.blocksSideWork, true);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.claimsAllowed, true);
+  assert.equal(claim.ok, true);
+  assert.equal(env.submits.length, before + 1);
 });
 
 test("a delayed confirmation is observed without a second broadcast", async () => {
@@ -1689,3 +1692,353 @@ test("a confirmed collection is reconciled once after a restart and is not broad
   assert.equal((await env.store.receipts(TREST, "test")).length, 1);
 });
 
+function sixStarts(start: number): number[] {
+  return Array.from({ length: 6 }, (_, index) => start + index * WINDOW);
+}
+
+test("six empty or fee windows close once and a seventh key does not broadcast", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "890880" });
+  const start = NOW - (NOW % WINDOW);
+  const starts = sixStarts(start);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: starts,
+    requireUpcoming: false,
+    blockSideWork: true,
+  }), "ok");
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.blocksSideWork, true);
+  const claim = await submitClaim({
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    amount: "1",
+    idempotencyKey: "claim-during-six",
+    message: "unsigned",
+    signature: "unsigned",
+    store: env.store,
+    chain: env.chain,
+  });
+  assert.equal(claim.ok, false);
+  if (claim.ok) return;
+  assert.equal(claim.code, "ownership");
+  for (const offset of [0, WINDOW]) {
+    const idle = await cycleAt(env, start + offset);
+    assert.equal(idle.ok, true);
+    if (!idle.ok) return;
+    assert.equal(idle.stage, "idle");
+  }
+  const replay = await cycleAt(env, start + WINDOW + 1_000);
+  assert.equal(replay.ok, true);
+  assert.equal(env.submits.length, 0);
+  env.setVault("1890880");
+  const funded = await cycleAt(env, start + 2 * WINDOW);
+  assert.equal(funded.ok, true);
+  if (!funded.ok) return;
+  assert.equal(funded.stage, "collected");
+  const collected = env.submits.length;
+  assert.equal(collected > 0, true);
+  const repeated = await cycleAt(env, start + 2 * WINDOW + 1_000);
+  assert.equal(repeated.ok, true);
+  assert.equal(env.submits.length, collected);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
+  env.setVault("890880");
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "open");
+  for (const offset of [3, 4, 5]) {
+    const idle = await cycleAt(env, start + offset * WINDOW);
+    assert.equal(idle.ok, true);
+    if (!idle.ok) return;
+    assert.equal(idle.stage, "idle");
+  }
+  assert.equal(env.submits.length, collected);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "closed");
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.processed.length, 6);
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
+  const seventh = await cycleAt(env, start + 6 * WINDOW);
+  assert.equal(seventh.ok, false);
+  if (seventh.ok) return;
+  assert.equal(seventh.code, "suspended");
+  const control = await env.store.control(TREST, "test");
+  assert.ok(control);
+  control.suspended = false;
+  const reopened = await cycleAt(env, start + 6 * WINDOW);
+  assert.equal(reopened.ok, false);
+  if (reopened.ok) return;
+  assert.equal(reopened.code, "closed");
+  assert.equal(env.submits.length, collected);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.generation, 1);
+});
+
+test("an uncertain collection stops a six-window rehearsal before the next window", async () => {
+  const env = harness({ rehearsal: false, submit: "uncertain" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: sixStarts(start),
+    requireUpcoming: false,
+  }), "ok");
+  const first = await cycleAt(env, start);
+  assert.equal(first.ok, false);
+  if (first.ok) return;
+  assert.equal(first.code, "uncertain");
+  const submits = env.submits.length;
+  const later = await cycleAt(env, start + WINDOW);
+  assert.equal(later.ok, false);
+  if (later.ok) return;
+  assert.equal(later.code, "suspended");
+  assert.equal(env.submits.length, submits);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "stopped");
+});
+
+test("a delayed confirmation in a six-window rehearsal does not broadcast twice", async () => {
+  const env = harness({ rehearsal: false, lagReads: 2, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: sixStarts(start),
+    requireUpcoming: false,
+  }), "ok");
+  const first = await cycleAt(env, start);
+  assert.equal(first.ok, true);
+  assert.equal((await env.store.receipts(TREST, "test")).length, 1);
+  const submits = env.submits.length;
+  env.setVault("890880");
+  const second = await cycleAt(env, start + WINDOW);
+  assert.equal(second.ok, true);
+  assert.equal(env.submits.length, submits);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "open");
+});
+
+test("a second worker cannot enter a locked six-window cycle", async () => {
+  const env = harness({ rehearsal: false });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: sixStarts(start),
+    requireUpcoming: false,
+  }), "ok");
+  let release: (value: SubmitResult) => void = () => undefined;
+  env.chain.submit = (wire) => new Promise((resolve) => {
+    env.submits.push(wire);
+    release = resolve;
+  });
+  const first = cycleAt(env, start);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const second = await runCycle({
+    nowMs: start,
+    holder: "worker-b",
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    store: env.store,
+    chain: env.chain,
+  });
+  assert.equal(second.ok, false);
+  if (second.ok) return;
+  assert.equal(second.code, "locked");
+  release({ status: "uncertain", code: "timeout", detail: "timeout" });
+  await first;
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "stopped");
+});
+
+test("missed windows are skipped in order and are not collected twice", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  const starts = [start, start + WINDOW, start + 2 * WINDOW];
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: starts,
+    requireUpcoming: false,
+  }), "ok");
+  const outside = await cycleAt(env, start - WINDOW);
+  assert.equal(outside.ok, false);
+  if (!outside.ok) assert.equal(outside.code, "schedule");
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.processed.length, 0);
+  const current = await cycleAt(env, start + WINDOW);
+  assert.equal(current.ok, true);
+  const state = await env.store.rehearsalState(TREST, "test");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start)?.outcome, "skipped");
+  assert.equal(env.submits.length, 1);
+  const intents = await env.store.intents(TREST, "test");
+  assert.equal(intents.some((intent) => intent.idempotencyKey === `collect-${start}`), false);
+  assert.equal(intents.some((intent) => intent.idempotencyKey === `collect-${start + WINDOW}`), true);
+  const repeated = await cycleAt(env, start + WINDOW + 1_000);
+  assert.equal(repeated.ok, true);
+  assert.equal(env.submits.length, 1);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.processed.filter((row) => row.outcome === "skipped").length, 1);
+});
+
+test("several missed windows stay skipped and a later restart does not recast them", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: [start, start + WINDOW, start + 2 * WINDOW],
+    requireUpcoming: false,
+  }), "ok");
+  const first = await cycleAt(env, start);
+  assert.equal(first.ok, true);
+  const collected = env.submits.length;
+  env.setVault("890880");
+  const later = await cycleAt(env, start + 2 * WINDOW);
+  assert.equal(later.ok, true);
+  const state = await env.store.rehearsalState(TREST, "test");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start)?.outcome, "ok");
+  assert.equal(state?.processed.find((row) => row.windowStartMs === start + WINDOW)?.outcome, "skipped");
+  assert.equal(state?.status, "closed");
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
+  assert.equal(env.submits.length, collected);
+  const replay = await cycleAt(env, start + 2 * WINDOW + 1_000);
+  assert.equal(replay.ok, false);
+  if (!replay.ok) assert.equal(replay.code, "suspended");
+  assert.equal(env.submits.length, collected);
+});
+
+test("an uncertain missed collection stops the rehearsal before a later window", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: [start, start + WINDOW, start + 2 * WINDOW],
+    requireUpcoming: false,
+  }), "ok");
+  assert.equal(await env.store.recordIntent({
+    idempotencyKey: `collect-${start}`,
+    parentMint: TREST,
+    scope: "test",
+    kind: "collect",
+    amountLamports: "0",
+    tokenAmount: null,
+    messageSha256: null,
+  }), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", `collect-${start}`, "submitted", "uncertain-signature"), "ok");
+  assert.equal(await env.store.markIntent(TREST, "test", `collect-${start}`, "uncertain", "uncertain-signature"), "ok");
+  const later = await cycleAt(env, start + WINDOW);
+  assert.equal(later.ok, false);
+  if (!later.ok) assert.equal(later.code, "uncertain");
+  assert.equal(env.submits.length, 0);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "stopped");
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
+});
+
+test("the final boundary closes the rehearsal without another cycle", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: [start, start + WINDOW, start + 2 * WINDOW],
+    requireUpcoming: false,
+  }), "ok");
+  const past = await cycleAt(env, start + 3 * WINDOW);
+  assert.equal(past.ok, false);
+  if (!past.ok) assert.equal(past.code, "closed");
+  assert.equal(env.submits.length, 0);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.processed.every((row) => row.outcome === "skipped"), true);
+  assert.equal((await env.store.control(TREST, "test"))?.suspended, true);
+  const again = await cycleAt(env, start + 4 * WINDOW);
+  assert.equal(again.ok, false);
+  if (!again.ok) assert.equal(again.code, "suspended");
+  assert.equal(env.submits.length, 0);
+});
+
+test("rehearsal claims follow the open-window policy and keep the signer gate", async () => {
+  const env = harness({ rehearsal: false, vaultLamports: "1890880" });
+  const start = NOW - (NOW % WINDOW);
+  assert.equal(await env.store.registerRehearsal({
+    parentMint: TREST,
+    scope: "test",
+    windowStartsMs: [start, start + WINDOW, start + 2 * WINDOW],
+    requireUpcoming: false,
+    blockSideWork: true,
+  }), "ok");
+  const funded = await cycleAt(env, start);
+  assert.equal(funded.ok, true);
+  const message = claimAuthorizationMessage({
+    scope: "test",
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol",
+    idempotencyKey: "claim-policy-00000001",
+    amount: "1",
+  });
+  assert.ok(message);
+  const signature = bs58.encode(nacl.sign.detached(new TextEncoder().encode(message), bs58.decode(env.holder.secret)));
+  const claim = {
+    loopEnabled: true,
+    authorised: true,
+    suspended: false,
+    secret: env.key.secret,
+    expectedAddress: env.key.address,
+    scope: "test" as const,
+    parentMint: TREST,
+    claimant: env.holder.address,
+    asset: "sol" as const,
+    amount: "1",
+    idempotencyKey: "claim-policy-00000001",
+    message,
+    signature,
+    store: env.store,
+    chain: env.chain,
+  };
+  const suspended = await submitClaim({ ...claim, suspended: true });
+  assert.equal(suspended.ok, false);
+  if (!suspended.ok) assert.equal(suspended.code, "inactive");
+  const invalid = await submitClaim({ ...claim, idempotencyKey: "claim-policy-00000002", signature: "unsigned", message: "unsigned" });
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.equal(invalid.code, "ownership");
+  const tooMuch = await submitClaim({
+    ...claim,
+    idempotencyKey: "claim-policy-00000003",
+    amount: "999999999999",
+    message: claimAuthorizationMessage({
+      scope: "test",
+      parentMint: TREST,
+      claimant: env.holder.address,
+      asset: "sol",
+      idempotencyKey: "claim-policy-00000003",
+      amount: "999999999999",
+    }) ?? "",
+    signature: bs58.encode(nacl.sign.detached(new TextEncoder().encode(claimAuthorizationMessage({
+      scope: "test",
+      parentMint: TREST,
+      claimant: env.holder.address,
+      asset: "sol",
+      idempotencyKey: "claim-policy-00000003",
+      amount: "999999999999",
+    }) ?? ""), bs58.decode(env.holder.secret))),
+  });
+  assert.equal(tooMuch.ok, false);
+  if (!tooMuch.ok) assert.equal(tooMuch.code, "amount");
+  const before = env.submits.length;
+  const paid = await submitClaim(claim);
+  assert.equal(paid.ok, true);
+  const duplicate = await submitClaim(claim);
+  assert.equal(duplicate.ok, false);
+  if (!duplicate.ok) assert.equal(duplicate.code, "duplicate");
+  assert.equal(env.submits.length, before + 1);
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.blocksSideWork, true);
+  env.setVault("890880");
+  for (const windowStartMs of [start + WINDOW, start + 2 * WINDOW]) {
+    const idle = await cycleAt(env, windowStartMs);
+    assert.equal(idle.ok, true);
+  }
+  assert.equal((await env.store.rehearsalState(TREST, "test"))?.status, "closed");
+  const closed = await submitClaim({ ...claim, idempotencyKey: "claim-policy-00000004", amount: "1" });
+  assert.equal(closed.ok, false);
+  if (!closed.ok) assert.equal(closed.code, "rehearsal");
+});

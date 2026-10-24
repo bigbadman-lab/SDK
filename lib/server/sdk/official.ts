@@ -7,6 +7,7 @@ import {
   type SdkAllocation,
   type SdkSummary,
 } from "@/lib/sdk/official";
+import type { RewardScope } from "@/lib/rewards/ledger";
 import { getSql } from "@/lib/server/db";
 
 export type OfficialSdk =
@@ -34,6 +35,7 @@ export async function loadOfficialSdk(): Promise<OfficialSdk> {
 export async function loadHolderAllocations(
   mint: string,
   cursor: { start: string; id: string } | null,
+  scope: RewardScope = "production",
 ): Promise<{ ok: true; summary: SdkSummary; rows: SdkAllocation[]; nextCursor: string | null } | { ok: false }> {
   try {
     const sql = getSql();
@@ -47,7 +49,7 @@ export async function loadHolderAllocations(
         select window_start, window_end
         from reward_windows
         where parent_mint_address = ${mint}
-          and scope = 'production'
+          and scope = ${scope}
           and status = 'allocated'
       )
       select
@@ -57,7 +59,7 @@ export async function loadHolderAllocations(
           join completed
             on completed.window_start = snapshot.window_start
           where snapshot.parent_mint_address = ${mint}
-            and snapshot.scope = 'production'
+            and snapshot.scope = ${scope}
         ), '0') as "totalLamports",
         coalesce((
           select sum(snapshot.sol_lamports)::text
@@ -65,7 +67,7 @@ export async function loadHolderAllocations(
           join completed
             on completed.window_start = snapshot.window_start
           where snapshot.parent_mint_address = ${mint}
-            and snapshot.scope = 'production'
+            and snapshot.scope = ${scope}
             and snapshot.window_start >= now() - interval '24 hours'
         ), '0') as "dayLamports",
         (select window_start from completed order by window_start desc limit 1) as "latestWindowStart",
@@ -73,8 +75,8 @@ export async function loadHolderAllocations(
     `;
     const summaryRow = summaryRows[0];
     const page = cursor
-      ? await allocationPage(sql, mint, cursor)
-      : await allocationPage(sql, mint, null);
+      ? await allocationPage(sql, mint, cursor, scope)
+      : await allocationPage(sql, mint, null, scope);
     const visible = page.slice(0, SDK_ALLOCATION_PAGE);
     const rows = visible.flatMap((row) => {
       const windowStart = stamp(row.windowStart);
@@ -121,46 +123,47 @@ function allocationPage(
   sql: ReturnType<typeof getSql>,
   mint: string,
   cursor: { start: string; id: string } | null,
+  scope: RewardScope,
 ): Promise<AllocationRow[]> {
   if (!cursor) {
     return sql<AllocationRow[]>`
       select
         snapshot.id::text as id,
-        window.window_start as "windowStart",
-        window.window_end as "windowEnd",
+        reward_window.window_start as "windowStart",
+        reward_window.window_end as "windowEnd",
         snapshot.owner_address as owner,
         snapshot.balance,
         snapshot.sol_lamports::text as "solLamports"
       from reward_snapshots snapshot
-      join reward_windows window
-        on window.parent_mint_address = snapshot.parent_mint_address
-       and window.scope = snapshot.scope
-       and window.window_start = snapshot.window_start
+      join reward_windows reward_window
+        on reward_window.parent_mint_address = snapshot.parent_mint_address
+       and reward_window.scope = snapshot.scope
+       and reward_window.window_start = snapshot.window_start
       where snapshot.parent_mint_address = ${mint}
-        and snapshot.scope = 'production'
-        and window.status = 'allocated'
-      order by window.window_start desc, snapshot.id desc
+        and snapshot.scope = ${scope}
+        and reward_window.status = 'allocated'
+      order by reward_window.window_start desc, snapshot.id desc
       limit ${SDK_ALLOCATION_PAGE + 1}
     `;
   }
   return sql<AllocationRow[]>`
     select
       snapshot.id::text as id,
-      window.window_start as "windowStart",
-      window.window_end as "windowEnd",
+      reward_window.window_start as "windowStart",
+      reward_window.window_end as "windowEnd",
       snapshot.owner_address as owner,
       snapshot.balance,
       snapshot.sol_lamports::text as "solLamports"
     from reward_snapshots snapshot
-    join reward_windows window
-      on window.parent_mint_address = snapshot.parent_mint_address
-     and window.scope = snapshot.scope
-     and window.window_start = snapshot.window_start
+    join reward_windows reward_window
+      on reward_window.parent_mint_address = snapshot.parent_mint_address
+     and reward_window.scope = snapshot.scope
+     and reward_window.window_start = snapshot.window_start
     where snapshot.parent_mint_address = ${mint}
-      and snapshot.scope = 'production'
-      and window.status = 'allocated'
-      and (window.window_start, snapshot.id) < (${cursor.start}::timestamptz, ${cursor.id}::uuid)
-    order by window.window_start desc, snapshot.id desc
+      and snapshot.scope = ${scope}
+      and reward_window.status = 'allocated'
+      and (reward_window.window_start, snapshot.id) < (${cursor.start}::timestamptz, ${cursor.id}::uuid)
+    order by reward_window.window_start desc, snapshot.id desc
     limit ${SDK_ALLOCATION_PAGE + 1}
   `;
 }
