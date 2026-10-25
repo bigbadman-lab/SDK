@@ -55,15 +55,16 @@ type LaunchQuery = {
   rehearsal?: string;
 };
 
-export default function LaunchPage({
+export default async function LaunchPage({
   searchParams,
 }: {
   searchParams: Promise<LaunchQuery>;
-}): ReactNode {
+}): Promise<ReactNode> {
+  const account = await getCurrentAccount();
   return (
     <>
       <main id="main-content" className={mainClass}>
-        <LaunchIntro />
+        <LaunchIntro guide={account === null} />
         <Suspense fallback={<LaunchBodySkeleton />}>
           <LaunchBody searchParams={searchParams} />
         </Suspense>

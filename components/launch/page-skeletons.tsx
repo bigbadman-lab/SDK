@@ -56,27 +56,31 @@ const LAUNCH_STEPS = [
   },
 ] as const;
 
-export function LaunchIntro(): ReactNode {
+export function LaunchIntro({ guide = true }: { guide?: boolean }): ReactNode {
   return (
     <>
       <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">Token launchpad</p>
       <h1 className="mt-3 font-display text-[48px] leading-[1.08] tracking-[-1.4px] max-[561px]:text-[36px]">
         Launch your next token.
       </h1>
-      <p className="mt-4 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
-        Turn a working SDK into a token-powered application on Solana. Choose your software, customise your token and launch it paired with $SDK.
-      </p>
-      <ol className="mt-8 grid gap-3">
-        {LAUNCH_STEPS.map((step) => (
-          <li key={step.index} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border border-solid border-border bg-card px-4 py-4">
-            <span className="font-mono text-[10px] text-accent-ink">{step.index}</span>
-            <div className="min-w-0">
-              <h2 className="text-[16px] leading-[1.3]">{step.title}</h2>
-              <p className="mt-1 text-[14px] leading-[1.55] text-muted-foreground">{step.body}</p>
-            </div>
-          </li>
-        ))}
-      </ol>
+      {guide ? (
+        <>
+          <p className="mt-4 max-w-150 text-[16px] leading-[1.6] text-muted-foreground">
+            Turn a working SDK into a token-powered application on Solana. Choose your software, customise your token and launch it paired with $SDK.
+          </p>
+          <ol className="mt-8 grid gap-3">
+            {LAUNCH_STEPS.map((step) => (
+              <li key={step.index} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border border-solid border-border bg-card px-4 py-4">
+                <span className="font-mono text-[10px] text-accent-ink">{step.index}</span>
+                <div className="min-w-0">
+                  <h2 className="text-[16px] leading-[1.3]">{step.title}</h2>
+                  <p className="mt-1 text-[14px] leading-[1.55] text-muted-foreground">{step.body}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
     </>
   );
 }
@@ -147,7 +151,7 @@ export function LaunchLoading(): ReactNode {
   return (
     <>
       <main id="main-content" className={launchMain}>
-        <LaunchIntro />
+        <LaunchIntro guide={false} />
         <LaunchBodySkeleton />
       </main>
       <Footer />
