@@ -41,7 +41,7 @@ import {
 } from "react";
 
 const fieldClass =
-  "w-full rounded-lg border border-solid border-border bg-background px-3 py-2 text-[15px] text-foreground";
+  "w-full rounded-lg border border-solid border-border bg-background px-3 py-2 text-[16px] text-foreground";
 
 export function LaunchForm({
   source,

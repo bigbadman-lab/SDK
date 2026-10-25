@@ -100,6 +100,7 @@
   button,
   a,
   input,
+  textarea,
   summary,
   select {
     -webkit-tap-highlight-color: transparent;

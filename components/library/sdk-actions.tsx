@@ -103,7 +103,7 @@ export function LibraryActions({
               <select
                 value={values[field.key] ?? "false"}
                 onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
-                className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-[14px] text-foreground normal-case"
+                className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-[16px] text-foreground normal-case"
               >
                 <option value="false">false</option>
                 <option value="true">true</option>
@@ -112,7 +112,7 @@ export function LibraryActions({
               <select
                 value={values[field.key] ?? ""}
                 onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
-                className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-[14px] text-foreground normal-case"
+                className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-[16px] text-foreground normal-case"
               >
                 <option value="">Choose</option>
                 {field.values.map((item) => (
@@ -126,13 +126,13 @@ export function LibraryActions({
                 value={values[field.key] ?? ""}
                 rows={3}
                 onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
-                className="rounded-lg border border-solid border-border bg-background px-3 py-2 font-sans text-[14px] text-foreground normal-case"
+                className="rounded-lg border border-solid border-border bg-background px-3 py-2 font-sans text-[16px] text-foreground normal-case"
               />
             ) : (
               <input
                 value={values[field.key] ?? ""}
                 onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))}
-                className="rounded-lg border border-solid border-border bg-background px-3 py-2 font-sans text-[14px] text-foreground normal-case"
+                className="rounded-lg border border-solid border-border bg-background px-3 py-2 font-sans text-[16px] text-foreground normal-case"
               />
             )}
           </label>

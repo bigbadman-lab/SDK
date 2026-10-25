@@ -78,7 +78,7 @@ export function LaunchSelector({
             name="q"
             defaultValue={query.q}
             placeholder="Search by name or description"
-            className="min-w-0 flex-1 rounded-lg border border-solid border-border bg-background px-3 py-2 text-[15px]"
+            className="min-w-0 flex-1 rounded-lg border border-solid border-border bg-background px-3 py-2 text-[16px]"
           />
           <button
             type="submit"
