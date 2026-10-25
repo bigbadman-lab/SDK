@@ -1,8 +1,8 @@
 {
   "name": "sdk-universal-client",
   "version": "0.1.0",
-  "description": "Universal client for the SDK execution API. This package is not published to NPM.",
-  "license": "UNLICENSED",
+  "description": "Universal client for executing published SDKs through the SDK API.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,12 +12,26 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": ["dist", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bigbadman-lab/SDK.git",
+    "directory": "packages/sdk-client"
+  },
+  "homepage": "https://sdk.fund",
+  "bugs": {
+    "url": "https://github.com/bigbadman-lab/SDK/issues"
+  },
   "engines": {
     "node": ">=20.9.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test test/*.test.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^5"
   }
 }
