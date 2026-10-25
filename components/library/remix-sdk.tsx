@@ -1,5 +1,6 @@
 "use client";
 
+import { homePrimaryButton } from "@/components/home/chrome";
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { useRouter } from "next/navigation";
 import { createContext, useContext, useState, type ReactNode } from "react";
@@ -71,7 +72,11 @@ export function RemixButton({ place }: { place: "top" | "bottom" }): ReactNode {
       type="button"
       disabled={remix.pending}
       onClick={() => remix.remix(place)}
-      className="rounded-lg border border-solid border-accent bg-accent px-4 py-3 font-mono text-[11px] tracking-[0.04em] text-accent-foreground uppercase disabled:opacity-60"
+      className={
+        place === "top"
+          ? `${homePrimaryButton} disabled:pointer-events-none disabled:opacity-60`
+          : "rounded-lg border border-solid border-accent bg-accent px-4 py-3 font-mono text-[11px] tracking-[0.04em] text-accent-foreground uppercase disabled:opacity-60"
+      }
     >
       {remix.pending && remix.place === place ? "Opening" : "Remix SDK"}
     </button>
