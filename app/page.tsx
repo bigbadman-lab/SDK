@@ -6,7 +6,6 @@ import { LibraryShowcase } from "@/components/home/library-showcase";
 import { FinalCta } from "@/components/final-cta";
 import { Footer } from "@/components/footer";
 import { Hero } from "@/components/hero";
-import { Reveal } from "@/components/reveal";
 import { StructuredData } from "@/components/structured-data";
 import { createMetadata, siteConfig } from "@/lib/metadata";
 import type { Metadata } from "next";
@@ -34,13 +33,9 @@ export default function HomePage(): ReactNode {
         <Hero />
         <BuilderIntro />
         <LibraryShowcase />
-        <Reveal>
-          <HowItWorks />
-        </Reveal>
+        <HowItWorks />
         <LaunchShowcase />
-        <Reveal>
-          <Ecosystem />
-        </Reveal>
+        <Ecosystem />
         <FinalCta />
       </main>
       <Footer />
