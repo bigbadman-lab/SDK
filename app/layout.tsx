@@ -1,3 +1,4 @@
+import { MobileTabBar } from "@/components/mobile-tab-bar";
 import { Nav } from "@/components/nav";
 import { Providers } from "@/components/providers";
 import { SessionTouch } from "@/components/session-touch";
@@ -36,6 +37,7 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -49,12 +51,13 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${displaySerif.variable} dark`}
       suppressHydrationWarning
     >
-      <body className="min-h-screen bg-background font-sans text-foreground antialiased [&_section[id]]:scroll-mt-23">
+      <body className="min-h-screen bg-background font-sans text-foreground antialiased max-[800px]:pb-[calc(6rem+env(safe-area-inset-bottom))] [&_section[id]]:scroll-mt-23">
         <Providers>
           <SkipToContent />
           <SessionTouch />
           <Nav />
           {children}
+          <MobileTabBar />
           <ThemeSwitch />
         </Providers>
       </body>

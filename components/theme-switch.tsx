@@ -23,7 +23,7 @@ export function ThemeSwitch(): ReactNode {
   const systemReduced = useSystemReducedMotion();
   return (
     <div
-      className="fixed right-4 bottom-4 z-65 flex items-center gap-0.5 rounded-lg border border-solid border-border bg-card p-0.75 max-[561px]:right-3 max-[561px]:bottom-3"
+      className="fixed right-4 bottom-4 z-65 flex items-center gap-0.5 rounded-lg border border-solid border-border bg-card p-0.75 max-[800px]:bottom-[calc(5.5rem+env(safe-area-inset-bottom))] max-[561px]:right-3"
       aria-label="Appearance preferences"
     >
       <button
