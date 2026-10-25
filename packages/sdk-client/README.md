@@ -65,7 +65,7 @@ Prompt Architect is the official SDK in that example. For a community SDK, copy 
 
 ## Errors
 
-Failed calls throw `SDKClientError`. `code` is stable:
+Failed calls throw `SDKClientError`. Show `message` to the developer. `code` is stable:
 
 - `missing_api_key`
 - `invalid_api_key`

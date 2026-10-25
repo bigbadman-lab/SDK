@@ -4,7 +4,9 @@ import test from "node:test";
 import { runBlueprint } from "../blueprint/execute.ts";
 import { OFFICIAL_SDKS } from "../library/official.ts";
 import {
+  API_COPY,
   activeKeySlot,
+  apiError,
   apiQuota,
   failureStatus,
   keyLookup,
@@ -12,6 +14,34 @@ import {
   publicExecution,
   publishedVersionChoice,
 } from "./contract.ts";
+
+test("public API messages keep their codes and statuses", () => {
+  const cases: Array<[Parameters<typeof apiError>[0], number, string]> = [
+    ["missing_api_key", 401, API_COPY.missingApiKey],
+    ["invalid_api_key", 401, API_COPY.invalidApiKey],
+    ["revoked_api_key", 401, API_COPY.revokedApiKey],
+    ["unauthenticated", 401, "Sign in to manage API keys."],
+    ["invalid_input", 400, API_COPY.invalidSdkInput],
+    ["sdk_not_found", 404, API_COPY.sdkNotFound],
+    ["sdk_unavailable", 404, API_COPY.sdkUnavailable],
+    ["version_not_found", 404, API_COPY.versionNotFound],
+    ["quota_exceeded", 429, API_COPY.quotaExceeded],
+    ["concurrency_limit", 429, API_COPY.concurrencyLimit],
+    ["spend_limit", 429, API_COPY.spendLimit],
+    ["provider_failure", 502, API_COPY.providerFailure],
+    ["timeout", 504, API_COPY.timeout],
+    ["unavailable", 503, API_COPY.unavailable],
+    ["internal_error", 500, API_COPY.internalError],
+    ["key_limit", 409, API_COPY.keyLimit],
+    ["key_not_found", 404, API_COPY.keyNotFound],
+  ];
+  for (const [code, status, message] of cases) {
+    assert.deepEqual(apiError(code), { status, code, message });
+  }
+  assert.equal(API_COPY.quotaExceeded.includes("100"), true);
+  assert.equal(API_COPY.invalidJson.includes("valid JSON"), true);
+  assert.equal(API_COPY.requestShape.includes("SDK ID"), true);
+});
 
 test("api keys are accepted only as a bearer secret", () => {
   assert.equal(presentedKey(null).ok, false);

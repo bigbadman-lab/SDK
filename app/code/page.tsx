@@ -127,20 +127,20 @@ npm pack`}</pre>
         <p>Execution is not unlimited, and a request is not guaranteed to complete.</p>
         <h3 className="mt-8 font-mono text-[11px] tracking-[0.06em] text-foreground uppercase">Error reference</h3>
         <dl className="mt-4 grid gap-3 text-[14px] leading-[1.6] text-muted-foreground">
-          <ErrorCode code="missing_api_key" detail="Send the API key as Authorization: Bearer." />
-          <ErrorCode code="invalid_api_key" detail="The key is missing, malformed, or does not match an account." />
-          <ErrorCode code="revoked_api_key" detail="The key was revoked and can no longer run SDKs." />
-          <ErrorCode code="sdk_not_found" detail="That SDK ID does not exist." />
-          <ErrorCode code="sdk_unavailable" detail="That SDK is not published." />
-          <ErrorCode code="version_not_found" detail="That published version does not exist." />
-          <ErrorCode code="invalid_input" detail="A required input is missing or does not match the SDK." />
-          <ErrorCode code="quota_exceeded" detail="The account has used its 100 API executions for the UTC day." />
-          <ErrorCode code="concurrency_limit" detail="The account already has the maximum number of runs in progress." />
-          <ErrorCode code="spend_limit" detail="The provider budget for this period has been reached." />
-          <ErrorCode code="provider_failure" detail="The provider did not return a usable result." />
-          <ErrorCode code="timeout" detail="The run reached its time limit." />
-          <ErrorCode code="unavailable" detail="The execution API is unavailable." />
-          <ErrorCode code="internal_error" detail="The execution could not be completed." />
+          <ErrorCode code="missing_api_key" detail="Add your SDK API key to the Authorization header to continue." />
+          <ErrorCode code="invalid_api_key" detail="We couldn't verify this API key. Check your key in Account → API Keys." />
+          <ErrorCode code="revoked_api_key" detail="This API key has been revoked. Create a new key in Account → API Keys." />
+          <ErrorCode code="sdk_not_found" detail="We couldn't find this SDK. Check the SDK ID and try again." />
+          <ErrorCode code="sdk_unavailable" detail="This SDK isn't available for execution. Check its status in the Library." />
+          <ErrorCode code="version_not_found" detail="This SDK version isn't available. Check the published versions in the Library." />
+          <ErrorCode code="invalid_input" detail="The message depends on the failure: unreadable JSON, a request body that is too large, a missing SDK ID, or an input that does not match the SDK." />
+          <ErrorCode code="quota_exceeded" detail="You've reached your API execution limit of 100 for the UTC day. Check your usage in Account. The response includes remaining: 0." />
+          <ErrorCode code="concurrency_limit" detail="You have too many executions running. Try again when one finishes." />
+          <ErrorCode code="spend_limit" detail="Execution is temporarily unavailable because a spending limit has been reached." />
+          <ErrorCode code="provider_failure" detail="This SDK couldn't complete its provider request. Please try again later." />
+          <ErrorCode code="timeout" detail="This SDK took too long to respond. Please try again." />
+          <ErrorCode code="unavailable" detail="SDK execution is temporarily unavailable. Please try again later." />
+          <ErrorCode code="internal_error" detail="We couldn't complete this execution. Please try again." />
         </dl>
       </main>
       <Footer />

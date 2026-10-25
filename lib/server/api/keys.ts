@@ -1,6 +1,6 @@
 import "server-only";
 
-import { activeKeySlot } from "@/lib/api/contract";
+import { activeKeySlot, API_COPY } from "@/lib/api/contract";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { digestApiKey, generateApiKey } from "@/lib/server/api/digest";
 import { ApiFlowError } from "@/lib/server/api/errors";
@@ -43,7 +43,7 @@ export async function listApiKeys(account: AccountIdentity): Promise<{
       remaining: Math.max(0, 100 - usedToday),
       keys: rows.map(toRecord),
     };
-  });
+  }, "keys");
 }
 
 export async function createApiKey(input: {
@@ -66,7 +66,7 @@ export async function createApiKey(input: {
         returning id, created_at
       `;
       const row = inserted[0];
-      if (!row) throw new ApiFlowError("unavailable");
+      if (!row) throw new ApiFlowError("unavailable", null, API_COPY.keysUnavailable);
       return {
         key: {
           id: row.id,
@@ -79,6 +79,7 @@ export async function createApiKey(input: {
         },
       };
     }),
+    "keys",
   );
 }
 
@@ -94,7 +95,7 @@ export async function revokeApiKey(input: { account: AccountIdentity; keyId: str
     const row = rows[0];
     if (!row) throw new ApiFlowError("key_not_found");
     return toRecord(row);
-  });
+  }, "keys");
 }
 
 export async function replaceApiKey(input: {
@@ -123,7 +124,7 @@ export async function replaceApiKey(input: {
         returning id, created_at
       `;
       const row = inserted[0];
-      if (!row) throw new ApiFlowError("unavailable");
+      if (!row) throw new ApiFlowError("unavailable", null, API_COPY.keysUnavailable);
       return {
         key: {
           id: row.id,
@@ -136,6 +137,7 @@ export async function replaceApiKey(input: {
         },
       };
     }),
+    "keys",
   );
 }
 
@@ -161,13 +163,13 @@ function newKey(): { secret: string; prefix: string; hash: string } {
   try {
     return generateApiKey();
   } catch {
-    throw new ApiFlowError("unavailable");
+    throw new ApiFlowError("unavailable", null, API_COPY.keysUnavailable);
   }
 }
 
 function cleanLabel(value: string): string {
   const label = value.trim();
-  if (label.length < 1 || label.length > 80) throw new ApiFlowError("invalid_input");
+  if (label.length < 1 || label.length > 80) throw new ApiFlowError("invalid_input", null, API_COPY.keyLabel);
   return label;
 }
 
@@ -193,11 +195,15 @@ function isUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }
 
-async function guard<T>(work: () => Promise<T>): Promise<T> {
+async function guard<T>(work: () => Promise<T>, surface: "run" | "keys" = "run"): Promise<T> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof ApiFlowError) throw error;
-    throw new ApiFlowError(databaseFailure(error) === "missing_schema" ? "unavailable" : "internal_error");
+    const code = databaseFailure(error) === "missing_schema" ? "unavailable" : "internal_error";
+    if (surface === "keys") {
+      throw new ApiFlowError(code, null, code === "unavailable" ? API_COPY.keysUnavailable : API_COPY.keysInternal);
+    }
+    throw new ApiFlowError(code);
   }
 }

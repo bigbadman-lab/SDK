@@ -53,7 +53,7 @@ export class SDKClient {
   private readonly timeoutMs: number;
 
   constructor(options: SDKClientOptions) {
-    if (options.apiKey.trim().length < 1) throw new SDKClientError("missing_api_key", "An API key is required.", 401);
+    if (options.apiKey.trim().length < 1) throw new SDKClientError("missing_api_key", "Add your SDK API key to continue.", 401);
     this.apiKey = options.apiKey;
     this.baseUrl = options.baseUrl;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -91,11 +91,11 @@ export class SDKClient {
       if (isAbort(error)) {
         throw new SDKClientError(
           timedOut.value ? "timeout" : "cancelled",
-          timedOut.value ? "The request reached its time limit." : "The request was cancelled.",
+          timedOut.value ? "This SDK took too long to respond. Please try again." : "The request was cancelled.",
           timedOut.value ? 504 : 0,
         );
       }
-      throw new SDKClientError("internal_error", "The execution could not be completed.", 0);
+      throw new SDKClientError("internal_error", "We couldn't complete this execution. Please try again.", 0);
     } finally {
       clearTimeout(timer);
       request.signal?.removeEventListener("abort", onAbort);
@@ -116,7 +116,7 @@ async function readResult(response: Response): Promise<ExecutionResult> {
     const remaining = record && "remaining" in record && typeof record.remaining === "number" ? record.remaining : null;
     throw new SDKClientError(code, message, response.status, remaining);
   }
-  if (!isExecution(body)) throw new SDKClientError("internal_error", "The execution response was not usable.", response.status);
+  if (!isExecution(body)) throw new SDKClientError("internal_error", "We couldn't read the execution response. Please try again.", response.status);
   return body;
 }
 

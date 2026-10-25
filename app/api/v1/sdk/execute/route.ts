@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { presentedKey } from "@/lib/api/contract";
+import { API_COPY, presentedKey } from "@/lib/api/contract";
 import { executePublishedSdk } from "@/lib/server/api/execute";
 import { ApiFlowError } from "@/lib/server/api/errors";
 import { apiFailure, readJson } from "@/lib/server/api/http";
@@ -15,11 +15,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     const key = await accountForApiKey(header.secret);
     const body = await readJson(request);
     const record = body !== null && typeof body === "object" ? body : null;
-    if (!record || !("sdkId" in record) || typeof record.sdkId !== "string") throw new ApiFlowError("invalid_input");
+    if (!record || !("sdkId" in record) || typeof record.sdkId !== "string") {
+      throw new ApiFlowError("invalid_input", null, API_COPY.requestShape);
+    }
     const version =
       "version" in record && record.version !== undefined && record.version !== null ? record.version : null;
     if (version !== null && (typeof version !== "number" || !Number.isInteger(version) || version < 1)) {
-      throw new ApiFlowError("invalid_input");
+      throw new ApiFlowError("invalid_input", null, API_COPY.requestShape);
     }
     const values = "input" in record ? record.input : {};
     return NextResponse.json(

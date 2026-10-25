@@ -2,7 +2,7 @@ import "server-only";
 
 import { NextResponse } from "next/server";
 
-import { API_BODY_LIMIT_BYTES } from "@/lib/api/contract";
+import { API_BODY_LIMIT_BYTES, API_COPY } from "@/lib/api/contract";
 import { ApiFlowError } from "@/lib/server/api/errors";
 
 export function apiFailure(error: unknown): NextResponse {
@@ -22,13 +22,13 @@ export function apiFailure(error: unknown): NextResponse {
 
 export async function readJson(request: Request): Promise<unknown> {
   const declared = request.headers.get("content-length");
-  if (declared && Number(declared) > API_BODY_LIMIT_BYTES) throw new ApiFlowError("invalid_input");
+  if (declared && Number(declared) > API_BODY_LIMIT_BYTES) throw new ApiFlowError("invalid_input", null, API_COPY.bodyTooLarge);
   const text = await request.text();
-  if (text.length > API_BODY_LIMIT_BYTES) throw new ApiFlowError("invalid_input");
+  if (text.length > API_BODY_LIMIT_BYTES) throw new ApiFlowError("invalid_input", null, API_COPY.bodyTooLarge);
   if (text.trim().length === 0) return {};
   try {
     return JSON.parse(text) as unknown;
   } catch {
-    throw new ApiFlowError("invalid_input");
+    throw new ApiFlowError("invalid_input", null, API_COPY.invalidJson);
   }
 }

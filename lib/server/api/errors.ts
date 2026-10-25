@@ -7,9 +7,9 @@ export class ApiFlowError extends Error {
   readonly code: ApiErrorCode;
   readonly remaining: number | null;
 
-  constructor(code: ApiErrorCode, remaining: number | null = null) {
+  constructor(code: ApiErrorCode, remaining: number | null = null, message?: string) {
     const described = apiError(code);
-    super(described.message);
+    super(message ?? described.message);
     this.name = "ApiFlowError";
     this.status = described.status;
     this.code = code;

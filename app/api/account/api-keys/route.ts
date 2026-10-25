@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { getCurrentAccount } from "@/lib/server/account";
+import { API_COPY } from "@/lib/api/contract";
 import { apiFailure, readJson } from "@/lib/server/api/http";
 import { ApiFlowError } from "@/lib/server/api/errors";
 import { createApiKey, listApiKeys } from "@/lib/server/api/keys";
@@ -19,7 +20,7 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(request: Request): Promise<NextResponse> {
-  if (!trustedOrigin(request)) return apiFailure(new ApiFlowError("invalid_input"));
+  if (!trustedOrigin(request)) return apiFailure(new ApiFlowError("invalid_input", null, API_COPY.origin));
   const account = await getCurrentAccount();
   if (!account) return apiFailure(new ApiFlowError("unauthenticated"));
   try {
