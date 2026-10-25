@@ -67,6 +67,16 @@ export type ObservedTransaction = {
   destinationTokenDelta: string;
 };
 
+export type SolClaimExpectation = {
+  deployer: string;
+  claimant: string;
+  lamports: string;
+};
+
+export type SolClaimVerdict =
+  | { status: "confirmed"; feeLamports: string }
+  | { status: "failed" | "mismatch" | "unconfirmed" };
+
 export type Chain = {
   account(address: string): Promise<ChainAccount>;
   rent(bytes: number): Promise<string>;
@@ -83,6 +93,7 @@ export type Chain = {
   signatureState(signature: string): Promise<"absent" | "present" | "unknown">;
   signatureStatus?(signature: string): Promise<SignatureObservation>;
   transaction(signature: string, lookup: VaultLookup): Promise<ObservedTransaction | null>;
+  solClaim?(signature: string, expected: SolClaimExpectation): Promise<SolClaimVerdict>;
   collectionIdentity?(signature: string): Promise<{ instruction: string; programId: string; accounts: string[] } | null>;
   pace?(ms: number): Promise<void>;
 };
@@ -399,6 +410,102 @@ export function observeMeta(value: unknown, lookup: VaultLookup): ObservedTransa
   };
 }
 
+function lamportValue(value: unknown): bigint | null {
+  if (typeof value === "bigint" && value >= BigInt(0)) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  if (typeof value === "string" && /^[0-9]{1,18}$/.test(value)) return BigInt(value);
+  return null;
+}
+
+function readU64(bytes: Uint8Array, offset: number): bigint | null {
+  if (bytes.length < offset + 8) return null;
+  let value = BigInt(0);
+  for (let index = 7; index >= 0; index -= 1) value = (value << BigInt(8)) + BigInt(bytes[offset + index] ?? 0);
+  return value;
+}
+
+function systemTransfer(instruction: unknown, keys: (string | null)[]): { source: string; destination: string; lamports: bigint } | null {
+  if (!instruction || typeof instruction !== "object") return null;
+  const row = instruction as {
+    programId?: unknown;
+    program?: unknown;
+    parsed?: { type?: unknown; info?: { source?: unknown; destination?: unknown; lamports?: unknown } };
+    data?: unknown;
+    accounts?: unknown;
+  };
+  const program = typeof row.programId === "string" ? row.programId : typeof row.program === "string" ? row.program : "";
+  if (program !== SYSTEM_PROGRAM_ID) return null;
+  const info = row.parsed?.type === "transfer" ? row.parsed.info : null;
+  const parsedSource = typeof info?.source === "string" ? info.source : null;
+  const parsedDestination = typeof info?.destination === "string" ? info.destination : null;
+  const parsedLamports = lamportValue(info?.lamports);
+  const raw = Array.isArray(row.data) ? Uint8Array.from(row.data.filter((item) => typeof item === "number")) : null;
+  const rawLamports = raw && raw.length >= 12 && raw[0] === 2 && raw[1] === 0 && raw[2] === 0 && raw[3] === 0 ? readU64(raw, 4) : null;
+  const indexes = Array.isArray(row.accounts) ? row.accounts.filter((item) => typeof item === "number") : [];
+  const rawSource = typeof indexes[0] === "number" ? keys[indexes[0]] ?? null : null;
+  const rawDestination = typeof indexes[1] === "number" ? keys[indexes[1]] ?? null : null;
+  if (parsedLamports !== null && rawLamports !== null && parsedLamports !== rawLamports) return null;
+  if (parsedSource && rawSource && parsedSource !== rawSource) return null;
+  if (parsedDestination && rawDestination && parsedDestination !== rawDestination) return null;
+  const source = parsedSource ?? rawSource;
+  const destination = parsedDestination ?? rawDestination;
+  const lamports = parsedLamports ?? rawLamports;
+  if (!source || !destination || lamports === null || lamports <= BigInt(0)) return null;
+  return { source, destination, lamports };
+}
+
+// Fee collection keeps observeMeta, including its creator-vault requirement.
+// A native SOL claim is only a System Program transfer, so it is verified here.
+export function observeSolClaim(value: unknown, expected: SolClaimExpectation): SolClaimVerdict {
+  if (!/^[1-9][0-9]{0,18}$/.test(expected.lamports)) return { status: "mismatch" };
+  if (!value || typeof value !== "object") return { status: "unconfirmed" };
+  const record = value as {
+    meta?: {
+      err?: unknown;
+      fee?: unknown;
+      preBalances?: unknown;
+      postBalances?: unknown;
+      preTokenBalances?: unknown;
+      postTokenBalances?: unknown;
+    } | null;
+    transaction?: { message?: { accountKeys?: unknown[]; instructions?: unknown[] } };
+  };
+  if (!record.meta) return { status: "unconfirmed" };
+  if (record.meta.err) return { status: "failed" };
+  const keys = (record.transaction?.message?.accountKeys ?? []).map(accountKey);
+  const instructions = record.transaction?.message?.instructions ?? [];
+  if (instructions.length !== 1 || keys[0] !== expected.deployer) return { status: "mismatch" };
+  const transfer = systemTransfer(instructions[0], keys);
+  if (!transfer || transfer.source !== expected.deployer || transfer.destination !== expected.claimant || transfer.lamports !== BigInt(expected.lamports)) {
+    return { status: "mismatch" };
+  }
+  const balances = (listed: unknown, index: number): bigint | null => {
+    if (!Array.isArray(listed)) return null;
+    return lamportValue(listed[index]);
+  };
+  const delta = (address: string): bigint | null => {
+    const index = keys.indexOf(address);
+    const pre = balances(record.meta?.preBalances, index);
+    const post = balances(record.meta?.postBalances, index);
+    if (index < 0 || pre === null || post === null) return null;
+    return post - pre;
+  };
+  const fee = lamportValue(record.meta.fee);
+  const paid = delta(expected.deployer);
+  const received = delta(expected.claimant);
+  if (fee === null || paid === null || received !== transfer.lamports || paid !== -(transfer.lamports + fee)) return { status: "mismatch" };
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (!key || key === expected.deployer || key === expected.claimant) continue;
+    const pre = balances(record.meta.preBalances, index);
+    const post = balances(record.meta.postBalances, index);
+    if (pre === null || post === null || pre !== post) return { status: "mismatch" };
+  }
+  const tokenRows = (listed: unknown): number => Array.isArray(listed) ? listed.length : 0;
+  if (tokenRows(record.meta.preTokenBalances) !== 0 || tokenRows(record.meta.postTokenBalances) !== 0) return { status: "mismatch" };
+  return { status: "confirmed", feeLamports: fee.toString() };
+}
+
 function accountFromRpc(value: unknown): ChainAccount {
   if (!value || typeof value !== "object" || !("lamports" in value) || !("owner" in value) || !("data" in value)) return null;
   const record = value as { lamports: unknown; owner: unknown; data: unknown };
@@ -584,6 +691,20 @@ export function heliusChain(rpc: Rpc, rpcUrl?: string): Chain {
       const value = await rpc("getTransaction", [signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]);
       if (!value) return null;
       return observeMeta(value, lookup);
+    },
+    async solClaim(signature, expected) {
+      const [value, status] = await Promise.all([
+        rpc("getTransaction", [signature, { encoding: "jsonParsed", commitment: "confirmed", maxSupportedTransactionVersion: 0 }]),
+        readSignatureStatus(signature),
+      ]);
+      if (status === "failed") return { status: "failed" };
+      if (status === "processed") return { status: "unconfirmed" };
+      if (!value) return { status: "unconfirmed" };
+      const observed = observeSolClaim(value, expected);
+      if (observed.status === "failed") return { status: "failed" };
+      if (observed.status !== "confirmed") return { status: observed.status === "unconfirmed" ? "unconfirmed" : "mismatch" };
+      if (status !== "confirmed" && status !== "finalized" && status !== "unknown") return { status: "unconfirmed" };
+      return observed;
     },
     collectionIdentity: readCollectionIdentity,
   };

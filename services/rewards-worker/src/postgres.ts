@@ -78,9 +78,9 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
     async solObligations(parentMint, scope) {
       const liabilities = await sql<{ holder: string; deployer: string; buyback: string }[]>`
         select
-          coalesce(sum(amount::bigint) filter (where kind = 'holder_sol'), 0)::text as holder,
-          coalesce(sum(amount::bigint) filter (where kind = 'deployer_retained'), 0)::text as deployer,
-          coalesce(sum(amount::bigint) filter (where kind = 'buyback_sol'), 0)::text as buyback
+          coalesce(sum(amount::bigint) filter (where kind = 'holder_sol' and window_id is not null), 0)::text as holder,
+          coalesce(sum(amount::bigint) filter (where kind = 'deployer_retained' and window_id is not null), 0)::text as deployer,
+          coalesce(sum(amount::bigint) filter (where kind = 'buyback_sol' and window_id is not null), 0)::text as buyback
         from reward_liabilities
         where parent_mint_address = ${parentMint} and scope = ${scope} and status <> 'suspended'
       `;

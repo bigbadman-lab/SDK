@@ -656,6 +656,19 @@ export async function submitClaim(input: {
   const existing = prior.find((claim) => claim.idempotencyKey === input.idempotencyKey);
   if (existing?.status === "confirmed") return { ok: false, code: "duplicate" };
   if (existing?.signature && (existing.status === "uncertain" || existing.status === "submitted" || existing.status === "unreconciled")) {
+    if (input.asset === "sol") {
+      return settleStoredSolClaim({
+        store: input.store,
+        chain: input.chain,
+        parentMint: parent.mintAddress,
+        scope: parent.scope,
+        deployer: parent.deployerAddress,
+        claimant: input.claimant,
+        lamports: input.amount,
+        idempotencyKey: input.idempotencyKey,
+        signature: existing.signature,
+      });
+    }
     const vaults = await readCreatorVaults(input.chain, parent.deployerAddress);
     const observed = await input.chain.transaction(existing.signature, {
       creator: parent.deployerAddress,
@@ -669,7 +682,7 @@ export async function submitClaim(input: {
       await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "failed", existing.signature);
       return { ok: false, code: "failed" };
     }
-    const received = BigInt(input.asset === "sol" ? observed.destinationDelta : observed.destinationTokenDelta);
+    const received = BigInt(observed.destinationTokenDelta);
     if (received < BigInt(input.amount)) {
       await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "unreconciled", existing.signature);
       return { ok: false, code: "unreconciled" };
@@ -748,6 +761,24 @@ export async function submitClaim(input: {
   const wire = signedTransactionWire(transaction, signed.signature);
   if (!wire) return { ok: false, code: "transaction" };
   const sent = await input.chain.submit(wire);
+  if (sent.status !== "accepted") {
+    const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";
+    await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, definitive ? "failed" : "uncertain", signed.signature);
+    return { ok: false, code: definitive ? "failed" : "uncertain" };
+  }
+  if (input.asset === "sol") {
+    return settleStoredSolClaim({
+      store: input.store,
+      chain: input.chain,
+      parentMint: parent.mintAddress,
+      scope: parent.scope,
+      deployer: parent.deployerAddress,
+      claimant: input.claimant,
+      lamports: input.amount,
+      idempotencyKey: input.idempotencyKey,
+      signature: signed.signature,
+    });
+  }
   const vaults = await readCreatorVaults(input.chain, parent.deployerAddress);
   const lookup: VaultLookup = {
     creator: parent.deployerAddress,
@@ -756,21 +787,103 @@ export async function submitClaim(input: {
     parentMint: parent.mintAddress,
     destination: input.claimant,
   };
-  if (sent.status !== "accepted") {
-    const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";
-    await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, definitive ? "failed" : "uncertain", signed.signature);
-    return { ok: false, code: definitive ? "failed" : "uncertain" };
-  }
   const observed = await input.chain.transaction(signed.signature, lookup);
   if (!observed || observed.status !== "confirmed") {
     await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, observed?.status === "failed" ? "failed" : "uncertain", signed.signature);
     return { ok: false, code: observed?.status === "failed" ? "failed" : "uncertain" };
   }
-  const received = BigInt(input.asset === "sol" ? observed.destinationDelta : observed.destinationTokenDelta);
+  const received = BigInt(observed.destinationTokenDelta);
   if (received < BigInt(input.amount)) {
     await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "unreconciled", signed.signature);
     return { ok: false, code: "unreconciled" };
   }
   await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "confirmed", signed.signature);
   return { ok: true, signature: signed.signature };
+}
+
+async function confirmedSignatureUsed(
+  store: RewardsStore,
+  parentMint: string,
+  scope: "test" | "production",
+  signature: string,
+  idempotencyKey: string,
+): Promise<boolean> {
+  const claims = await store.claims(parentMint, scope);
+  return claims.some((claim) => claim.signature === signature && claim.idempotencyKey !== idempotencyKey && claim.status === "confirmed");
+}
+
+async function settleStoredSolClaim(input: {
+  store: RewardsStore;
+  chain: Chain;
+  parentMint: string;
+  scope: "test" | "production";
+  deployer: string;
+  claimant: string;
+  lamports: string;
+  idempotencyKey: string;
+  signature: string;
+}): Promise<{ ok: true; signature: string } | { ok: false; code: "uncertain" | "failed" | "unreconciled" }> {
+  const verdict = input.chain.solClaim
+    ? await input.chain.solClaim(input.signature, { deployer: input.deployer, claimant: input.claimant, lamports: input.lamports })
+    : { status: "unconfirmed" as const };
+  if (verdict.status === "confirmed") {
+    if (await confirmedSignatureUsed(input.store, input.parentMint, input.scope, input.signature, input.idempotencyKey)) {
+      await input.store.markClaim(input.parentMint, input.scope, input.idempotencyKey, "unreconciled", input.signature);
+      return { ok: false, code: "unreconciled" };
+    }
+    const marked = await input.store.markClaim(input.parentMint, input.scope, input.idempotencyKey, "confirmed", input.signature);
+    if (marked !== "ok") return { ok: false, code: "uncertain" };
+    return { ok: true, signature: input.signature };
+  }
+  if (verdict.status === "failed") {
+    await input.store.markClaim(input.parentMint, input.scope, input.idempotencyKey, "failed", input.signature);
+    return { ok: false, code: "failed" };
+  }
+  if (verdict.status === "mismatch") {
+    await input.store.markClaim(input.parentMint, input.scope, input.idempotencyKey, "unreconciled", input.signature);
+    return { ok: false, code: "unreconciled" };
+  }
+  await input.store.markClaim(input.parentMint, input.scope, input.idempotencyKey, "uncertain", input.signature);
+  return { ok: false, code: "uncertain" };
+}
+
+export async function reconcileStoredSolClaims(input: {
+  store: RewardsStore;
+  chain: Chain;
+  parentMint: string;
+  deployer: string;
+}): Promise<{ confirmed: number; unresolved: number }> {
+  const claims = await input.store.claims(input.parentMint, "test");
+  const usedSignatures = new Set(claims.flatMap((claim) => claim.status === "confirmed" && claim.signature ? [claim.signature] : []));
+  let confirmed = 0;
+  let unresolved = 0;
+  for (const claim of claims) {
+    if (claim.asset !== "sol" || claim.scope !== "test" || !claim.signature) continue;
+    if (claim.status !== "submitted" && claim.status !== "uncertain" && claim.status !== "unreconciled") continue;
+    const verdict = input.chain.solClaim
+      ? await input.chain.solClaim(claim.signature, { deployer: input.deployer, claimant: claim.claimant, lamports: claim.amount })
+      : { status: "unconfirmed" as const };
+    if (verdict.status === "confirmed") {
+      if (usedSignatures.has(claim.signature)) {
+        await input.store.markClaim(input.parentMint, "test", claim.idempotencyKey, "unreconciled", claim.signature);
+        unresolved += 1;
+        continue;
+      }
+      const marked = await input.store.markClaim(input.parentMint, "test", claim.idempotencyKey, "confirmed", claim.signature);
+      if (marked === "ok") {
+        confirmed += 1;
+        usedSignatures.add(claim.signature);
+      }
+      continue;
+    }
+    if (verdict.status === "failed") {
+      await input.store.markClaim(input.parentMint, "test", claim.idempotencyKey, "failed", claim.signature);
+      continue;
+    }
+    if (verdict.status === "mismatch") {
+      await input.store.markClaim(input.parentMint, "test", claim.idempotencyKey, "unreconciled", claim.signature);
+    }
+    unresolved += 1;
+  }
+  return { confirmed, unresolved };
 }

@@ -80,13 +80,17 @@ export function HolderRewards({
           <SolFigure label="Claimable SOL" lamports={view.claimableSol} detail="Available to claim. This is not a wallet balance." />
           <SolFigure label="SOL claimed" lamports={view.paidSol} detail="Confirmed transfers already recorded." />
           <SolFigure label="Awaiting confirmation" lamports={view.pendingSol} detail="Submitted claims that are not confirmed transfers." />
-          <div className="rounded-lg border border-border p-4 sm:col-span-2">
-            <p className="font-mono text-[10px] tracking-[0.04em] uppercase">Parent-token rewards</p>
-            <p className="mt-3 text-[22px]">{view.claimableToken} base units claimable</p>
-            <p className="mt-2 text-[13px] text-muted-foreground">
-              {view.pendingToken} base units awaiting confirmation. {view.paidToken} base units confirmed.
-            </p>
-          </div>
+          {view.claimableToken === "0" && view.pendingToken === "0" && view.paidToken === "0" ? (
+            <p className="text-[14px] leading-[1.6] text-muted-foreground sm:col-span-2">This reward is SOL only. There is no parent-token payout.</p>
+          ) : (
+            <div className="rounded-lg border border-border p-4 sm:col-span-2">
+              <p className="font-mono text-[10px] tracking-[0.04em] uppercase">Parent-token rewards</p>
+              <p className="mt-3 text-[22px]">{view.claimableToken} base units claimable</p>
+              <p className="mt-2 text-[13px] text-muted-foreground">
+                {view.pendingToken} base units awaiting confirmation. {view.paidToken} base units confirmed.
+              </p>
+            </div>
+          )}
         </div>
       )}
       <dl className="grid gap-3 text-[14px] leading-[1.6] text-muted-foreground">
@@ -96,7 +100,12 @@ export function HolderRewards({
         <div className="flex justify-between gap-4"><dt>Minimum holding</dt><dd>{view.minimumWholeTokens.toLocaleString("en-US")} whole tokens</dd></div>
         <div className="flex justify-between gap-4"><dt>Last window</dt><dd>{view.lastWindow ?? "No completed window"}</dd></div>
       </dl>
-      <ClaimActions scope={view.scope} disabled={closed || view.ledger === "missing"} />
+      <ClaimActions
+        scope={view.scope}
+        disabled={closed || view.ledger === "missing"}
+        claimableSol={view.claimableSol}
+        claimableToken={view.claimableToken}
+      />
       <p className="text-[14px] leading-[1.6] text-muted-foreground">{view.executionReason}</p>
       <div className="grid gap-2">
         <h3 className="font-mono text-[10px] tracking-[0.04em] uppercase">Activity</h3>

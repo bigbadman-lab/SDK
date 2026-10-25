@@ -5,7 +5,7 @@ import bs58 from "bs58";
 import { useState, type ReactNode } from "react";
 
 import { encodeSignInMessage, normalizeWalletSignature } from "@/lib/auth/sign-message";
-import { claimAllResults } from "@/lib/rewards/account-view";
+import { claimAllPlan, claimAllResults } from "@/lib/rewards/account-view";
 
 export const claimButtonClass =
   "inline-flex min-h-9 items-center justify-center rounded-lg border border-border px-3 py-2 font-mono text-[11px] tracking-[0.04em] uppercase disabled:opacity-50 max-[561px]:w-full";
@@ -54,12 +54,23 @@ async function claim(scope: Scope, asset: Asset): Promise<{ ok: boolean; code: s
   });
   const result = (await submitted.json()) as { ok?: boolean; code?: string; execution?: string; signature?: string | null };
   if (result.execution === "confirmed") return { ok: true, code: result.signature ? `confirmed ${result.signature.slice(0, 8)}` : "confirmed" };
-  if (result.execution === "uncertain") return { ok: false, code: "uncertain" };
+  if (result.execution === "uncertain") return { ok: false, code: "awaiting reconciliation" };
+  if (result.execution === "failed") return { ok: false, code: "failed" };
   if (result.execution === "unavailable") return { ok: false, code: "unavailable" };
   return { ok: result.ok === true, code: result.code ?? "failed" };
 }
 
-export function ClaimActions({ scope, disabled }: { scope: Scope; disabled: boolean }): ReactNode {
+export function ClaimActions({
+  scope,
+  disabled,
+  claimableSol,
+  claimableToken,
+}: {
+  scope: Scope;
+  disabled: boolean;
+  claimableSol: string;
+  claimableToken: string;
+}): ReactNode {
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -68,23 +79,38 @@ export function ClaimActions({ scope, disabled }: { scope: Scope; disabled: bool
     setNotice(null);
     try {
       if (asset === "all") {
-        const sol = await claim(scope, "sol");
-        const token = await claim(scope, "parent_token");
-        const outcome = claimAllResults([
-          { asset: "sol", ok: sol.ok, code: sol.code },
-          { asset: "parent_token", ok: token.ok, code: token.code },
-        ]);
+        const assets = claimAllPlan({ claimableSol, claimableToken });
+        if (assets.length === 0) {
+          setNotice("Nothing is claimable.");
+          return;
+        }
+        const results = [];
+        for (const next of assets) {
+          const result = await claim(scope, next);
+          results.push({ asset: next, ok: result.ok, code: result.code });
+        }
+        const outcome = claimAllResults(results);
+        const summary = results.map((result) => `${result.asset === "sol" ? "SOL" : "Parent token"} ${result.code}.`).join(" ");
         if (outcome.outcome === "partial" || outcome.outcome === "confirmed") {
-          setNotice(`SOL ${sol.code}. Parent token ${token.code}.`);
+          setNotice(summary);
         } else if (outcome.outcome === "unavailable") {
-          setNotice("Neither payout was broadcast. The rewards worker is not authorised.");
+          setNotice(results.length === 1 ? summary : "Neither payout was broadcast.");
         } else {
-          setNotice("Neither claim was confirmed.");
+          setNotice(results.length === 1 ? summary : "Neither claim was confirmed.");
         }
         return;
       }
       const result = await claim(scope, asset);
-      setNotice(result.code === "unavailable" ? "The claim was signed. The rewards worker did not broadcast it." : `Claim ${result.code}.`);
+      const notice = result.code === "unavailable"
+        ? "The claim was signed. The rewards worker did not broadcast it."
+        : result.code === "wallet"
+          ? "Connect a wallet before claiming."
+          : result.code === "awaiting reconciliation"
+            ? "The claim is awaiting reconciliation."
+            : result.code === "failed"
+              ? "The claim failed. No confirmed transfer is recorded."
+              : `Claim ${result.code}.`;
+      setNotice(notice);
     } catch {
       setNotice("The claim could not be signed.");
     } finally {
@@ -97,7 +123,9 @@ export function ClaimActions({ scope, disabled }: { scope: Scope; disabled: bool
     <div className="grid gap-3">
       <div className="flex flex-wrap gap-2">
         <button className={button} type="button" disabled={disabled || pending} onClick={() => void run("sol")}>Claim SOL</button>
-        <button className={button} type="button" disabled={disabled || pending} onClick={() => void run("parent_token")}>Claim Tokens</button>
+        {claimAllPlan({ claimableSol: "0", claimableToken }).includes("parent_token") ? (
+          <button className={button} type="button" disabled={disabled || pending} onClick={() => void run("parent_token")}>Claim Tokens</button>
+        ) : null}
         <button className={button} type="button" disabled={disabled || pending} onClick={() => void run("all")}>Claim All</button>
       </div>
       {notice ? <p className="text-[14px] leading-[1.6] text-muted-foreground">{notice}</p> : null}

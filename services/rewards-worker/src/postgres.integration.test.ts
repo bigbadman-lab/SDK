@@ -193,6 +193,14 @@ test("the rewards schema applies on an isolated database and enforces recovery i
   assert.equal(claims.find((row) => row.idempotencyKey === "claim-sol-holder-0003")?.amount, "300");
   assert.equal(await store.markClaim(MINT, "test", "claim-sol-holder-0003", "confirmed", null), "ok");
   assert.equal(await store.markClaim(MINT, "test", "claim-sol-holder-0003", "failed", null), "order");
+  const obligations = await store.solObligations(MINT, "test");
+  assert.equal(obligations.holderSol, "300");
+  assert.equal(obligations.confirmedHolderSol, "300");
+  const liabilityRows = await db()`
+    select count(*)::int as count from reward_liabilities
+    where parent_mint_address = ${MINT} and kind = 'holder_sol'
+  `;
+  assert.equal(liabilityRows[0]?.count, 3);
 
   assert.equal(await store.recordIntent({
     idempotencyKey: "collect-window-000001",

@@ -6,7 +6,7 @@ import { PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
 
 import { PLATFORM_FEE_WALLET } from "../launch/fees.ts";
-import { claimAllResults, isolatedProduction, rewardsView } from "./account-view.ts";
+import { claimAllPlan, claimAllResults, isolatedProduction, rewardsView } from "./account-view.ts";
 import { childDistributionInstruction, DISTRIBUTE_CREATOR_FEES_V2, matchShareholderReceipts, nativeCollectionInstruction, PUMP_AMM_PROGRAM_ID, PUMP_PROGRAM_ID, splitChildFee, SWEEP_CREATOR_FEE, TRANSFER_CREATOR_FEES_TO_PUMP_V2, verifyChildSharing } from "./child-fees.ts";
 import { inspectRewardsTransaction } from "./inspect.ts";
 import { boundClaimMessage, parseBoundClaim } from "./ownership.ts";
@@ -41,7 +41,7 @@ test("account rewards keep production separate from TREST and report partial cla
     scope: "production",
     symbol: null,
     ledger: "ready",
-    executionReason: "The rewards worker is not authorised to broadcast.",
+    worker: "suspended",
     snapshots: [
       { owner: HOLDER, balance: "100", solLamports: "30", tokenAmount: "10", windowKey: "test:old" },
     ],
@@ -427,7 +427,7 @@ test("account presentation keeps pending payouts, paid history, and child earnin
     scope: "test",
     symbol: "TREST",
     ledger: "ready",
-    executionReason: "The rewards worker is not authorised to broadcast.",
+    worker: "ready",
     snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "40", windowKey: "w1" }],
     claims: [
       { asset: "sol", amount: "20", status: "uncertain", signature: "pending-signature" },
@@ -446,6 +446,145 @@ test("account presentation keeps pending payouts, paid history, and child earnin
   assert.equal(view.paidToken, "10");
   assert.equal(view.activity.some((item) => item.status === "uncertain"), true);
   assert.equal(view.activity.some((item) => item.status === "paid"), true);
+  assert.equal(view.execution, "reconciling");
+  assert.equal(view.executionReason.includes("not authorised"), false);
+  const solOnly = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "0", windowKey: "w1" }],
+    claims: [],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.deepEqual(claimAllPlan(solOnly), ["sol"]);
+  assert.equal(solOnly.executionReason, "SOL is ready to claim.");
+  const confirmed = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "0", windowKey: "w1" }],
+    claims: [{ asset: "sol", amount: "100", status: "confirmed", signature: "paid" }],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(confirmed.execution, "confirmed");
+  assert.equal(confirmed.claimableSol, "0");
+  assert.equal(claimAllPlan(confirmed).length, 0);
+  assert.equal(claimAllResults([{ asset: "sol", ok: true, code: "confirmed" }]).outcome, "confirmed");
+  const suspended = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "suspended",
+    snapshots: [],
+    claims: [],
+    windows: [],
+    wallet: HOLDER,
+    threshold: null,
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(suspended.execution, "suspended");
+  assert.equal(suspended.executionReason.includes("not authorised"), false);
+  const none = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [],
+    claims: [],
+    windows: [],
+    wallet: HOLDER,
+    threshold: null,
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(none.execution, "empty");
+  assert.equal(claimAllPlan(none).length, 0);
+  const tokenOnly = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "0", tokenAmount: "40", windowKey: "w1" }],
+    claims: [],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.deepEqual(claimAllPlan(tokenOnly), ["parent_token"]);
+  assert.equal(tokenOnly.executionReason, "Parent-token rewards are ready to claim.");
+  const both = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "40", windowKey: "w1" }],
+    claims: [],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.deepEqual(claimAllPlan(both), ["sol", "parent_token"]);
+  const pending = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "0", windowKey: "w1" }],
+    claims: [{ asset: "sol", amount: "100", status: "submitted", signature: "submitted-signature" }],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(pending.execution, "confirming");
+  assert.equal(pending.claimableSol, "0");
+  const failed = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "ready",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "0", windowKey: "w1" }],
+    claims: [{ asset: "sol", amount: "100", status: "failed", signature: "failed-signature" }],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(failed.execution, "ready");
+  assert.equal(failed.claimableSol, "100");
+  const unknown = rewardsView({
+    scope: "test",
+    symbol: "TREST",
+    ledger: "ready",
+    worker: "unknown",
+    snapshots: [{ owner: HOLDER, balance: "50000000000", solLamports: "100", tokenAmount: "0", windowKey: "w1" }],
+    claims: [],
+    windows: [{ windowKey: "w1" }],
+    wallet: HOLDER,
+    threshold: "50000000000",
+    currentBalance: null,
+    earnings: [],
+  });
+  assert.equal(unknown.execution, "unreadable");
+  assert.equal(unknown.executionReason.includes("not authorised"), false);
+  assert.equal(claimAllResults([{ asset: "sol", ok: false, code: "awaiting reconciliation" }]).outcome, "failed");
   assert.equal(view.earnings.length, 0);
   assert.equal(view.currentBalance, null);
   const buttons = readFileSync(new URL("../../components/account/claim-actions.tsx", import.meta.url), "utf8");

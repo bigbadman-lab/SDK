@@ -8,7 +8,7 @@ import { matchShareholderReceipts } from "../../../lib/rewards/child-fees.ts";
 import { serviceChildFees, type ChildCandidate } from "./child-fees.ts";
 import { buildDistribution, readQuoteDeltas, readSharing } from "./child-distribution.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
-import { runCycle, submitClaim } from "./run.ts";
+import { reconcileStoredSolClaims, runCycle, submitClaim } from "./run.ts";
 import { loadVerifiedTrestParent, selectTrestChildren, selectTrestClaims, selectTrestOpenIntents } from "./trest-scope.ts";
 
 type Sql = ReturnType<typeof createSql>;
@@ -91,6 +91,12 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       claims: async () => {
       const parent = await loadVerifiedTrestParent(sql, input.expectedAddress);
       if (!parent.ok) return;
+      await reconcileStoredSolClaims({
+        store,
+        chain,
+        parentMint: parent.mintAddress,
+        deployer: parent.deployerAddress,
+      });
       const rehearsal = await store.rehearsalState(parent.mintAddress, "test");
       if (!rehearsal || !rehearsal.claimsAllowed) return;
       const challenges = await sql<

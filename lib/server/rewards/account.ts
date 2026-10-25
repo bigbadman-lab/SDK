@@ -7,9 +7,9 @@ import { rewardsView, type AccountRewardsView } from "@/lib/rewards/account-view
 import { holderThreshold } from "@/lib/rewards/holders.ts";
 import type { RewardScope } from "@/lib/rewards/ledger.ts";
 import { databaseFailure, getSql } from "@/lib/server/db.ts";
-import { requestClaimExecution } from "@/lib/server/rewards/worker.ts";
+import { readRewardsRuntime, requestClaimExecution } from "@/lib/server/rewards/worker.ts";
 
-const UNAVAILABLE = "The rewards worker is not authorised to broadcast. Signing a claim does not move funds.";
+const UNAVAILABLE = "The rewards worker did not broadcast the claim.";
 
 export function rewardScope(value: string | null): RewardScope {
   return value === "test" ? "test" : "production";
@@ -20,7 +20,7 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
     scope,
     symbol: null,
     ledger: "missing",
-    executionReason: UNAVAILABLE,
+    worker: "unknown",
     snapshots: [],
     claims: [],
     windows: [],
@@ -45,7 +45,7 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
         return [];
       },
     );
-    const [parents, snapshots, claims, windows, earnings] = await Promise.all([
+    const [parents, snapshots, claims, windows, earnings, worker] = await Promise.all([
       sql<{ symbol: "SDK" | "TREST"; decimals: number }[]>`
         select symbol, decimals from parent_registrations where scope = ${scope} limit 1
       `,
@@ -64,13 +64,14 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
         select window_start from reward_windows where scope = ${scope} order by window_start desc limit 1
       `,
       earningsQuery,
+      readRewardsRuntime(),
     ]);
     const parent = parents[0] ?? null;
     return rewardsView({
       scope,
       symbol: parent?.symbol ?? null,
       ledger: "ready",
-      executionReason: UNAVAILABLE,
+      worker,
       snapshots: snapshots.map((row) => ({
         owner: row.owner,
         balance: row.balance,
@@ -150,7 +151,7 @@ export async function acceptRewardClaim(input: {
   signature: string;
   domain: string;
 }): Promise<
-  | { ok: true; execution: "unavailable" | "confirmed" | "uncertain"; reason: string; signature: string | null }
+  | { ok: true; execution: "unavailable" | "confirmed" | "uncertain" | "failed"; reason: string; signature: string | null }
   | { ok: false; code: "ownership" | "not_ready" | "expired" }
 > {
   const proof = verifyClaimOwnership({ message: input.message, signature: input.signature, claimant: input.wallet });
@@ -195,7 +196,13 @@ export async function acceptRewardClaim(input: {
     return {
       ok: true,
       execution: execution.execution,
-      reason: execution.execution === "confirmed" ? "The payout was confirmed." : execution.execution === "uncertain" ? "The payout is unresolved." : UNAVAILABLE,
+      reason: execution.execution === "confirmed"
+        ? "The payout was confirmed."
+        : execution.execution === "uncertain"
+          ? "The payout is awaiting reconciliation."
+          : execution.execution === "failed"
+            ? "The claim failed. No confirmed transfer is recorded."
+            : UNAVAILABLE,
       signature: execution.signature,
     };
   } catch (error) {

@@ -138,6 +138,9 @@ function harness(input?: {
       return input?.blockhashValid ?? "unknown";
     },
     async pace() {},
+    async solClaim() {
+      return { status: "confirmed" as const, feeLamports: "5000" };
+    },
     async transaction(signature, lookup) {
       readSignatures.push(signature);
       reads += 1;
