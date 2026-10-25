@@ -1,12 +1,15 @@
 import { LibraryActions } from "@/components/library/sdk-actions";
 import { RemixButton, RemixNotice, RemixProvider } from "@/components/library/remix-sdk";
+import { SdkVote } from "@/components/library/sdk-vote";
 import { Footer } from "@/components/footer";
 import { HomeLink } from "@/components/home/chrome";
 import { isPublicId, operationLabel, operationLabels } from "@/lib/library/library";
 import { officialInputGuide } from "@/lib/library/official";
 import { createMetadata } from "@/lib/metadata";
+import { getCurrentAccount } from "@/lib/server/account";
 import { describeBlueprintError } from "@/lib/server/blueprint/http";
 import { readPublished } from "@/lib/server/library/service";
+import { readLibraryVote, type LibraryVote } from "@/lib/server/library/votes";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -53,6 +56,15 @@ export default async function LibrarySdkPage({
     if (described.code === "library_not_found") notFound();
     unavailable = described.status === 503;
   }
+  const account = sdk ? await getCurrentAccount() : null;
+  let vote: LibraryVote | null = null;
+  if (sdk) {
+    try {
+      vote = await readLibraryVote(sdk.id, account?.id ?? null);
+    } catch {
+      vote = null;
+    }
+  }
   return (
     <>
       <main
@@ -70,7 +82,7 @@ export default async function LibrarySdkPage({
             This SDK is unavailable.
           </h1>
         ) : (
-          <SdkDetail sdk={sdk} />
+          <SdkDetail sdk={sdk} vote={vote} signedIn={account !== null} />
         )}
       </main>
       <Footer />
@@ -80,8 +92,12 @@ export default async function LibrarySdkPage({
 
 function SdkDetail({
   sdk,
+  vote,
+  signedIn,
 }: {
   sdk: Awaited<ReturnType<typeof readPublished>>;
+  vote: LibraryVote | null;
+  signedIn: boolean;
 }): ReactNode {
   const families = operationLabels(sdk.capabilities);
   const guide = officialInputGuide(sdk.name);
@@ -129,6 +145,9 @@ function SdkDetail({
           <HomeLink href={launchHref} tone="secondary">
             Launch a Token
           </HomeLink>
+          {vote ? (
+            <SdkVote sdkId={sdk.id} count={vote.count} voted={vote.voted} signedIn={signedIn} />
+          ) : null}
         </div>
         <RemixNotice place="top" />
       </header>

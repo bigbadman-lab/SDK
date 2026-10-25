@@ -61,7 +61,6 @@ before(async () => {
     .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql")
     .sort();
   assert.deepEqual(files.slice(-13), [
-    "20261020180000_trest01_parent_registration.sql",
     "20261020200000_trest02_reward_execution.sql",
     "20261020220000_trest03_reward_worker.sql",
     "20261020230000_trest031_reward_claim_status.sql",
@@ -74,6 +73,7 @@ before(async () => {
     "20261021180000_trest07i_rehearsal_windows.sql",
     "20261021190000_trest07j_confirmation_recovery.sql",
     "20261024120000_trest08b_day_rehearsal.sql",
+    "20261025140000_library_sdk_votes.sql",
   ]);
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));
