@@ -817,7 +817,7 @@ export function postgresRewardsStore(sql: Sql): RewardsStore {
         values (${parentMint}, ${scope}, ${holder}, now() + interval '5 minutes')
         on conflict (parent_mint_address, scope) do update
         set holder = excluded.holder, locked_at = now(), expires_at = excluded.expires_at
-        where reward_cycle_locks.holder = excluded.holder or reward_cycle_locks.expires_at <= now()
+        where reward_cycle_locks.expires_at <= now()
         returning holder
       `;
       return rows[0]?.holder === holder ? "ok" : "locked";

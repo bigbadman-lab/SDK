@@ -5,8 +5,11 @@ import { messageSha256, signedTransactionWire, type CompiledTransaction } from "
 import { snapshotHolders } from "../../../lib/rewards/holders.ts";
 import { boundClaimMessage, claimAuthorizationMessage, parseBoundClaim, verifyClaimOwnership } from "../../../lib/rewards/ownership.ts";
 import { explainCreatorDelta, reconcileCreatorFee } from "../../../lib/rewards/reconcile.ts";
+import { TREST_MINT } from "../../../lib/launch/verified-launch.ts";
+import { registrationFromParent, resolveProductionParent, type CanonicalParentConfig } from "../../../lib/rewards/production.ts";
 import { derivedDeployerAddress, rewardsExecutionEnabled } from "../../../lib/rewards/signer.ts";
 import { signInspected } from "../../../lib/rewards/signer.ts";
+import { shutdownRequested } from "./lifecycle.ts";
 import { bondingCurveAddress, pollTransactionConfirmation, readCreatorVaults, type Chain, type ObservedTransaction, type SignatureObservation, type VaultLookup } from "./chain.ts";
 import { legacyCollectionRetired } from "./legacy-recovery.ts";
 import { buildSolCollection, type BuiltInstruction } from "./instructions.ts";
@@ -146,6 +149,7 @@ async function broadcast(input: {
   lookup: VaultLookup;
   validityHeight: string | null;
 }): Promise<{ ok: true; observed: ObservedTransaction; signature: string } | { ok: false; code: CycleCode }> {
+  if (shutdownRequested()) return { ok: false, code: "inactive" };
   const recorded = await input.store.recordIntent({
     idempotencyKey: input.intent.key,
     parentMint: input.parent.mintAddress,
@@ -156,10 +160,7 @@ async function broadcast(input: {
     messageSha256: null,
     recentBlockhash: input.transaction.recentBlockhash,
   });
-  if (recorded === "duplicate") {
-    const existing = (await input.store.intents(input.parent.mintAddress, input.parent.scope)).find((intent) => intent.idempotencyKey === input.intent.key);
-    if (existing?.signature) return { ok: false, code: "uncertain" };
-  }
+  if (recorded === "duplicate") return { ok: false, code: "uncertain" };
   const signed = signInspected({
     secret: input.secret,
     expectedAddress: input.expectedAddress,
@@ -187,6 +188,10 @@ async function broadcast(input: {
   if (noted !== "ok") return { ok: false, code: "uncertain" };
   const wire = signedTransactionWire(input.transaction, signed.signature);
   if (!wire || messageSha256(signed.message).length !== 64) return { ok: false, code: "transaction" };
+  if (shutdownRequested()) {
+    await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "failed", signed.signature);
+    return { ok: false, code: "inactive" };
+  }
   const sent = await input.chain.submit(wire);
   if (sent.status !== "accepted") {
     const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";
@@ -388,6 +393,54 @@ export async function runCycle(input: {
       });
       throw error;
     }
+  } finally {
+    await input.store.unlock(parent.mintAddress, parent.scope, input.holder);
+  }
+}
+
+export async function runProductionCycle(input: {
+  nowMs: number;
+  holder: string;
+  loopEnabled: boolean;
+  authorised: boolean;
+  suspended: boolean;
+  secret: string | null;
+  expectedAddress: string;
+  shuttingDown: boolean;
+  parent: RegisteredParent | null;
+  config: CanonicalParentConfig | null;
+  store: RewardsStore;
+  chain: Chain;
+}): Promise<CycleResult> {
+  if (input.shuttingDown || shutdownRequested()) return { ok: false, code: "inactive" };
+  if (!rewardsExecutionEnabled({
+    loopEnabled: input.loopEnabled ? "true" : "false",
+    executionAuthorised: input.authorised ? "true" : "false",
+    suspended: input.suspended,
+  })) {
+    return { ok: false, code: "inactive" };
+  }
+  const resolved = resolveProductionParent({
+    registration: input.parent ? registrationFromParent(input.parent) : null,
+    config: input.config,
+    signerAddress: input.expectedAddress,
+  });
+  if (!resolved.ok) return { ok: false, code: resolved.code === "signer" ? "signer_mismatch" : "parent" };
+  if (!resolved.rewardsActive) return { ok: false, code: "inactive" };
+  const parent = input.parent;
+  if (!parent || parent.scope !== "production" || parent.mintAddress !== resolved.mint) return { ok: false, code: "parent" };
+  const derived = input.secret ? derivedDeployerAddress(input.secret) : null;
+  if (!derived || derived !== input.expectedAddress || derived !== resolved.deployer) return { ok: false, code: "signer_mismatch" };
+  const control = await input.store.control(parent.mintAddress, parent.scope);
+  if (!control) return { ok: false, code: "control" };
+  if (control.suspended) return { ok: false, code: "suspended" };
+  const window = accountingWindow(input.nowMs);
+  if (!window) return { ok: false, code: "schedule" };
+  const lease = await input.store.tryLock(parent.mintAddress, parent.scope, input.holder, input.nowMs);
+  if (lease === "locked") return { ok: false, code: "locked" };
+  try {
+    if (input.shuttingDown || shutdownRequested()) return { ok: false, code: "inactive" };
+    return await execute(input, parent, control);
   } finally {
     await input.store.unlock(parent.mintAddress, parent.scope, input.holder);
   }
@@ -597,9 +650,12 @@ export async function submitClaim(input: {
   signature: string;
   domain?: string;
   nowMs?: number;
+  rewardsActive?: boolean;
+  shuttingDown?: boolean;
   store: RewardsStore;
   chain: Chain;
 }): Promise<{ ok: true; signature: string } | { ok: false; code: CycleCode | "duplicate" | "ownership" | "amount" }> {
+  if (input.shuttingDown || shutdownRequested()) return { ok: false, code: "inactive" };
   if (!rewardsExecutionEnabled({
     loopEnabled: input.loopEnabled ? "true" : "false",
     executionAuthorised: input.authorised ? "true" : "false",
@@ -640,6 +696,10 @@ export async function submitClaim(input: {
   if (!proof.ok) return proof;
   const parent = await input.store.parent(input.scope);
   if (!parent || parent.mintAddress !== input.parentMint || parent.deployerAddress !== input.expectedAddress) return { ok: false, code: "parent" };
+  if (input.scope === "production" && (parent.scope !== "production" || parent.symbol !== "SDK" || parent.mintAddress === TREST_MINT)) {
+    return { ok: false, code: "parent" };
+  }
+  if (input.scope === "production" && input.rewardsActive !== true) return { ok: false, code: "inactive" };
   const derived = input.secret ? derivedDeployerAddress(input.secret) : null;
   if (!derived || derived !== parent.deployerAddress) return { ok: false, code: "signer_mismatch" };
   const control = await input.store.control(parent.mintAddress, parent.scope);
@@ -760,6 +820,10 @@ export async function submitClaim(input: {
   await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "submitted", signed.signature);
   const wire = signedTransactionWire(transaction, signed.signature);
   if (!wire) return { ok: false, code: "transaction" };
+  if (input.shuttingDown || shutdownRequested()) {
+    await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "failed", signed.signature);
+    return { ok: false, code: "inactive" };
+  }
   const sent = await input.chain.submit(wire);
   if (sent.status !== "accepted") {
     const definitive = sent.status === "preflight" || sent.status === "rejected" || sent.status === "expired";

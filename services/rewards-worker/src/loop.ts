@@ -7,6 +7,7 @@ import { heliusChain, heliusRpc } from "./chain.ts";
 import { matchShareholderReceipts } from "../../../lib/rewards/child-fees.ts";
 import { serviceChildFees, type ChildCandidate } from "./child-fees.ts";
 import { buildDistribution, readQuoteDeltas, readSharing } from "./child-distribution.ts";
+import { beginTick, endTick, instanceHolder, shutdownRequested } from "./lifecycle.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
 import { reconcileStoredSolClaims, runCycle, submitClaim } from "./run.ts";
 import { loadVerifiedTrestParent, selectTrestChildren, selectTrestClaims, selectTrestOpenIntents } from "./trest-scope.ts";
@@ -61,17 +62,25 @@ export async function authorisedTick(input: {
   return { ordinary: true };
 }
 
-export function startRewardsLoop(input: { secret: string; expectedAddress: string; suspended: boolean }): void {
+export function startRewardsLoop(input: { secret: string; expectedAddress: string; suspended: boolean }): { stop: () => void } {
   const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
   const rpcUrl = process.env.HELIUS_RPC_URL?.trim() ?? "";
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const stop = (): void => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+  };
   if (!databaseUrl || !rpcUrl) {
     console.error("rewards-worker inactive");
-    return;
+    return { stop };
   }
   const sql = createSql(databaseUrl);
   const store = postgresRewardsStore(sql);
   const chain = heliusChain((method, params) => heliusRpc(rpcUrl, method, params), rpcUrl);
+  const holder = instanceHolder();
   const run = (): void => {
+    if (stopped || shutdownRequested() || !beginTick()) return;
     const suspended = input.suspended || process.env.TREST_SIGNER_SUSPENDED === "true";
     const emergencyFence = process.env.EMERGENCY_FENCE === "true";
     void authorisedTick({
@@ -79,7 +88,7 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       emergencyFence,
       cycle: () => runCycle({
         nowMs: Date.now(),
-        holder: "rewards-worker",
+        holder,
         loopEnabled: true,
         authorised: true,
         suspended,
@@ -304,14 +313,16 @@ export function startRewardsLoop(input: { secret: string; expectedAddress: strin
       },
     }).catch(() => {
       console.error("rewards-worker cycle");
-    });
+    }).finally(() => endTick());
   };
-  run();
   const arm = (): void => {
-    setTimeout(() => {
+    if (stopped || shutdownRequested()) return;
+    timer = setTimeout(() => {
       run();
       arm();
     }, nextUtcWindowDelay(Date.now()));
   };
+  run();
   arm();
+  return { stop };
 }

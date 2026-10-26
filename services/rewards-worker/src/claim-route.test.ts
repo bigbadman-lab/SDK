@@ -48,4 +48,22 @@ test("the claim route rejects a production claim before execution and still acce
   });
   assert.equal(testClaim.status, 200);
   assert.equal(executed, 1);
+  const closed = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    productionReady: true,
+    raw: JSON.stringify({ ...claim, scope: "production" }),
+    execute: async () => ({ ok: false, code: "inactive" }),
+  });
+  assert.equal(closed.status, 503);
+  assert.equal(closed.body.code, "inactive");
+  const opened = await settleClaimHttp({
+    headerMatches: true,
+    runtimeReady: true,
+    productionReady: true,
+    raw: JSON.stringify({ ...claim, scope: "production" }),
+    execute,
+  });
+  assert.equal(opened.status, 200);
+  assert.equal(executed, 2);
 });

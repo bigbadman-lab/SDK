@@ -683,9 +683,8 @@ export function memoryStore(seed: {
     },
     async tryLock(parentMint, scope, holder, nowMs) {
       return exclusive(() => {
-        if (lock && lock.expiresAt > nowMs && (lock.parentMint !== parentMint || lock.scope !== scope || lock.holder !== holder)) {
-          return "locked";
-        }
+        if (!Number.isFinite(nowMs)) return "locked";
+        if (lock && lock.expiresAt > nowMs) return "locked";
         lock = { parentMint, scope, holder, expiresAt: nowMs + LEASE_MS };
         return "ok";
       });

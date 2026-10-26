@@ -167,8 +167,11 @@ test("worker queries and the claim executor are bound to the registered TREST pa
   assert.equal(loop.includes("selectTrestChildren"), true);
   assert.equal(loop.includes("selectTrestOpenIntents"), true);
   assert.equal(loop.includes("selectTrestClaims"), true);
-  assert.equal(executor.includes("claim.scope !== \"test\""), true);
-  assert.equal(executor.includes("if (!trestClaimAllowed"), true);
-  assert.equal(executor.indexOf("if (!trestClaimAllowed") < executor.indexOf("await submitClaim"), true);
+  const trestGate = executor.indexOf("if (!trestClaimAllowed");
+  assert.ok(trestGate > 0);
+  assert.ok(executor.indexOf("await submitClaim", trestGate) > trestGate);
   assert.equal(route.includes("parsed.claim.scope !== \"test\""), true);
+  const server = readFileSync(new URL("./server.ts", import.meta.url), "utf8");
+  assert.equal(server.includes("startRewardsLoop"), false);
+  assert.equal(server.includes('mode: "production"'), true);
 });

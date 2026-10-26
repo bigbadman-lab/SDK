@@ -1,15 +1,25 @@
 import "server-only";
 
+import { workerConfirmsProductionRewards } from "@/lib/rewards/production";
+
 const PUBLIC_WORKER = "https://sdk-rewards-worker.onrender.com";
 
 export async function readRewardsRuntime(): Promise<"ready" | "suspended" | "unknown"> {
   const configured = process.env.REWARDS_WORKER_URL?.trim() || PUBLIC_WORKER;
   try {
-    const response = await fetch(new URL("/health", configured), { cache: "no-store" });
+    const response = await fetch(new URL("/health", configured), {
+      cache: "no-store",
+      signal: AbortSignal.timeout(2_000),
+    });
     if (!response.ok) return "unknown";
-    const body = (await response.json()) as { runtime?: unknown; executionAuthorised?: unknown };
+    const body = (await response.json()) as {
+      runtime?: unknown;
+      executionAuthorised?: unknown;
+      production?: { rewards?: unknown; broadcasts?: unknown } | null;
+    };
     if (body.runtime === "suspended" || body.executionAuthorised === false) return "suspended";
-    if (body.runtime === "ready" && body.executionAuthorised === true) return "ready";
+    if (workerConfirmsProductionRewards(body)) return "ready";
+    if (body.runtime === "ready" || body.executionAuthorised === true) return "suspended";
     return "unknown";
   } catch {
     return "unknown";

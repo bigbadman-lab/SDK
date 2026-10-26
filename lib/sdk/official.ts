@@ -67,6 +67,19 @@ export function canonicalPhase(input: {
   return { phase: "registered", mint: accepted.mint, decimals: accepted.decimals };
 }
 
+export function visibleCanonicalPhase(input: {
+  mint: string | null;
+  decimals: number | null;
+  rewardsActive: boolean;
+  workerReady: boolean;
+}): { phase: "prelaunch" } | { phase: "registered" | "live"; mint: string; decimals: number | null } {
+  return canonicalPhase({
+    mint: input.mint,
+    decimals: input.decimals,
+    rewardsActive: input.rewardsActive && input.workerReady,
+  });
+}
+
 export function rewardsAreActive(phase: OfficialPhase | "unavailable"): boolean {
   return phase === "live";
 }

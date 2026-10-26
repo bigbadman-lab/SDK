@@ -37,6 +37,7 @@ export function parseClaimBody(raw: string): { ok: true; claim: ClaimBody } | { 
 export async function settleClaimHttp(input: {
   headerMatches: boolean;
   runtimeReady: boolean;
+  productionReady?: boolean;
   raw: string;
   execute: (claim: ClaimBody) => Promise<{ ok: boolean; code?: string; signature?: string }>;
 }): Promise<{ status: number; body: { ok: boolean; code?: string; signature?: string; execution?: string; accept?: boolean } }> {
@@ -49,7 +50,11 @@ export async function settleClaimHttp(input: {
   }
   const parsed = parseClaimBody(input.raw);
   if (!parsed.ok) return { status: 400, body: { ok: false, code: "invalid" } };
-  if (parsed.claim.scope !== "test") return { status: 409, body: { ok: false, code: "parent" } };
+  if (parsed.claim.scope === "production") {
+    if (input.productionReady !== true) return { status: 409, body: { ok: false, code: "parent" } };
+  } else if (parsed.claim.scope !== "test") {
+    return { status: 409, body: { ok: false, code: "parent" } };
+  }
   const result = await input.execute(parsed.claim);
   if (!result.ok || !result.signature) {
     const code = result.code ?? "inactive";

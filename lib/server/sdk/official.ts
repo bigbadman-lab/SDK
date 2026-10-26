@@ -4,11 +4,13 @@ import {
   canonicalPhase,
   allocationCursor,
   SDK_ALLOCATION_PAGE,
+  visibleCanonicalPhase,
   type SdkAllocation,
   type SdkSummary,
 } from "@/lib/sdk/official";
 import type { RewardScope } from "@/lib/rewards/ledger";
 import { databaseFailure, getSql } from "@/lib/server/db";
+import { readRewardsRuntime } from "@/lib/server/rewards/worker";
 
 export type OfficialSdk =
   | { ok: true; phase: "prelaunch" }
@@ -37,7 +39,8 @@ export async function loadOfficialSdk(): Promise<OfficialSdk> {
     } catch (error) {
       if (databaseFailure(error) !== "missing_schema") return { ok: false };
     }
-    const activated = canonicalPhase({ mint: phase.mint, decimals: phase.decimals, rewardsActive });
+    const workerReady = rewardsActive ? (await readRewardsRuntime()) === "ready" : false;
+    const activated = visibleCanonicalPhase({ mint: phase.mint, decimals: phase.decimals, rewardsActive, workerReady });
     if (activated.phase === "prelaunch") return { ok: true, phase: "prelaunch" };
     return { ok: true, phase: activated.phase, mint: activated.mint, decimals: activated.decimals };
   } catch {
