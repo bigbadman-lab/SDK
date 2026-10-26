@@ -3,7 +3,8 @@ import type { ReactNode } from "react";
 
 import { AccountSectionHeading } from "@/components/account/account-skeleton";
 import { ClaimActions } from "@/components/account/claim-actions";
-import type { AccountRewardsView, RewardActivity } from "@/lib/rewards/account-view";
+import type { AccountRewardsView, CreatorEarning, RewardActivity } from "@/lib/rewards/account-view";
+import { presentCreatorReceipt } from "@/lib/rewards/earnings-display";
 import { formatSol } from "@/lib/sdk/official";
 
 function add(left: string, right: string): string {
@@ -137,31 +138,42 @@ export function SdkEarnings({ view }: { view: AccountRewardsView }): ReactNode {
       </p>
       {view.ledger === "missing" ? (
         <p className="text-[15px] leading-[1.7] text-muted-foreground">The distribution ledger is not available yet.</p>
-      ) : launcher.length === 0 && developer.length === 0 ? (
-        <p className="text-[15px] leading-[1.7] text-muted-foreground">No creator earnings recorded yet.</p>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
-          <div className="rounded-lg border border-border p-4">
-            <p className="font-mono text-[10px] tracking-[0.04em] uppercase">Launcher</p>
-            {launcher.length === 0 ? <p className="mt-3 text-[14px] text-muted-foreground">No confirmed launcher receipts.</p> : null}
-            {launcher.map((row) => (
-              <p key={`${row.mint}-${row.amount}`} className="mt-3 text-[14px] break-all">
-                {row.signature ? `Received ${row.amount} of ${row.mint}` : `${row.amount} of ${row.mint} is recorded and awaiting settlement.`}
-              </p>
-            ))}
-          </div>
-          <div className="rounded-lg border border-border p-4">
-            <p className="font-mono text-[10px] tracking-[0.04em] uppercase">Original developer</p>
-            {developer.length === 0 ? <p className="mt-3 text-[14px] text-muted-foreground">No confirmed developer receipts.</p> : null}
-            {developer.map((row) => (
-              <p key={`${row.mint}-${row.amount}-developer`} className="mt-3 text-[14px] break-all">
-                {row.signature ? `Received ${row.amount} of ${row.mint}` : `${row.amount} of ${row.mint} is recorded and awaiting settlement.`}
-              </p>
-            ))}
-          </div>
+          <EarningCard title="Launcher" rows={launcher} />
+          <EarningCard title="Original Developer" rows={developer} />
         </div>
       )}
     </section>
+  );
+}
+
+function EarningCard({ title, rows }: { title: string; rows: readonly CreatorEarning[] }): ReactNode {
+  const confirmed = rows.flatMap((row) => {
+    const presented = presentCreatorReceipt(row);
+    return presented ? [{ key: `${row.role}:${row.signature}`, presented }] : [];
+  });
+  return (
+    <div className="min-w-0 rounded-lg border border-border p-4">
+      <p className="font-mono text-[10px] tracking-[0.04em] uppercase">{title}</p>
+      {confirmed.length === 0 ? (
+        <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">No creator earnings received yet.</p>
+      ) : (
+        <ul className="mt-4 grid gap-4">
+          {confirmed.map((item, index) => (
+            <li key={item.key} className={index === 0 ? "grid min-w-0 gap-1.5" : "grid min-w-0 gap-1.5 border-t border-border pt-4"}>
+              <p className="text-[22px] leading-none tracking-[-0.4px] break-words tabular-nums max-[561px]:text-[18px]">{item.presented.headline}</p>
+              {item.presented.childLabel ? <p className="text-[14px] leading-[1.5] break-words">{item.presented.childLabel}</p> : null}
+              <p className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{item.presented.status}</p>
+              {item.presented.receivedAt ? <p className="text-[13px] leading-[1.5] text-muted-foreground">{item.presented.receivedAt}</p> : null}
+              <a className="w-fit text-[13px] underline" href={item.presented.explorerUrl} target="_blank" rel="noreferrer">
+                View on Solana Explorer
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

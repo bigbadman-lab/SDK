@@ -422,6 +422,39 @@ test("confirmed child fees require shareholder receipts for every locked categor
   }
 });
 
+test("the finalized VENT distribution matches Pump's independent floor and rejects a one-unit drift", () => {
+  const quote = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
+  const launcher = "GJRBYe1nDVszvBDYDjT3Q7DW7fTkdHxaJbL4NvHPqF3p";
+  const platform = PLATFORM_FEE_WALLET;
+  const vault = "9NXoqw9svrX4kD3bRkxQuyV5bkxeQugLgkJr2z5EnXjw";
+  const shareholders = [
+    { address: launcher, shareBps: 6000 },
+    { address: platform, shareBps: 4000 },
+  ];
+  const deltas = [
+    { owner: vault, mint: quote, amount: "135936184193", sign: "debit" as const },
+    { owner: launcher, mint: quote, amount: "81561710516", sign: "credit" as const },
+    { owner: platform, mint: quote, amount: "54374473677", sign: "credit" as const },
+  ];
+  const matched = matchShareholderReceipts({ quoteMint: quote, shareholders, distributed: "135936184193", deltas });
+  assert.equal(matched.ok, true);
+  if (!matched.ok) return;
+  assert.deepEqual(matched.receipts, [
+    { address: launcher, amount: "81561710516" },
+    { address: platform, amount: "54374473677" },
+  ]);
+  const drifted = deltas.map((row) => {
+    if (row.owner === launcher) return { ...row, amount: "81561710517" };
+    if (row.owner === platform) return { ...row, amount: "54374473676" };
+    return row;
+  });
+  assert.equal(matchShareholderReceipts({ quoteMint: quote, shareholders, distributed: "135936184193", deltas: drifted }).ok, false);
+  const extra = [...deltas, { owner: vault, mint: quote, amount: "1", sign: "credit" as const }];
+  assert.equal(matchShareholderReceipts({ quoteMint: quote, shareholders, distributed: "135936184193", deltas: extra }).ok, false);
+  const wrongMint = deltas.map((row) => ({ ...row, mint: TREST }));
+  assert.equal(matchShareholderReceipts({ quoteMint: quote, shareholders, distributed: "135936184193", deltas: wrongMint }).ok, false);
+});
+
 test("account presentation keeps pending payouts, paid history, and child earnings apart", () => {
   const view = rewardsView({
     scope: "test",

@@ -3,13 +3,52 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 
 import { boundClaimMessage, verifyClaimOwnership } from "@/lib/rewards/ownership.ts";
-import { rewardsView, type AccountRewardsView } from "@/lib/rewards/account-view.ts";
+import { rewardsView, type AccountRewardsView, type CreatorEarning } from "@/lib/rewards/account-view.ts";
 import { holderThreshold } from "@/lib/rewards/holders.ts";
 import type { RewardScope } from "@/lib/rewards/ledger.ts";
 import { databaseFailure, getSql } from "@/lib/server/db.ts";
 import { readRewardsRuntime, requestClaimExecution } from "@/lib/server/rewards/worker.ts";
 
 const UNAVAILABLE = "The rewards worker did not broadcast the claim.";
+const CHILD_SYMBOL = /^[A-Za-z0-9]{1,13}$/;
+
+type CreatorReceiptRow = {
+  role: "launcher" | "developer" | "platform";
+  scope: RewardScope;
+  mint: string;
+  amount: string;
+  signature: string | null;
+  receivedAt: Date | string | null;
+  childMint: string | null;
+  quoteSymbol: "SDK" | "TREST" | null;
+  quoteDecimals: number | string | null;
+  childSymbol: string | null;
+};
+
+function quoteDecimals(value: number | string | null): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" && /^\d+$/.test(value) ? Number(value) : null;
+  if (parsed === null || !Number.isInteger(parsed) || parsed < 0 || parsed > 9) return null;
+  return parsed;
+}
+
+function creatorReceipts(rows: readonly CreatorReceiptRow[]): CreatorEarning[] {
+  return rows.flatMap((row) => {
+    if (row.role !== "launcher" && row.role !== "developer") return [];
+    const received = row.receivedAt ? new Date(row.receivedAt) : null;
+    return [{
+      role: row.role,
+      scope: row.scope,
+      mint: row.mint,
+      amount: row.amount,
+      signature: row.signature,
+      childMint: row.childMint,
+      quoteSymbol: row.quoteSymbol === "SDK" || row.quoteSymbol === "TREST" ? row.quoteSymbol : null,
+      quoteDecimals: quoteDecimals(row.quoteDecimals),
+      childSymbol: row.childSymbol && CHILD_SYMBOL.test(row.childSymbol) ? row.childSymbol : null,
+      receivedAt: received && !Number.isNaN(received.getTime()) ? received.toISOString() : null,
+    }];
+  });
+}
 
 export function rewardScope(value: string | null): RewardScope {
   return value === "test" ? "test" : "production";
@@ -31,10 +70,41 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
   });
   try {
     const sql = getSql();
-    const earningsQuery = sql<{ role: "launcher" | "developer"; scope: RewardScope; mint: string; amount: string; signature: string | null }[]>`
-      select receipt.role, distribution.scope, receipt.quote_mint_address as mint, receipt.amount, receipt.signature
+    const earningsQuery = sql<CreatorReceiptRow[]>`
+      select
+        receipt.role,
+        distribution.scope,
+        receipt.quote_mint_address as mint,
+        receipt.amount,
+        receipt.signature,
+        receipt.created_at as "receivedAt",
+        distribution.child_mint_address as "childMint",
+        parent.symbol as "quoteSymbol",
+        parent.decimals as "quoteDecimals",
+        (
+          select launch.token_symbol
+          from launch_submissions submission
+          join token_launches launch on launch.id = submission.launch_id
+          where submission.child_mint_address = distribution.child_mint_address
+            and submission.parent_mint_address = receipt.quote_mint_address
+            and submission.scope = distribution.scope
+            and submission.status in ('verified', 'page_ready')
+            and submission.slot is not null
+            and submission.verified_at is not null
+            and launch.attempt_status in ('verified', 'page_ready')
+          order by submission.verified_at desc
+          limit 1
+        ) as "childSymbol"
       from child_fee_receipts receipt
       join child_fee_distributions distribution on distribution.id = receipt.distribution_id
+      left join parent_registrations parent
+        on parent.mint_address = receipt.quote_mint_address
+       and parent.scope = distribution.scope
+       and parent.eligible = true
+       and (
+         (distribution.scope = 'test' and parent.symbol = 'TREST')
+         or (distribution.scope = 'production' and parent.symbol = 'SDK')
+       )
       where receipt.recipient_address = ${wallet} and distribution.scope = ${scope}
       order by receipt.created_at desc
       limit 20
@@ -89,7 +159,7 @@ export async function loadAccountRewards(wallet: string, scope: RewardScope): Pr
       wallet,
       threshold: parent ? holderThreshold(parent.decimals) : null,
       currentBalance: null,
-      earnings,
+      earnings: creatorReceipts(earnings),
     });
   } catch (error) {
     if (databaseFailure(error) === "missing_schema") return empty;

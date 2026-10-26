@@ -73,26 +73,59 @@ export function pumpCreatorFeeDistribution(programId: string, data: readonly num
   return programId === PUMP_PROGRAM_ID && childDistributionInstruction(data);
 }
 
+export function pumpFlooredShares(
+  balance: bigint,
+  shareholders: readonly Shareholder[],
+): { address: string; amount: bigint }[] | null {
+  if (balance < BigInt(0) || shareholders.length < 1 || shareholders.length > 10) return null;
+  if (shareholders.reduce((sum, row) => sum + row.shareBps, 0) !== 10_000) return null;
+  if (shareholders.some((row) => !Number.isInteger(row.shareBps) || row.shareBps <= 0)) return null;
+  const seen = new Set<string>();
+  const shares = [];
+  for (const row of shareholders) {
+    if (seen.has(row.address)) return null;
+    seen.add(row.address);
+    shares.push({ address: row.address, amount: (balance * BigInt(row.shareBps)) / BigInt(10_000) });
+  }
+  return shares;
+}
+
+// Pump floors each shareholder independently against the pre-distribution vault
+// balance. The unpaid remainder stays in the vault and is below the shareholder count.
 export function matchShareholderReceipts(input: {
   quoteMint: string;
   shareholders: readonly Shareholder[];
   distributed: string;
   deltas: readonly { owner: string; mint: string; amount: string; sign?: "credit" | "debit" }[];
 }): { ok: true; receipts: { address: string; amount: string }[] } | { ok: false; code: "unconfirmed" } {
-  const split = splitChildFee(input.distributed, input.shareholders);
-  if (!split.ok || !AMOUNT.test(input.distributed)) return { ok: false, code: "unconfirmed" };
-  const shareholders = new Set(input.shareholders.map((row) => row.address));
-  const source = input.deltas
-    .filter((row) => row.sign === "debit" && row.mint === input.quoteMint && !shareholders.has(row.owner) && AMOUNT.test(row.amount))
-    .reduce((sum, row) => sum + BigInt(row.amount), BigInt(0));
-  if (source < BigInt(input.distributed)) return { ok: false, code: "unconfirmed" };
-  const receipts = [];
-  for (const share of split.shares) {
-    if (share.amount === "0") continue;
-    const delta = input.deltas.find((row) => row.sign !== "debit" && row.owner === share.address && row.mint === input.quoteMint);
-    if (!delta || !AMOUNT.test(delta.amount) || BigInt(delta.amount) < BigInt(share.amount)) return { ok: false, code: "unconfirmed" };
-    receipts.push({ address: share.address, amount: delta.amount });
+  if (!AMOUNT.test(input.distributed)) return { ok: false, code: "unconfirmed" };
+  if (input.deltas.some((row) => row.mint !== input.quoteMint)) return { ok: false, code: "unconfirmed" };
+  const holders = new Set(input.shareholders.map((row) => row.address));
+  if (holders.size !== input.shareholders.length) return { ok: false, code: "unconfirmed" };
+  const debits = input.deltas.filter((row) => row.sign === "debit");
+  const credits = input.deltas.filter((row) => row.sign === "credit");
+  if (debits.length !== 1 || credits.length !== input.deltas.length - 1) return { ok: false, code: "unconfirmed" };
+  const debit = debits[0];
+  if (!debit || holders.has(debit.owner) || !AMOUNT.test(debit.amount)) return { ok: false, code: "unconfirmed" };
+  const paid = new Map<string, bigint>();
+  let creditSum = BigInt(0);
+  for (const credit of credits) {
+    if (!holders.has(credit.owner) || paid.has(credit.owner) || !AMOUNT.test(credit.amount)) return { ok: false, code: "unconfirmed" };
+    const amount = BigInt(credit.amount);
+    paid.set(credit.owner, amount);
+    creditSum += amount;
   }
-  if (receipts.length === 0) return { ok: false, code: "unconfirmed" };
-  return { ok: true, receipts };
+  const distributed = BigInt(debit.amount);
+  if (creditSum !== distributed || distributed !== BigInt(input.distributed)) return { ok: false, code: "unconfirmed" };
+  for (let dust = BigInt(0); dust < BigInt(input.shareholders.length); dust += BigInt(1)) {
+    const shares = pumpFlooredShares(distributed + dust, input.shareholders);
+    if (!shares) return { ok: false, code: "unconfirmed" };
+    const floored = shares.reduce((sum, share) => sum + share.amount, BigInt(0));
+    const exact = floored === distributed && shares.every((share) => (paid.get(share.address) ?? BigInt(0)) === share.amount);
+    if (!exact) continue;
+    const receipts = shares.filter((share) => share.amount > BigInt(0)).map((share) => ({ address: share.address, amount: share.amount.toString() }));
+    if (receipts.length === 0 || receipts.length !== paid.size) return { ok: false, code: "unconfirmed" };
+    return { ok: true, receipts };
+  }
+  return { ok: false, code: "unconfirmed" };
 }

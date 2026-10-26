@@ -8,6 +8,19 @@ export type RewardActivity = {
   signature: string | null;
 };
 
+export type CreatorEarning = {
+  role: "launcher" | "developer";
+  scope: RewardScope;
+  mint: string;
+  amount: string;
+  signature: string | null;
+  childMint?: string | null;
+  quoteSymbol?: "SDK" | "TREST" | null;
+  quoteDecimals?: number | null;
+  childSymbol?: string | null;
+  receivedAt?: string | null;
+};
+
 export type AccountRewardsView = {
   scope: RewardScope;
   symbol: "SDK" | "TREST" | null;
@@ -25,7 +38,7 @@ export type AccountRewardsView = {
   minimumWholeTokens: number;
   lastWindow: string | null;
   activity: RewardActivity[];
-  earnings: { role: "launcher" | "developer"; scope: RewardScope; mint: string; amount: string; signature: string | null }[];
+  earnings: CreatorEarning[];
   execution: "ready" | "suspended" | "reconciling" | "confirming" | "confirmed" | "failed" | "empty" | "unreadable";
   executionReason: string;
 };

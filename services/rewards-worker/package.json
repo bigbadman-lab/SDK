@@ -14,7 +14,9 @@
     "recover-legacy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/legacy-recovery-cli.ts",
     "recover-collection": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/collection-recovery-cli.ts",
     "deferred-buyback": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/deferred-buyback-cli.ts",
-    "register-rehearsal": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/rehearsal-register-cli.ts"
+    "register-rehearsal": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/rehearsal-register-cli.ts",
+    "vent-fee": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/vent-fee-cli.ts",
+    "reconcile-vent": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types src/vent-reconcile-cli.ts"
   },
   "dependencies": {
     "@pump-fun/pump-sdk": "4.2.0",
