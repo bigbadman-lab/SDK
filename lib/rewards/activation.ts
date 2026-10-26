@@ -1,13 +1,13 @@
-import { PRODUCTION_ACTIVATION_APPROVAL, resolveProductionParent, workerConfirmsProductionRewards, type ProductionRegistration } from "./production.ts";
+import { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL, resolveProductionParent, workerConfirmsProductionRewards, type ProductionRegistration } from "./production.ts";
 
-export { PRODUCTION_ACTIVATION_APPROVAL };
+export { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL };
 
 const REVISION = /^[0-9a-f]{40}$/;
 
 export type ActivationMode = "dry-run" | "execute";
 
 export type ActivationCommand =
-  | { ok: true; mode: ActivationMode; revision: string }
+  | { ok: true; action: "activate" | "deactivate"; mode: ActivationMode; revision: string }
   | { ok: false; code: "args" | "approval" | "revision" };
 
 export type ActivationChain =
@@ -77,6 +77,7 @@ export type ActivationReview =
 
 export function parseActivationArgs(argv: readonly string[]): ActivationCommand {
   let execute = false;
+  let deactivate = false;
   let approval: string | undefined;
   let revision: string | undefined;
   const tokens = argv.slice(2);
@@ -85,9 +86,15 @@ export function parseActivationArgs(argv: readonly string[]): ActivationCommand 
     const equals = token.indexOf("=");
     const name = equals === -1 ? token : token.slice(0, equals);
     const inline = equals === -1 ? undefined : token.slice(equals + 1);
-    if (name === "--execute") {
-      if (execute || inline !== undefined) return { ok: false, code: "args" };
-      execute = true;
+    if (name === "--execute" || name === "--deactivate") {
+      if (inline !== undefined) return { ok: false, code: "args" };
+      if (name === "--execute") {
+        if (execute) return { ok: false, code: "args" };
+        execute = true;
+      } else {
+        if (deactivate) return { ok: false, code: "args" };
+        deactivate = true;
+      }
       continue;
     }
     if (name !== "--approval" && name !== "--revision") return { ok: false, code: "args" };
@@ -102,10 +109,34 @@ export function parseActivationArgs(argv: readonly string[]): ActivationCommand 
       revision = value;
     }
   }
-  if (execute && approval !== PRODUCTION_ACTIVATION_APPROVAL) return { ok: false, code: "approval" };
-  if (!execute && approval !== undefined && approval !== PRODUCTION_ACTIVATION_APPROVAL) return { ok: false, code: "approval" };
+  const expected = deactivate ? PRODUCTION_DEACTIVATION_APPROVAL : PRODUCTION_ACTIVATION_APPROVAL;
+  if (execute && approval !== expected) return { ok: false, code: "approval" };
+  if (!execute && approval !== undefined && approval !== expected) return { ok: false, code: "approval" };
   if (!revision || !REVISION.test(revision)) return { ok: false, code: "revision" };
-  return { ok: true, mode: execute ? "execute" : "dry-run", revision };
+  return { ok: true, action: deactivate ? "deactivate" : "activate", mode: execute ? "execute" : "dry-run", revision };
+}
+
+export function reviewRewardsDeactivation(snapshot: ActivationSnapshot): ActivationReview {
+  if (snapshot.database !== "ok") return { ok: false, code: "database" };
+  const registration = snapshot.registration;
+  const config = snapshot.config;
+  if (!registration || !config?.mint) return { ok: false, code: "unregistered" };
+  const resolved = resolveProductionParent({
+    registration,
+    config: {
+      mint: config.mint,
+      tokenProgram: config.tokenProgram,
+      decimals: config.decimals,
+      rewardsActive: config.rewardsActive,
+    },
+    signerAddress: registration.deployer,
+  });
+  if (!resolved.ok) return { ok: false, code: resolved.code === "unregistered" ? "unregistered" : "mismatch" };
+  if (config.mint !== registration.mint || config.tokenProgram !== registration.tokenProgram || config.decimals !== registration.decimals) {
+    return { ok: false, code: "mismatch" };
+  }
+  if (!config.rewardsActive) return { ok: true, kind: "idempotent", mint: resolved.mint };
+  return { ok: true, kind: "ready", mint: resolved.mint };
 }
 
 export function parseWorkerHealth(body: unknown): ActivationWorker | { ok: false; code: "unavailable" } {
@@ -294,20 +325,24 @@ export function presentRewardsStatus(snapshot: ActivationSnapshot): { code: numb
 export function emergencyStopProcedure(): readonly { step: string; effect: string }[] {
   return [
     {
-      step: "Create a new Render deploy of sdk-rewards-worker with REWARDS_LOOP_ENABLED=false, REWARDS_EXECUTION_AUTHORIZED=false, and SDK_SIGNER_SUSPENDED=true.",
-      effect: "A restart keeps the previous environment snapshot, so only a new deploy stops new collections and claims.",
+      step: "Close public launches with npm run sdk:activate-launches -- --close-launches --execute --approval SDK-PROD-03-CLOSE-LAUNCHES --revision <sha>.",
+      effect: "Sets only launches_active false. rewards_active and child_fees_active stay unchanged. An already submitted launch remains reconcilable.",
     },
     {
-      step: "Leave submitted and uncertain production intents in place.",
-      effect: "Those idempotency keys stay blocked until reconciliation. The worker must not broadcast them again.",
+      step: "Disable child-fee execution with npm run sdk:activate-launches -- --disable-child-fees --execute --approval SDK-PROD-03-DISABLE-CHILD-FEES --revision <sha>.",
+      effect: "Sets only child_fees_active false. New creator-fee submissions stop. Submitted and uncertain distributions stay recorded for signature reconciliation.",
     },
     {
-      step: "Leave reward liabilities, snapshots, and confirmed claims in place.",
-      effect: "Existing holder entitlements remain on the ledger and are not deleted or reduced.",
+      step: "Deactivate parent rewards with npm run sdk:activate-rewards -- --deactivate --execute --approval SDK-PROD-02-DEACTIVATE --revision <sha>.",
+      effect: "Sets only rewards_active false. Worker health is not required. Clearing the flag does not cancel an already submitted blockchain transaction. Those idempotency keys stay blocked until reconciliation.",
     },
     {
-      step: "Clear rewards_active only after the worker health shows broadcasts disabled.",
-      effect: "The website leaves the live phase when the worker no longer confirms broadcasts, even if the database flag is still true.",
+      step: "Suspend the Render worker, or create a new Render deploy of sdk-rewards-worker with REWARDS_LOOP_ENABLED=false, REWARDS_EXECUTION_AUTHORIZED=false, and SDK_SIGNER_SUSPENDED=true.",
+      effect: "A restart keeps the previous environment snapshot, so only a suspension or a new deploy stops the process immediately.",
+    },
+    {
+      step: "Reconcile submitted and uncertain intents before any reactivation.",
+      effect: "Holder liabilities, snapshots, and confirmed claims are not deleted or reduced.",
     },
   ];
 }
@@ -317,6 +352,7 @@ export async function runActivation(
   io: {
     snapshot: () => Promise<ActivationSnapshot>;
     commit: (mint: string) => Promise<"ok" | "idempotent" | "blocked" | "rolled_back">;
+    commitDeactivate?: (mint: string) => Promise<"ok" | "idempotent" | "blocked" | "rolled_back">;
   },
 ): Promise<{ code: number; out: string }> {
   const command = parseActivationArgs(argv);
@@ -329,6 +365,31 @@ export async function runActivation(
     });
   }
   const snapshot = await io.snapshot();
+  if (command.action === "deactivate") {
+    const review = reviewRewardsDeactivation(snapshot);
+    const rewardsActive = snapshot.config?.rewardsActive === true;
+    if (!review.ok || command.mode === "dry-run") {
+      return presentDeactivationResult({ mode: command.mode, review, rewardsActive, writes: 0 });
+    }
+    const committed = io.commitDeactivate ? await io.commitDeactivate(review.mint) : "blocked";
+    if (committed === "ok") {
+      return presentDeactivationResult({ mode: "execute", review, rewardsActive: false, writes: 1 });
+    }
+    if (committed === "idempotent") {
+      return presentDeactivationResult({
+        mode: "execute",
+        review: { ok: true, kind: "idempotent", mint: review.mint },
+        rewardsActive: false,
+        writes: 0,
+      });
+    }
+    return presentDeactivationResult({
+      mode: "execute",
+      review: { ok: false, code: committed === "blocked" ? "mismatch" : "rolled_back" },
+      rewardsActive,
+      writes: 0,
+    });
+  }
   const review = reviewActivation(snapshot, command.revision);
   const rewardsActive = snapshot.config?.rewardsActive === true;
   if (!review.ok || command.mode === "dry-run") {
@@ -352,4 +413,25 @@ export async function runActivation(
     rewardsActive,
     writes: 0,
   });
+}
+
+function presentDeactivationResult(input: {
+  mode: ActivationMode;
+  review: ActivationReview;
+  rewardsActive: boolean;
+  writes: number;
+}): { code: number; out: string } {
+  const blocked = !input.review.ok;
+  return {
+    code: blocked ? 2 : 0,
+    out: lines(input.mode === "execute" && input.review.ok ? "deactivated" : "preflight", {
+      action: "deactivate",
+      mint: input.review.ok ? input.review.mint : "",
+      verification: input.review.ok ? input.review.kind : input.review.code,
+      rewards: input.mode === "execute" && input.review.ok ? "inactive" : input.rewardsActive ? "active" : "inactive",
+      rewards_live: "false",
+      writes: String(input.writes),
+      submitted: "preserved",
+    }),
+  };
 }

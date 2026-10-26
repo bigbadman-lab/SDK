@@ -303,6 +303,10 @@ export async function runProductionChildPass(input: {
           and idempotency_key <> ${key}
       `;
       if (elsewhere.some((row) => signedChildIntentBlocksRetry(row.status))) return { status: "uncertain" as const };
+      const gate = await input.sql<{ open: boolean }[]>`
+        select child_fees_active as open from sdk_parent_config where id = 1
+      `;
+      if (gate[0]?.open !== true) return { status: "failed" as const };
       const inserted = await input.sql<{ idempotency_key: string }[]>`
         insert into child_fee_distributions (
           idempotency_key, child_mint_address, quote_mint_address, scope, status, signature
@@ -340,6 +344,17 @@ export async function runProductionChildPass(input: {
         returning idempotency_key
       `;
       if (!broadcastPersistedChildIntent({ claimed: claimed.length === 1, shuttingDown: shutdownRequested() })) {
+        return { status: "uncertain" as const };
+      }
+      const freshGate = await input.sql<{ open: boolean }[]>`
+        select child_fees_active as open from sdk_parent_config where id = 1
+      `;
+      if (freshGate[0]?.open !== true) {
+        await input.sql`
+          update child_fee_distributions
+          set status = 'uncertain'
+          where idempotency_key = ${key} and scope = 'production' and status = 'submitted'
+        `;
         return { status: "uncertain" as const };
       }
       let sent: Awaited<ReturnType<Chain["submit"]>>;

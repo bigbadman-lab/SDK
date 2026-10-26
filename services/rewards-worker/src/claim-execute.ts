@@ -3,7 +3,7 @@ import { heliusChain, heliusRpc } from "./chain.ts";
 import type { ClaimBody } from "./claim-route.ts";
 import { shutdownRequested } from "./lifecycle.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
-import { loadProductionParent } from "./production-scope.ts";
+import { loadProductionParent, readRewardsActive } from "./production-scope.ts";
 import { submitClaim } from "./run.ts";
 import { loadVerifiedTrestParent, trestClaimAllowed } from "./trest-scope.ts";
 
@@ -30,7 +30,7 @@ export async function executeClaim(
       signerAddress: input.expectedAddress,
     });
     if (!resolved.ok || claim.parentMint !== resolved.mint) return { ok: false, code: "parent" };
-    if (!resolved.rewardsActive) return { ok: false, code: "inactive" };
+    if (!resolved.rewardsActive || !(await readRewardsActive(sql))) return { ok: false, code: "inactive" };
     const result = await submitClaim({
       loopEnabled: true,
       authorised: true,
@@ -48,6 +48,7 @@ export async function executeClaim(
       domain: claim.domain,
       nowMs: Date.now(),
       rewardsActive: true,
+      admitNewSubmission: () => readRewardsActive(sql),
       store,
       chain,
     });

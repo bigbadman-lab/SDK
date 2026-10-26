@@ -7,7 +7,7 @@ import { beginTick, endTick, instanceHolder, shutdownRequested } from "./lifecyc
 import { authorisedTick } from "./loop.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
 import { runProductionChildPass } from "./production-child-fees.ts";
-import { loadProductionParent, readChildFeeReconciliation, readProductionFlags, readProductionOperations } from "./production-scope.ts";
+import { loadProductionParent, readChildFeeReconciliation, readProductionFlags, readProductionOperations, readRewardsActive } from "./production-scope.ts";
 import { replaceProductionStatus } from "./production-status.ts";
 import { runProductionCycle, submitClaim } from "./run.ts";
 
@@ -77,6 +77,7 @@ async function drainProductionClaims(input: {
       domain: challenge.domain,
       nowMs: Date.now(),
       rewardsActive: true,
+      admitNewSubmission: () => readRewardsActive(input.sql),
       store: input.store,
       chain: input.chain,
     });
@@ -154,9 +155,10 @@ export function startProductionLoop(input: { secret: string; expectedAddress: st
           config: loaded.config,
           store,
           chain,
+          admitNewSubmission: () => readRewardsActive(sql),
         }),
         claims: async () => {
-          if (!rewardsActive || !resolved.ok) return;
+          if (!resolved.ok) return;
           await drainProductionClaims({
             sql,
             mint: resolved.mint,

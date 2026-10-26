@@ -73,6 +73,76 @@ export async function commitRewardsActivation(sql: Sql, mint: string): Promise<"
   }
 }
 
+export async function commitRewardsDeactivation(sql: Sql, mint: string): Promise<"ok" | "idempotent" | "blocked" | "rolled_back"> {
+  const expected = canonicalAddress(mint);
+  if (!expected || expected === TREST_MINT) return "blocked";
+  try {
+    return await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(814202)`;
+      const configs = await tx<{
+        mint: string | null;
+        tokenProgram: string | null;
+        decimals: number | null;
+        rewardsActive: boolean;
+        launchesActive: boolean;
+        childFeesActive: boolean;
+      }[]>`
+        select
+          mint_address as mint,
+          token_program as "tokenProgram",
+          decimals,
+          rewards_active as "rewardsActive",
+          launches_active as "launchesActive",
+          child_fees_active as "childFeesActive"
+        from sdk_parent_config
+        where id = 1
+        for update
+      `;
+      const parents = await tx<{ mint: string; tokenProgram: string; decimals: number }[]>`
+        select mint_address as mint, token_program as "tokenProgram", decimals
+        from parent_registrations
+        where scope = 'production' and symbol = 'SDK'
+        for update
+      `;
+      const config = configs[0];
+      const parent = parents.length === 1 ? parents[0] : null;
+      if (!config?.mint || !parent || canonicalAddress(config.mint) !== expected || canonicalAddress(parent.mint) !== expected) {
+        throw new Error("blocked");
+      }
+      if (parent.tokenProgram !== config.tokenProgram || parent.decimals !== config.decimals) throw new Error("blocked");
+      if (config.rewardsActive !== true) return "idempotent" as const;
+      const updated = await tx<{
+        mint: string;
+        rewardsActive: boolean;
+        launchesActive: boolean;
+        childFeesActive: boolean;
+      }[]>`
+        update sdk_parent_config
+        set rewards_active = false, updated_at = now()
+        where id = 1
+          and rewards_active = true
+          and launches_active = ${config.launchesActive}
+          and child_fees_active = ${config.childFeesActive}
+          and mint_address = ${expected}
+          and token_program = ${config.tokenProgram}
+          and decimals = ${config.decimals}
+        returning
+          mint_address as mint,
+          rewards_active as "rewardsActive",
+          launches_active as "launchesActive",
+          child_fees_active as "childFeesActive"
+      `;
+      const row = updated[0];
+      if (!row || canonicalAddress(row.mint) !== expected || row.rewardsActive !== false) throw new Error("blocked");
+      if (row.launchesActive !== config.launchesActive || row.childFeesActive !== config.childFeesActive) throw new Error("blocked");
+      return "ok" as const;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "blocked") return "blocked";
+    return "rolled_back";
+  }
+}
+
 async function readChain(rpcUrl: string, mint: string | null): Promise<ActivationChain> {
   if (!mint) return { ok: false, code: "not_checked" };
   if (!rpcUrl.startsWith("http")) return { ok: false, code: "unavailable" };
@@ -240,6 +310,7 @@ if (invoked) {
         trestRehearsalOpen: null,
       }),
       commit: async () => "blocked",
+      commitDeactivate: async () => "blocked",
     });
     process.stdout.write(`${result.out}\n`);
     process.exitCode = result.code;
@@ -249,6 +320,7 @@ if (invoked) {
       const result = await runActivation(process.argv, {
         snapshot: () => loadActivationSnapshot(sql),
         commit: (mint) => commitRewardsActivation(sql, mint),
+        commitDeactivate: (mint) => commitRewardsDeactivation(sql, mint),
       });
       process.stdout.write(`${result.out}\n`);
       process.exitCode = result.code;

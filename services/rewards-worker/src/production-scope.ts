@@ -101,6 +101,19 @@ export async function readProductionOperations(sql: Sql, mint: string): Promise<
   }
 }
 
+export async function readRewardsActive(sql: Sql): Promise<boolean> {
+  try {
+    const rows = await sql<{ rewardsActive: boolean | null }[]>`
+      select rewards_active as "rewardsActive"
+      from sdk_parent_config
+      where id = 1
+    `;
+    return rows[0]?.rewardsActive === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function readProductionFlags(sql: Sql): Promise<{ launchesActive: boolean; childFeesActive: boolean }> {
   try {
     const rows = await sql<{ launchesActive: boolean | null; childFeesActive: boolean | null }[]>`

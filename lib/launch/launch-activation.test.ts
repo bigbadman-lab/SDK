@@ -122,6 +122,32 @@ test("builder, website, and worker revisions are checked separately", () => {
   assert.equal(code(reviewLaunchActivation(snapshot({ worker: worker({ distributor: "" }) }), { action: "enable-child-fees", revision: REVISION })), "distributor");
 });
 
+test("stage 3 activation stays ready when parent rewards are already active", () => {
+  const active = {
+    mint: MINT,
+    tokenProgram: TOKEN_2022_PROGRAM,
+    decimals: 6,
+    rewardsActive: true,
+    launchesActive: false,
+    childFeesActive: false,
+  };
+  const enable = reviewLaunchActivation(snapshot({
+    config: active,
+    worker: worker({ rewards: "active" }),
+  }), { action: "enable-child-fees", revision: REVISION });
+  assert.equal(enable.ok, true);
+  if (enable.ok) assert.equal(enable.kind, "ready");
+  const open = reviewLaunchActivation(snapshot({
+    config: { ...active, childFeesActive: true },
+    worker: worker({ rewards: "active", childFees: "enabled" }),
+  }), { action: "activate", revision: REVISION });
+  assert.equal(open.ok, true);
+  if (open.ok) assert.equal(open.kind, "ready");
+  const cli = readFileSync(new URL("../../services/transaction-builder/src/sdk-launch-cli.ts", import.meta.url), "utf8");
+  assert.equal(cli.includes("set rewards_active"), false);
+  assert.match(cli, /rewards_active = \$\{config\.rewardsActive\}/);
+});
+
 test("child fees can be enabled while parent rewards stay inactive, and launches wait for that health", () => {
   const enable = reviewLaunchActivation(snapshot(), { action: "enable-child-fees", revision: REVISION });
   assert.equal(enable.ok, true);

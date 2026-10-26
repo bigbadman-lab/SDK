@@ -5,8 +5,11 @@
 // that wallet. The process derives the public key and deletes the variable.
 // The loop starts only when REWARDS_LOOP_ENABLED and
 // REWARDS_EXECUTION_AUTHORIZED are exactly "true" and the signer matches.
-// Parent reward broadcasts also require sdk_parent_config.rewards_active.
-// Production child-fee broadcasts additionally require child_fees_active.
+// Parent reward broadcasts also require sdk_parent_config.rewards_active,
+// re-read immediately before a new submission. Clearing that flag does not
+// cancel an already submitted blockchain transaction.
+// Production child-fee broadcasts additionally require child_fees_active,
+// also re-read immediately before a new submission.
 // launches_active does not authorise either broadcast. A saved key, a
 // resumed process, or a finished deploy does not authorise a broadcast.
 // POST /v1/claims accepts an authenticated reservation and never an

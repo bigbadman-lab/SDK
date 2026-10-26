@@ -17,6 +17,15 @@ import type { RegisteredParent, RewardControl, RewardsStore, StoredIntent } from
 
 const RENT_CAP = "50000000";
 
+async function newSubmissionAllowed(admit: (() => Promise<boolean>) | undefined): Promise<boolean> {
+  if (!admit) return true;
+  try {
+    return (await admit()) === true;
+  } catch {
+    return false;
+  }
+}
+
 function pause(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -148,8 +157,9 @@ async function broadcast(input: {
   store: RewardsStore;
   lookup: VaultLookup;
   validityHeight: string | null;
+  admitNewSubmission?: () => Promise<boolean>;
 }): Promise<{ ok: true; observed: ObservedTransaction; signature: string } | { ok: false; code: CycleCode }> {
-  if (shutdownRequested()) return { ok: false, code: "inactive" };
+  if (shutdownRequested() || !(await newSubmissionAllowed(input.admitNewSubmission))) return { ok: false, code: "inactive" };
   const recorded = await input.store.recordIntent({
     idempotencyKey: input.intent.key,
     parentMint: input.parent.mintAddress,
@@ -188,7 +198,7 @@ async function broadcast(input: {
   if (noted !== "ok") return { ok: false, code: "uncertain" };
   const wire = signedTransactionWire(input.transaction, signed.signature);
   if (!wire || messageSha256(signed.message).length !== 64) return { ok: false, code: "transaction" };
-  if (shutdownRequested()) {
+  if (shutdownRequested() || !(await newSubmissionAllowed(input.admitNewSubmission))) {
     await input.store.markIntent(input.parent.mintAddress, input.parent.scope, input.intent.key, "failed", signed.signature);
     return { ok: false, code: "inactive" };
   }
@@ -411,6 +421,7 @@ export async function runProductionCycle(input: {
   config: CanonicalParentConfig | null;
   store: RewardsStore;
   chain: Chain;
+  admitNewSubmission?: () => Promise<boolean>;
 }): Promise<CycleResult> {
   if (input.shuttingDown || shutdownRequested()) return { ok: false, code: "inactive" };
   if (!rewardsExecutionEnabled({
@@ -426,9 +437,9 @@ export async function runProductionCycle(input: {
     signerAddress: input.expectedAddress,
   });
   if (!resolved.ok) return { ok: false, code: resolved.code === "signer" ? "signer_mismatch" : "parent" };
-  if (!resolved.rewardsActive) return { ok: false, code: "inactive" };
   const parent = input.parent;
   if (!parent || parent.scope !== "production" || parent.mintAddress !== resolved.mint) return { ok: false, code: "parent" };
+  if (!resolved.rewardsActive) return reconcileClosedGate(input, parent);
   const derived = input.secret ? derivedDeployerAddress(input.secret) : null;
   if (!derived || derived !== input.expectedAddress || derived !== resolved.deployer) return { ok: false, code: "signer_mismatch" };
   const control = await input.store.control(parent.mintAddress, parent.scope);
@@ -539,8 +550,36 @@ async function reconcileOpenCollections(input: {
   return { ok: true, recovered };
 }
 
+async function reconcileClosedGate(
+  input: { store: RewardsStore; chain: Chain },
+  parent: RegisteredParent,
+): Promise<CycleResult> {
+  const reconciled = await reconcileOpenCollections({
+    parent,
+    store: input.store,
+    chain: input.chain,
+    lookup: {
+      creator: parent.deployerAddress,
+      solVault: parent.deployerAddress,
+      wsolVault: parent.deployerAddress,
+      parentMint: parent.mintAddress,
+      destination: parent.deployerAddress,
+    },
+  });
+  if (!reconciled.ok) return reconciled;
+  return { ok: false, code: "inactive" };
+}
+
 async function execute(
-  input: { nowMs: number; secret: string | null; expectedAddress: string; suspended: boolean; store: RewardsStore; chain: Chain },
+  input: {
+    nowMs: number;
+    secret: string | null;
+    expectedAddress: string;
+    suspended: boolean;
+    store: RewardsStore;
+    chain: Chain;
+    admitNewSubmission?: () => Promise<boolean>;
+  },
   parent: RegisteredParent,
   control: RewardControl,
 ): Promise<CycleResult> {
@@ -581,6 +620,7 @@ async function execute(
       store: input.store,
       lookup,
       validityHeight: latest?.lastValidBlockHeight ?? null,
+      ...(input.admitNewSubmission ? { admitNewSubmission: input.admitNewSubmission } : {}),
     });
     if (!sent.ok) return sent;
     if (sent.observed.status === "failed") return { ok: false, code: "failed" };
@@ -652,6 +692,7 @@ export async function submitClaim(input: {
   nowMs?: number;
   rewardsActive?: boolean;
   shuttingDown?: boolean;
+  admitNewSubmission?: () => Promise<boolean>;
   store: RewardsStore;
   chain: Chain;
 }): Promise<{ ok: true; signature: string } | { ok: false; code: CycleCode | "duplicate" | "ownership" | "amount" }> {
@@ -699,7 +740,6 @@ export async function submitClaim(input: {
   if (input.scope === "production" && (parent.scope !== "production" || parent.symbol !== "SDK" || parent.mintAddress === TREST_MINT)) {
     return { ok: false, code: "parent" };
   }
-  if (input.scope === "production" && input.rewardsActive !== true) return { ok: false, code: "inactive" };
   const derived = input.secret ? derivedDeployerAddress(input.secret) : null;
   if (!derived || derived !== parent.deployerAddress) return { ok: false, code: "signer_mismatch" };
   const control = await input.store.control(parent.mintAddress, parent.scope);
@@ -786,6 +826,9 @@ export async function submitClaim(input: {
         uncertainKeys: prior.filter((claim) => claim.asset === "trest" && (claim.status === "uncertain" || claim.status === "unreconciled")).map((claim) => claim.idempotencyKey),
       });
   if (!instruction.ok) return { ok: false, code: instruction.code === "unfunded" ? "amount" : instruction.code === "uncertain" ? "uncertain" : "parent" };
+  if (input.scope === "production" && (input.rewardsActive !== true || !(await newSubmissionAllowed(input.admitNewSubmission)))) {
+    return { ok: false, code: "inactive" };
+  }
   const saved = await input.store.saveClaim({
     claimant: input.claimant,
     asset: input.asset,
@@ -820,7 +863,7 @@ export async function submitClaim(input: {
   await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "submitted", signed.signature);
   const wire = signedTransactionWire(transaction, signed.signature);
   if (!wire) return { ok: false, code: "transaction" };
-  if (input.shuttingDown || shutdownRequested()) {
+  if (input.shuttingDown || shutdownRequested() || !(await newSubmissionAllowed(input.admitNewSubmission))) {
     await input.store.markClaim(parent.mintAddress, parent.scope, input.idempotencyKey, "failed", signed.signature);
     return { ok: false, code: "inactive" };
   }

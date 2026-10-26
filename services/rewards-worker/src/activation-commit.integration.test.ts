@@ -6,7 +6,8 @@ import test from "node:test";
 
 import EmbeddedPostgres from "embedded-postgres";
 
-import { commitRewardsActivation } from "../../transaction-builder/src/sdk-activate-cli.ts";
+import { commitChildFees } from "../../transaction-builder/src/sdk-launch-cli.ts";
+import { commitRewardsActivation, commitRewardsDeactivation } from "../../transaction-builder/src/sdk-activate-cli.ts";
 import { createSql } from "./postgres.ts";
 
 const TREST = "BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump";
@@ -119,6 +120,117 @@ test("activation updates only rewards_active on a disposable database", async ()
     assert.equal(after[0]?.collections, "1");
     assert.equal(after[0]?.amount, "1000");
     assert.equal(after[0]?.mint, before[0]?.mint);
+    await db`
+      update sdk_parent_config
+      set launches_active = true, child_fees_active = true
+      where id = 1 and mint_address = ${CANONICAL}
+    `;
+    const parent = await db<{ id: string }[]>`
+      select id::text from parent_registrations where scope = 'production' and symbol = 'SDK'
+    `;
+    const parentId = parent[0]?.id;
+    assert.ok(parentId);
+    await db`
+      insert into reward_liabilities (
+        parent_registration_id, parent_mint_address, scope, kind, amount, asset, status
+      ) values (
+        ${parentId}, ${CANONICAL}, 'production', 'holder_sol', '2500', 'sol', 'claimable'
+      )
+    `;
+    await db`
+      insert into reward_claims (
+        liability_id, parent_mint_address, scope, claimant, signature, status, idempotency_key
+      )
+      select id, ${CANONICAL}, 'production', ${DEPLOYER}, ${SIGNATURE}, 'confirmed', 'claim-confirmed-0001'
+      from reward_liabilities
+      where parent_mint_address = ${CANONICAL} and scope = 'production'
+    `;
+    const uncertain = "7".repeat(88);
+    await db`
+      insert into reward_intents (
+        parent_registration_id, parent_mint_address, scope, kind, idempotency_key, status, signature, amount_lamports
+      ) values
+        (${parentId}, ${CANONICAL}, 'production', 'collect', 'collect-submitted-01', 'submitted', ${SIGNATURE}, 2500),
+        (${parentId}, ${CANONICAL}, 'production', 'collect', 'collect-uncertain-001', 'uncertain', ${uncertain}, 2500)
+    `;
+    assert.equal(await commitRewardsDeactivation(db, OTHER), "blocked");
+    assert.equal(await commitRewardsDeactivation(db, CANONICAL), "ok");
+    assert.equal(await commitRewardsDeactivation(db, CANONICAL), "idempotent");
+    const preserved = await db<{
+      rewards: boolean;
+      launches: boolean;
+      childFees: boolean;
+      mint: string;
+      liability: string;
+      claim: string;
+      intents: string;
+    }[]>`
+      select
+        rewards_active as rewards,
+        launches_active as launches,
+        child_fees_active as "childFees",
+        mint_address as mint,
+        (select amount from reward_liabilities where scope = 'production') as liability,
+        (select status from reward_claims where scope = 'production') as claim,
+        (select count(*) from reward_intents where scope = 'production')::text as intents
+      from sdk_parent_config
+      where id = 1
+    `;
+    assert.equal(preserved[0]?.rewards, false);
+    assert.equal(preserved[0]?.launches, true);
+    assert.equal(preserved[0]?.childFees, true);
+    assert.equal(preserved[0]?.mint, CANONICAL);
+    assert.equal(preserved[0]?.liability, "2500");
+    assert.equal(preserved[0]?.claim, "confirmed");
+    assert.equal(preserved[0]?.intents, "2");
+    await db`update sdk_parent_config set rewards_active = true where id = 1 and mint_address = ${CANONICAL}`;
+    const raced = await Promise.all([
+      commitRewardsActivation(db, CANONICAL),
+      commitRewardsDeactivation(db, CANONICAL),
+    ]);
+    assert.equal(raced.every((item) => item === "ok" || item === "idempotent"), true);
+    await db`
+      update sdk_parent_config
+      set rewards_active = true, child_fees_active = false
+      where id = 1 and mint_address = ${CANONICAL}
+    `;
+    const independent = await Promise.all([
+      commitChildFees(db, CANONICAL),
+      commitRewardsDeactivation(db, CANONICAL),
+    ]);
+    assert.equal(independent.every((item) => item === "ok" || item === "idempotent"), true);
+    const settled = await db<{
+      rewards: boolean;
+      launches: boolean;
+      childFees: boolean;
+      mint: string;
+      liability: string;
+      claim: string;
+      submitted: string;
+      uncertainIntent: string;
+    }[]>`
+      select
+        rewards_active as rewards,
+        launches_active as launches,
+        child_fees_active as "childFees",
+        mint_address as mint,
+        (select amount from reward_liabilities where scope = 'production') as liability,
+        (select status from reward_claims where scope = 'production') as claim,
+        (select status from reward_intents where idempotency_key = 'collect-submitted-01') as submitted,
+        (select status from reward_intents where idempotency_key = 'collect-uncertain-001') as "uncertainIntent"
+      from sdk_parent_config
+      where id = 1
+    `;
+    assert.equal(settled[0]?.rewards, false);
+    assert.equal(settled[0]?.launches, true);
+    assert.equal(settled[0]?.childFees, true);
+    assert.equal(settled[0]?.mint, CANONICAL);
+    assert.equal(settled[0]?.liability, "2500");
+    assert.equal(settled[0]?.claim, "confirmed");
+    assert.equal(settled[0]?.submitted, "submitted");
+    assert.equal(settled[0]?.uncertainIntent, "uncertain");
+    assert.equal(after[0]?.trest, TREST);
+    assert.equal(after[0]?.amount, "1000");
   } finally {
     await sql?.end({ timeout: 5 });
     await database.stop();

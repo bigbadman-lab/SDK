@@ -13,11 +13,12 @@ import {
   presentRewardsStatus,
   rewardsAreLive,
   reviewActivation,
+  reviewRewardsDeactivation,
   runActivation,
   type ActivationSnapshot,
   type ActivationWorker,
 } from "./activation.ts";
-import { PRODUCTION_ACTIVATION_APPROVAL, type ProductionRegistration } from "./production.ts";
+import { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL, type ProductionRegistration } from "./production.ts";
 
 const MINT = "AKkzLhjhyFtM9j7WAhbaqYpFe49cXeJBg2kzLRC2PnNa";
 const OTHER = "Ce6TQqeHC9p8KetsN6JsjHK7UTZk7nasjjnr7XxXp9F1";
@@ -92,6 +93,83 @@ test("activation args stay read-only until execute and the approval token", () =
   assert.equal(parseActivationArgs(["node", "cli", "--execute", "--approval", "nope", "--revision", REVISION]).ok, false);
   assert.equal(parseActivationArgs(["node", "cli", "--mint", MINT, "--revision", REVISION]).ok, false);
   assert.equal(parseActivationArgs(["node", "cli"]).ok, false);
+  const stop = parseActivationArgs(["node", "cli", "--deactivate", "--revision", REVISION]);
+  assert.equal(stop.ok, true);
+  if (stop.ok) {
+    assert.equal(stop.action, "deactivate");
+    assert.equal(stop.mode, "dry-run");
+  }
+  const wrong = parseActivationArgs(["node", "cli", "--deactivate", "--execute", "--approval", PRODUCTION_ACTIVATION_APPROVAL, "--revision", REVISION]);
+  assert.equal(wrong.ok, false);
+  const approved = parseActivationArgs(["node", "cli", "--deactivate", "--execute", "--approval", PRODUCTION_DEACTIVATION_APPROVAL, "--revision", REVISION]);
+  assert.equal(approved.ok, true);
+  if (approved.ok) assert.equal(approved.mode, "execute");
+});
+
+test("parent rewards can be deactivated while the worker is unavailable", async () => {
+  const active = snapshot({
+    config: { mint: MINT, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: true },
+    worker: { ok: false, code: "unavailable" },
+    chain: { ok: false, code: "unavailable" },
+    unresolved: null,
+  });
+  const review = reviewRewardsDeactivation(active);
+  assert.equal(review.ok, true);
+  if (review.ok) assert.equal(review.kind, "ready");
+  assert.equal(reviewRewardsDeactivation(snapshot({ config: null, registration: null })).ok, false);
+  const divergent = reviewRewardsDeactivation(snapshot({
+    config: { mint: OTHER, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: true },
+    worker: { ok: false, code: "unavailable" },
+  }));
+  assert.equal(divergent.ok, false);
+  if (!divergent.ok) assert.equal(divergent.code, "mismatch");
+  let writes = 0;
+  const dry = await runActivation(["node", "cli", "--deactivate", "--revision", REVISION], {
+    snapshot: async () => active,
+    commit: async () => {
+      writes += 1;
+      return "ok";
+    },
+    commitDeactivate: async () => {
+      writes += 1;
+      return "ok";
+    },
+  });
+  assert.equal(dry.code, 0);
+  assert.equal(writes, 0);
+  assert.match(dry.out, /preflight/);
+  assert.match(dry.out, /writes=0/);
+  assert.match(dry.out, /rewards=active/);
+  assert.match(dry.out, /submitted=preserved/);
+  const stopped = await runActivation(
+    ["node", "cli", "--deactivate", "--execute", "--approval", PRODUCTION_DEACTIVATION_APPROVAL, "--revision", REVISION],
+    {
+      snapshot: async () => active,
+      commit: async () => "ok",
+      commitDeactivate: async (mint) => {
+        assert.equal(mint, MINT);
+        writes += 1;
+        return "ok";
+      },
+    },
+  );
+  assert.equal(stopped.code, 0);
+  assert.equal(writes, 1);
+  assert.match(stopped.out, /^deactivated/);
+  assert.match(stopped.out, /rewards=inactive/);
+  assert.match(stopped.out, /writes=1/);
+  const again = await runActivation(
+    ["node", "cli", "--deactivate", "--execute", "--approval", PRODUCTION_DEACTIVATION_APPROVAL, "--revision", REVISION],
+    {
+      snapshot: async () => snapshot({ worker: { ok: false, code: "unavailable" } }),
+      commit: async () => "ok",
+      commitDeactivate: async () => "idempotent",
+    },
+  );
+  assert.equal(again.code, 0);
+  assert.match(again.out, /verification=idempotent/);
+  assert.match(again.out, /writes=0/);
+  assert.match(again.out, /rewards=inactive/);
 });
 
 test("preflight accepts a matched inactive parent and rejects the launch blockers", () => {
@@ -214,6 +292,10 @@ test("status keeps a registered active flag dark until the worker confirms broad
 
 test("emergency stop preserves pending reconciliation and holder entitlements", () => {
   const steps = emergencyStopProcedure().map((step) => `${step.step} ${step.effect}`).join(" ");
+  assert.match(steps, /SDK-PROD-03-CLOSE-LAUNCHES/);
+  assert.match(steps, /SDK-PROD-03-DISABLE-CHILD-FEES/);
+  assert.match(steps, /SDK-PROD-02-DEACTIVATE/);
+  assert.match(steps, /does not cancel an already submitted blockchain transaction/);
   assert.match(steps, /new deploy/i);
   assert.match(steps, /restart/);
   assert.match(steps, /idempotency keys/);
@@ -223,7 +305,12 @@ test("emergency stop preserves pending reconciliation and holder entitlements", 
   assert.equal(source.includes("insert into parent_registrations"), false);
   assert.equal(source.includes("insert into sdk_parent_config"), false);
   assert.match(source, /set rewards_active = true/);
+  assert.match(source, /set rewards_active = false/);
+  assert.equal(source.includes("set launches_active"), false);
+  assert.equal(source.includes("set child_fees_active"), false);
   assert.equal(source.includes("set mint_address"), false);
+  assert.equal(source.includes("signInspected"), false);
+  assert.equal(source.includes(".submit("), false);
   const status = readFileSync(new URL("../../services/transaction-builder/src/sdk-rewards-status-cli.ts", import.meta.url), "utf8");
   assert.equal(status.includes("update "), false);
   assert.equal(status.includes("insert into"), false);

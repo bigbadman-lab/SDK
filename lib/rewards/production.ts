@@ -3,6 +3,7 @@ import { TREST_MINT } from "../launch/verified-launch.ts";
 import { collectionPlan } from "./collect.ts";
 
 export const PRODUCTION_ACTIVATION_APPROVAL = "SDK-PROD-02-ACTIVATE";
+export const PRODUCTION_DEACTIVATION_APPROVAL = "SDK-PROD-02-DEACTIVATE";
 
 export type ProductionRegistration = {
   scope: string;

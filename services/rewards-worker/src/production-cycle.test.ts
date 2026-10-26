@@ -498,7 +498,9 @@ test("the worker lease, shutdown, and production loop stay fail closed in source
   const body = broadcast.slice(broadcast.indexOf("async function broadcast"), broadcast.indexOf("async function skipMissedRehearsalWindows"));
   const claimBody = broadcast.slice(broadcast.indexOf("export async function submitClaim"), broadcast.indexOf("async function confirmedSignatureUsed"));
   assert.ok(body.lastIndexOf("shutdownRequested()") < body.lastIndexOf("input.chain.submit"));
+  assert.ok(body.lastIndexOf("admitNewSubmission") < body.lastIndexOf("input.chain.submit"));
   assert.ok(claimBody.lastIndexOf("shutdownRequested()") < claimBody.lastIndexOf("input.chain.submit"));
+  assert.ok(claimBody.lastIndexOf("admitNewSubmission") < claimBody.lastIndexOf("input.chain.submit"));
   const loop = readFileSync(new URL("./loop.ts", import.meta.url), "utf8");
   assert.equal(loop.includes("instanceHolder()"), true);
   assert.equal(loop.includes("beginTick()"), true);
@@ -506,6 +508,67 @@ test("the worker lease, shutdown, and production loop stay fail closed in source
   assert.equal(loop.includes("SIGTERM") || readFileSync(new URL("./server.ts", import.meta.url), "utf8").includes("SIGTERM"), true);
   const production = readFileSync(new URL("./production-loop.ts", import.meta.url), "utf8");
   assert.equal(production.includes("scope = 'production'"), true);
+  assert.equal(production.includes("readRewardsActive"), true);
   assert.equal(production.includes("parent_scope = 'test'"), false);
   assert.equal(production.includes("SDK_DEPLOYER_PRIVATE_KEY"), false);
+  const children = readFileSync(new URL("./production-child-fees.ts", import.meta.url), "utf8");
+  const childSubmit = children.slice(children.indexOf("submit: async"), children.indexOf("let sent"));
+  assert.equal(childSubmit.includes("child_fees_active"), true);
+  assert.equal(childSubmit.includes("if (!rewardsActive"), false);
+});
+
+test("a closed rewards gate blocks a new submission and still reconciles an open intent", async () => {
+  const key = signer();
+  const holder = signer();
+  const observed = chainFor(key.address, holder.address, "2000000");
+  const store = memoryStore({
+    parent: parentFor(key.address),
+    control: { suspended: false, reserveLamports: "0", cycleCapLamports: "1000000000", slippageBps: 100 },
+  });
+  const signature = "6".repeat(88);
+  assert.equal(await store.recordIntent({
+    idempotencyKey: "collect-already-submitted",
+    parentMint: MINT,
+    scope: "production",
+    kind: "collect",
+    amountLamports: "2500",
+    tokenAmount: null,
+    messageSha256: null,
+  }), "ok");
+  assert.equal(await store.markIntent(MINT, "production", "collect-already-submitted", "submitted", signature), "ok");
+  const closed = await runProductionCycle(cycleInput({
+    key,
+    holder: holder.address,
+    store,
+    chain: observed.chain,
+    parent: parentFor(key.address),
+    config: configFor({ rewardsActive: false }),
+  }, {}));
+  assert.equal(closed.ok, false);
+  if (!closed.ok) assert.equal(closed.code, "uncertain");
+  assert.equal(observed.submits, 0);
+  const preserved = (await store.intents(MINT, "production")).find((intent) => intent.idempotencyKey === "collect-already-submitted");
+  assert.equal(preserved?.signature, signature);
+  assert.equal(preserved?.amountLamports, "2500");
+  assert.ok(preserved?.status === "uncertain" || preserved?.status === "submitted");
+  const fresh = chainFor(key.address, holder.address, "2000000");
+  const armed = memoryStore({
+    parent: parentFor(key.address),
+    control: { suspended: false, reserveLamports: "0", cycleCapLamports: "1000000000", slippageBps: 100 },
+  });
+  const blocked = await runProductionCycle({
+    ...cycleInput({
+      key,
+      holder: holder.address,
+      store: armed,
+      chain: fresh.chain,
+      parent: parentFor(key.address),
+      config: configFor({ rewardsActive: true }),
+    }),
+    admitNewSubmission: async () => false,
+  });
+  assert.equal(blocked.ok, false);
+  if (!blocked.ok) assert.equal(blocked.code, "inactive");
+  assert.equal(fresh.submits, 0);
+  assert.equal((await armed.intents(MINT, "production")).length, 0);
 });
