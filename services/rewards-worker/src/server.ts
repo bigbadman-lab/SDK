@@ -3,10 +3,12 @@
 // TREST credentials and it does not start the historical TREST loop.
 // A raw deployer key, even as a Render secret, is unrestricted control of
 // that wallet. The process derives the public key and deletes the variable.
-// Financial work starts only when REWARDS_LOOP_ENABLED and
-// REWARDS_EXECUTION_AUTHORIZED are exactly "true", the signer matches, and
-// sdk_parent_config.rewards_active is true. A saved key, a resumed process,
-// or a finished deploy does not authorise a broadcast.
+// The loop starts only when REWARDS_LOOP_ENABLED and
+// REWARDS_EXECUTION_AUTHORIZED are exactly "true" and the signer matches.
+// Parent reward broadcasts also require sdk_parent_config.rewards_active.
+// Production child-fee broadcasts additionally require child_fees_active.
+// launches_active does not authorise either broadcast. A saved key, a
+// resumed process, or a finished deploy does not authorise a broadcast.
 // POST /v1/claims accepts an authenticated reservation and never an
 // instruction list.
 
@@ -55,6 +57,7 @@ function boot(): { ok: true; signer: SignerState; active: boolean } | { ok: fals
     lastWindow: null,
     reconciliation: "unknown",
     claimsReady: false,
+    emergencyFence: process.env.EMERGENCY_FENCE === "true",
   }));
   if (active && secret && expectedAddress) {
     const retained = { secret, expectedAddress, suspended, mode: "production" as const };

@@ -124,6 +124,11 @@ export type ProductionStatus = {
   lastWindow: string | null;
   reconciliation: ProductionReconciliation;
   claims: "ready" | "closed";
+  distributor: "present";
+  childFees: "enabled" | "disabled";
+  launches: "active" | "inactive";
+  childFeeReconciliation: ProductionReconciliation;
+  emergencyFence: "active" | "inactive";
 };
 
 export function presentProductionStatus(input: {
@@ -135,6 +140,10 @@ export function presentProductionStatus(input: {
   lastWindow: string | null;
   reconciliation: ProductionReconciliation;
   claimsReady: boolean;
+  childFeesEnabled?: boolean;
+  launchesActive?: boolean;
+  childFeeReconciliation?: ProductionReconciliation;
+  emergencyFence?: boolean;
 }): ProductionStatus {
   const mint = input.canonicalMint && input.canonicalMint !== TREST_MINT ? canonicalAddress(input.canonicalMint) : null;
   const rewardsActive = input.rewardsActive === true && mint !== null;
@@ -148,6 +157,11 @@ export function presentProductionStatus(input: {
     lastWindow: input.lastWindow,
     reconciliation: input.reconciliation,
     claims: broadcasting && input.claimsReady ? "ready" : "closed",
+    distributor: "present",
+    childFees: input.childFeesEnabled === true && input.emergencyFence !== true && mint !== null && input.signer === "matched" && input.loopRunning ? "enabled" : "disabled",
+    launches: input.launchesActive === true && mint !== null ? "active" : "inactive",
+    childFeeReconciliation: input.childFeeReconciliation ?? "unknown",
+    emergencyFence: input.emergencyFence === true ? "active" : "inactive",
   };
 }
 

@@ -43,26 +43,30 @@ export async function serviceChildFees(input: {
   let verified = 0;
   let submitted = 0;
   for (const child of input.children) {
-    const key = `child:${child.scope}:${child.mint}:${window.startMs}`;
-    if (input.completedKeys.includes(key)) continue;
-    const observed = await input.readConfig(child);
-    if (!observed) continue;
-    const sharing = verifyChildSharing({
-      category: child.category,
-      launcherWallet: child.launcher,
-      originatorWallet: child.originator,
-      observed: observed.shareholders,
-      adminRevoked: observed.adminRevoked,
-    });
-    if (!sharing.ok) continue;
-    const instructions = await input.prepare(child);
-    if (!instructions || instructions.length === 0) continue;
-    if (instructions.some((instruction) => nativeCollectionInstruction(instruction.data))) continue;
-    if (!instructions.some((instruction) => pumpCreatorFeeDistribution(instruction.programId, instruction.data))) continue;
-    verified += 1;
-    if (!input.submit) continue;
-    const result = await input.submit(child, key, instructions, sharing.shareholders);
-    if (result.status === "confirmed" && result.receipts.length > 0) submitted += 1;
+    try {
+      const key = `child:${child.scope}:${child.mint}:${window.startMs}`;
+      if (input.completedKeys.includes(key)) continue;
+      const observed = await input.readConfig(child);
+      if (!observed) continue;
+      const sharing = verifyChildSharing({
+        category: child.category,
+        launcherWallet: child.launcher,
+        originatorWallet: child.originator,
+        observed: observed.shareholders,
+        adminRevoked: observed.adminRevoked,
+      });
+      if (!sharing.ok) continue;
+      const instructions = await input.prepare(child);
+      if (!instructions || instructions.length === 0) continue;
+      if (instructions.some((instruction) => nativeCollectionInstruction(instruction.data))) continue;
+      if (!instructions.some((instruction) => pumpCreatorFeeDistribution(instruction.programId, instruction.data))) continue;
+      verified += 1;
+      if (!input.submit) continue;
+      const result = await input.submit(child, key, instructions, sharing.shareholders);
+      if (result.status === "confirmed" && result.receipts.length > 0) submitted += 1;
+    } catch {
+      continue;
+    }
   }
   return { ok: true, verified, submitted };
 }

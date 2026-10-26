@@ -15,6 +15,7 @@ import {
   type StoredLaunchBuild,
 } from "@/lib/launch/submit-plan";
 import { EVIDENCE_PATH } from "@/lib/launch/builder-request";
+import { acceptedLaunchApproval } from "@/lib/rewards/child-fee-gate";
 import { signServiceRequest } from "@/lib/launch/service-auth";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { requireTransactionBuilder } from "@/lib/server/env";
@@ -167,12 +168,18 @@ async function loadSubmission(sql: Sql, launchId: string): Promise<SubmissionInt
 
 async function loadApproval(sql: Sql, launchId: string, buildId: string): Promise<LaunchApproval | null> {
   try {
-    const rows = await sql<LaunchApproval[]>`
-      select launch_id as "launchId", build_id as "buildId", parent_mint_address as "parentMint", scope
+    const rows = await sql<(LaunchApproval & { approver: string })[]>`
+      select launch_id as "launchId",
+             build_id as "buildId",
+             parent_mint_address as "parentMint",
+             scope,
+             approver_wallet as approver
       from launch_approvals
       where launch_id = ${launchId} and build_id = ${buildId}
     `;
-    return rows[0] ?? null;
+    const row = rows[0];
+    if (!row || !acceptedLaunchApproval({ scope: row.scope, approver: row.approver, parentMint: row.parentMint })) return null;
+    return row;
   } catch (error) {
     if (schemaCode(error) === "missing_schema") return null;
     throw error;

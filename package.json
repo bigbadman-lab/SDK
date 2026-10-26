@@ -17,6 +17,7 @@
     "sdk:register": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/sdk-register-cli.ts",
     "sdk:status": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/sdk-status-cli.ts",
     "sdk:activate-rewards": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/sdk-activate-cli.ts",
+    "sdk:activate-launches": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/sdk-launch-cli.ts",
     "sdk:rewards-status": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types services/transaction-builder/src/sdk-rewards-status-cli.ts",
     "test:auth": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test lib/auth/*.test.ts",
     "test:blueprint": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test lib/blueprint/*.test.ts lib/builder/*.test.ts lib/library/*.test.ts lib/api/*.test.ts lib/launch/*.test.ts lib/wallet/*.test.ts lib/rewards/*.test.ts",

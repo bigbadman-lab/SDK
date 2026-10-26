@@ -6,7 +6,8 @@ import { heliusChain, heliusRpc } from "./chain.ts";
 import { beginTick, endTick, instanceHolder, shutdownRequested } from "./lifecycle.ts";
 import { authorisedTick } from "./loop.ts";
 import { createSql, postgresRewardsStore } from "./postgres.ts";
-import { loadProductionParent, readProductionOperations } from "./production-scope.ts";
+import { runProductionChildPass } from "./production-child-fees.ts";
+import { loadProductionParent, readChildFeeReconciliation, readProductionFlags, readProductionOperations } from "./production-scope.ts";
 import { replaceProductionStatus } from "./production-status.ts";
 import { runProductionCycle, submitClaim } from "./run.ts";
 
@@ -118,6 +119,11 @@ export function startProductionLoop(input: { secret: string; expectedAddress: st
       const ops = resolved.ok
         ? await readProductionOperations(sql, resolved.mint)
         : { lastWindow: null, reconciliation: "unknown" as const };
+      const flags = await readProductionFlags(sql);
+      const childFeeReconciliation = resolved.ok
+        ? await readChildFeeReconciliation(sql, resolved.mint)
+        : "unknown" as const;
+      const executionAuthorised = process.env.REWARDS_LOOP_ENABLED === "true" && process.env.REWARDS_EXECUTION_AUTHORIZED === "true";
       replaceProductionStatus(presentProductionStatus({
         canonicalMint: resolved.ok ? resolved.mint : null,
         signer: suspended ? "suspended" : "matched",
@@ -127,6 +133,10 @@ export function startProductionLoop(input: { secret: string; expectedAddress: st
         lastWindow: ops.lastWindow,
         reconciliation: ops.reconciliation,
         claimsReady: rewardsActive,
+        childFeesEnabled: flags.childFeesActive && executionAuthorised && !suspended && !stopping && !emergencyFence && resolved.ok,
+        launchesActive: flags.launchesActive && resolved.ok,
+        childFeeReconciliation,
+        emergencyFence,
       }));
       await authorisedTick({
         suspended,
@@ -157,7 +167,24 @@ export function startProductionLoop(input: { secret: string; expectedAddress: st
             chain,
           });
         },
-        children: async () => undefined,
+        children: async () => {
+          if (!resolved.ok) return;
+          await runProductionChildPass({
+            sql,
+            rpcUrl,
+            chain,
+            secret: input.secret,
+            expectedAddress: input.expectedAddress,
+            suspended,
+            emergencyFence,
+            shuttingDown: stopping,
+            canonicalMint: resolved.mint,
+            childFeesActive: flags.childFeesActive,
+            launchesActive: flags.launchesActive,
+            rewardsActive: resolved.rewardsActive,
+            executionAuthorised,
+          });
+        },
       });
     })().catch(() => {
       console.error("rewards-worker cycle");

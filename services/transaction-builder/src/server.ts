@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Connection, PublicKey } from "@solana/web3.js";
 
 import { PLATFORM_FEE_WALLET } from "../../../lib/launch/fees.ts";
-import { handle, type HandlerPorts } from "./handle.ts";
+import { builderHealthBody, handle, type HandlerPorts } from "./handle.ts";
 import { observeQuoteParent } from "./chain.ts";
 import { loadLaunchEvidence, transactionFromRpc } from "./evidence.ts";
 import { createLiveProducer } from "./live.ts";
@@ -178,7 +178,7 @@ function start(): void {
       }
       if (!bound || !secret) {
         if (method === "GET" && path === "/health") {
-          send(response, 200, { ok: true, service: "transaction-builder" });
+          send(response, 200, builderHealthBody());
           return;
         }
         if (method === "GET" && path === "/status") {

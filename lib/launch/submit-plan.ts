@@ -1,3 +1,4 @@
+import { acceptedLaunchApproval } from "../rewards/child-fee-gate.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees, type FeeCategory, type Shareholder } from "./fees.ts";
 import { getSignatureFromTransaction, getTransactionDecoder } from "@solana/kit";
 
@@ -30,10 +31,17 @@ export type LaunchApproval = {
   buildId: string;
   parentMint: string;
   scope: "production" | "test";
+  approver?: string;
 };
 
 export function approvalMatches(build: StoredLaunchBuild, approval: LaunchApproval | null): boolean {
   if (!approval) return false;
+  if (
+    approval.approver !== undefined &&
+    !acceptedLaunchApproval({ scope: approval.scope, approver: approval.approver, parentMint: approval.parentMint })
+  ) {
+    return false;
+  }
   return (
     approval.launchId === build.launchId &&
     approval.buildId === build.buildId &&

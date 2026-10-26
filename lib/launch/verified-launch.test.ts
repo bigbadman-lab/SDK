@@ -63,7 +63,8 @@ test("operator TREST signing stays closed for everyone else", () => {
   const admin = readFileSync(new URL("../../app/api/admin/trest/build/route.ts", import.meta.url), "utf8");
   assert.match(build, /x-sdk-rehearsal/);
   assert.match(build, /403/);
-  assert.match(build, /publicChildLaunchesOpen/);
+  assert.match(build, /readPublicLaunchGate/);
+  assert.equal(build.includes("publicChildLaunchesOpen"), false);
   assert.match(prepare, /x-sdk-rehearsal/);
   assert.equal(prepare.includes("bindRehearsalParent"), false);
   assert.match(admin, /isProvisionedOperator/);
@@ -71,7 +72,9 @@ test("operator TREST signing stays closed for everyone else", () => {
   assert.equal(audiencePair(true).label, "$TREST");
   assert.equal(audiencePair(false).label, "$SDK");
   const form = readFileSync(new URL("../../components/launch/form.tsx", import.meta.url), "utf8");
-  assert.match(form, /Public launches stay paired with \$SDK/);
+  const gate = readFileSync(new URL("./public-gate.ts", import.meta.url), "utf8");
+  assert.match(form, /closedLaunchCopy\(availability\)/);
+  assert.match(gate, /Public launches stay paired with \$SDK/);
   assert.match(form, /audiencePair\(rehearsal\)\.label/);
 });
 

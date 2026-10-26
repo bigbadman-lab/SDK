@@ -1,5 +1,6 @@
 "use client";
 
+import { ProductionLaunchActions } from "@/components/launch/production-actions";
 import { RehearsalActions } from "@/components/launch/rehearsal-actions";
 import { LaunchResume } from "@/components/launch/launch-progress";
 import { LaunchSigningStatus } from "@/components/launch/signing-status";
@@ -15,6 +16,7 @@ import {
 } from "@/lib/launch/confirm";
 import { checkImage } from "@/lib/launch/image";
 import { networkCostCopy } from "@/lib/launch/cost";
+import { closedLaunchCopy, type PublicLaunchAvailability } from "@/lib/launch/public-gate";
 import { launchMessage } from "@/lib/launch/messages";
 import { audiencePair } from "@/lib/launch/verified-launch";
 import {
@@ -46,11 +48,11 @@ const fieldClass =
 export function LaunchForm({
   source,
   rehearsal = false,
-  mintRegistered = false,
+  availability = "inactive",
 }: {
   source: LaunchSourceView;
   rehearsal?: boolean;
-  mintRegistered?: boolean;
+  availability?: PublicLaunchAvailability;
 }): ReactNode {
   const idempotencyKey = useRef(crypto.randomUUID());
   const lock = useRef(false);
@@ -494,7 +496,7 @@ export function LaunchForm({
           <ConfirmLaunch
             review={confirm}
             rehearsal={rehearsal}
-            mintRegistered={mintRegistered}
+            availability={availability}
             onEdit={() => setConfirmation(null)}
             onTrack={setTracked}
           />
@@ -607,13 +609,13 @@ function ArtworkField({
 function ConfirmLaunch({
   review,
   rehearsal,
-  mintRegistered,
+  availability,
   onEdit,
   onTrack,
 }: {
   review: LaunchReview;
   rehearsal: boolean;
-  mintRegistered: boolean;
+  availability: PublicLaunchAvailability;
   onEdit: () => void;
   onTrack: (launch: OpenLaunch) => void;
 }): ReactNode {
@@ -694,16 +696,11 @@ function ConfirmLaunch({
       <LaunchCapabilityNotice />
       {rehearsal ? (
             <RehearsalActions review={review} onTrack={onTrack} />
+      ) : availability === "open" ? (
+        <ProductionLaunchActions review={review} onTrack={onTrack} />
       ) : (
-        <>
-          <LaunchSigningStatus
-            phase="unavailable"
-            body={
-              mintRegistered
-                ? "Public launches stay paired with $SDK. Signing and submission are not available from this screen."
-                : "Token launching opens when the official $SDK mint is registered."
-            }
-          />
+        <div data-launch-availability={availability}>
+          <LaunchSigningStatus phase="unavailable" body={closedLaunchCopy(availability)} />
           <div className="mt-4 flex flex-col-reverse gap-2 min-[561px]:flex-row min-[561px]:justify-end">
             <button
               type="button"
@@ -715,7 +712,7 @@ function ConfirmLaunch({
               Launch Token
             </button>
           </div>
-        </>
+        </div>
       )}
       <div className="mt-4 flex flex-col-reverse gap-2 min-[561px]:flex-row min-[561px]:justify-end">
         <button

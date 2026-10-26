@@ -101,6 +101,37 @@ export async function readProductionOperations(sql: Sql, mint: string): Promise<
   }
 }
 
+export async function readProductionFlags(sql: Sql): Promise<{ launchesActive: boolean; childFeesActive: boolean }> {
+  try {
+    const rows = await sql<{ launchesActive: boolean | null; childFeesActive: boolean | null }[]>`
+      select launches_active as "launchesActive", child_fees_active as "childFeesActive"
+      from sdk_parent_config
+      where id = 1
+    `;
+    return {
+      launchesActive: rows[0]?.launchesActive === true,
+      childFeesActive: rows[0]?.childFeesActive === true,
+    };
+  } catch {
+    return { launchesActive: false, childFeesActive: false };
+  }
+}
+
+export async function readChildFeeReconciliation(sql: Sql, mint: string): Promise<"clear" | "outstanding" | "unknown"> {
+  try {
+    const open = await sql<{ n: number }[]>`
+      select count(*)::int as n
+      from child_fee_distributions
+      where scope = 'production'
+        and quote_mint_address = ${mint}
+        and status in ('submitted', 'uncertain', 'unreconciled')
+    `;
+    return (open[0]?.n ?? 0) > 0 ? "outstanding" : "clear";
+  } catch {
+    return "unknown";
+  }
+}
+
 export function productionParentReady(input: {
   registration: ProductionRegistration | null;
   config: CanonicalParentConfig | null;

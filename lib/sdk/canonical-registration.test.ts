@@ -266,9 +266,11 @@ test("registration leaves rewards and child launches inactive", async () => {
   const migration = readFileSync(new URL("../../supabase/migrations/20261026190000_sdk_prod_01a_canonical_parent.sql", import.meta.url), "utf8");
   const registrar = readFileSync(new URL("../../services/transaction-builder/src/sdk-register-cli.ts", import.meta.url), "utf8");
   assert.equal(claim.includes("rewardsAreActive"), true);
-  assert.equal(submit.includes("publicChildLaunchesOpen"), true);
-  assert.equal(build.includes("publicChildLaunchesOpen"), true);
-  assert.equal(recover.includes("publicChildLaunchesOpen"), true);
+  assert.equal(submit.includes("readPublicLaunchGate"), true);
+  assert.equal(build.includes("readPublicLaunchGate"), true);
+  assert.equal(recover.includes("readPublicLaunchGate"), true);
+  assert.equal(submit.includes("publicChildLaunchesOpen"), false);
+  assert.equal(build.includes("PUBLIC_CHILD_LAUNCHES"), false);
   assert.match(migration, /rewards_active boolean not null default false/);
   assert.match(migration, /canonical mint is immutable/);
   assert.equal(migration.includes("BRQG5CuAX3MuJYwmTWL7KvmPSB6kkR3Y5eHup5W1pump"), false);

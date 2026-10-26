@@ -15,29 +15,40 @@ import {
 } from "@/lib/launch/builder-request";
 import { parseParentObservation, type ParentObservation } from "@/lib/launch/parent";
 import { signServiceRequest } from "@/lib/launch/service-auth";
+import { PLATFORM_FEE_WALLET } from "@/lib/launch/fees";
+import { acceptCanonicalLaunchParent } from "@/lib/launch/production-parent";
 import { canReleaseUnsignedMint } from "@/lib/launch/rehearsal-flow";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { requireTransactionBuilder } from "@/lib/server/env";
+import { readPublicLaunchGate } from "@/lib/server/launch/gate";
 
 export async function requestUnsignedBuild(input: {
   accountId: string;
   launchId: string;
   mintPublicKey: string;
-}): Promise<{ ok: true; body: unknown } | { ok: false; code: string }> {
+}): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; code: string }> {
+  const gate = await readPublicLaunchGate();
+  if (!gate.open) return { ok: false, code: gate.availability === "unavailable" ? "unavailable" : "closed" };
+  const sql = getSql();
   let idempotencyKey: string;
   try {
-    const rows = await getSql()<{
+    const rows = await sql<{
       account_id: string;
       idempotency_key: string;
       status: string;
+      parent_scope: string;
+      parent_mint_address: string | null;
     }[]>`
-      select account_id, idempotency_key, status
+      select account_id, idempotency_key, status, parent_scope, parent_mint_address
       from token_launches
       where id = ${input.launchId}
     `;
     const row = rows[0];
     if (!row || row.account_id !== input.accountId || row.status !== "ready_for_transaction") {
       return { ok: false, code: "not_found" };
+    }
+    if (row.parent_scope !== "production" || row.parent_mint_address !== null) {
+      return { ok: false, code: "parent_scope" };
     }
     idempotencyKey = row.idempotency_key;
   } catch (error) {
@@ -46,49 +57,99 @@ export async function requestUnsignedBuild(input: {
       code: databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable",
     };
   }
-  const request: UnsignedBuildRequest = {
+  const parsed = parseUnsignedBuildRequest({
     launchId: input.launchId,
     idempotencyKey,
     mintPublicKey: input.mintPublicKey,
-  };
-  const parsed = parseUnsignedBuildRequest(request);
-  if (!parsed.ok) return parsed;
-  let config: { url: string; secret: string };
-  try {
-    config = requireTransactionBuilder();
-  } catch {
-    return { ok: false, code: "builder_unconfigured" };
-  }
-  const body = JSON.stringify(parsed.value);
-  const timestamp = String(Math.floor(Date.now() / 1000));
-  const nonce = randomUUID().replaceAll("-", "");
-  const signature = signServiceRequest({
-    secret: config.secret,
-    timestamp,
-    nonce,
-    method: "POST",
-    path: BUILD_PATH,
-    body,
   });
+  if (!parsed.ok) return parsed;
+  const posted = await postBuild(parsed.value, false);
+  if (!posted.ok) return posted;
   try {
-    const response = await fetch(new URL(BUILD_PATH, config.url), {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-sdk-timestamp": timestamp,
-        "x-sdk-nonce": nonce,
-        "x-sdk-signature": signature,
-      },
-      body,
-      signal: AbortSignal.timeout(10_000),
-    });
-    const payload: unknown = await response.json();
-    if (!response.ok || !unsignedBuildAccepted(payload)) {
-      return { ok: false, code: builderFailureCode(payload) };
+    const builds = await sql<{
+      id: string;
+      parent_mint_address: string;
+      mint_address: string;
+      message_hash: string;
+      blockhash: string;
+      transaction: string;
+      buy_amount: string;
+      shareholders: unknown;
+      expires_at: Date;
+    }[]>`
+      select id, parent_mint_address, mint_address, message_hash, blockhash, transaction, buy_amount, shareholders, expires_at
+      from launch_builds
+      where launch_id = ${input.launchId} and account_id = ${input.accountId} and mint_address = ${input.mintPublicKey}
+      order by created_at desc
+      limit 1
+    `;
+    const build = builds[0];
+    const configs = await sql<{
+      mint_address: string | null;
+      token_program: string | null;
+      decimals: number | null;
+    }[]>`
+      select mint_address, token_program, decimals
+      from sdk_parent_config
+      where id = 1
+    `;
+    const config = configs[0];
+    if (!build || !config?.mint_address) return { ok: false, code: "parent_unregistered" };
+    const observed = await requestParentObservation(config.mint_address);
+    if (!observed.ok) {
+      return { ok: false, code: observed.code === "builder_rejected" ? "parent_ineligible" : observed.code };
     }
-    return { ok: true, body: payload };
-  } catch {
-    return { ok: false, code: "builder_rejected" };
+    const accepted = acceptCanonicalLaunchParent({
+      configMint: config.mint_address,
+      configProgram: config.token_program,
+      configDecimals: config.decimals,
+      observed: observed.observation,
+      buildParentMint: build.parent_mint_address,
+    });
+    if (!accepted.ok) return accepted;
+    const current = await readPublicLaunchGate();
+    if (!current.open || current.mint !== accepted.mint) {
+      return { ok: false, code: current.availability === "unavailable" ? "unavailable" : "closed" };
+    }
+    await sql`
+      insert into launch_approvals (launch_id, build_id, parent_mint_address, scope, approver_wallet)
+      values (${input.launchId}, ${build.id}, ${accepted.mint}, 'production', ${PLATFORM_FEE_WALLET})
+      on conflict (launch_id, build_id) do nothing
+    `;
+    await sql`
+      update token_launches
+      set attempt_status = 'ready_to_sign',
+          attempt_mint_address = ${build.mint_address},
+          attempt_message_hash = ${build.message_hash}
+      where id = ${input.launchId}
+        and account_id = ${input.accountId}
+        and parent_scope = 'production'
+        and parent_mint_address is null
+        and (attempt_mint_address is null or attempt_mint_address = ${build.mint_address})
+    `;
+    return {
+      ok: true,
+      body: {
+        ok: true,
+        buildId: build.id,
+        launchId: input.launchId,
+        parentMint: accepted.mint,
+        childMint: build.mint_address,
+        messageHash: build.message_hash,
+        blockhash: build.blockhash,
+        expiresAt: new Date(build.expires_at).toISOString(),
+        transaction: build.transaction,
+        buyAmount: build.buy_amount,
+        shareholders: build.shareholders,
+        authorized: false,
+        sigVerify: false,
+        coverage: "live",
+        transactionVersion: 1,
+        encoding: "base64",
+      },
+    };
+  } catch (error) {
+    return { ok: false, code: databaseFailure(error) === "missing_schema" ? "not_ready" : "unavailable" };
   }
 }
 

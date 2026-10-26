@@ -28,6 +28,8 @@ test("public child launches stay closed until an explicit flag is set", () => {
   assert.match(market, /json\(\{ ok: false, phase: "unavailable" \}, 404\)/);
   assert.match(market, /"cache-control": "private, no-store"/);
   assert.match(allocations, /404/);
-  assert.match(submit, /publicChildLaunchesOpen/);
-  assert.match(recover, /publicChildLaunchesOpen/);
+  assert.match(submit, /readPublicLaunchGate/);
+  assert.match(recover, /readPublicLaunchGate/);
+  assert.equal(submit.includes("publicChildLaunchesOpen"), false);
+  assert.equal(recover.includes("publicChildLaunchesOpen"), false);
 });

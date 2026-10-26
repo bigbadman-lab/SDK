@@ -27,6 +27,8 @@ import {
   resolveLaunchQuery,
 } from "@/lib/server/launch/service";
 import { listPublished, readPublished } from "@/lib/server/library/service";
+import { closedLaunchCopy, type PublicLaunchAvailability } from "@/lib/launch/public-gate";
+import { readPublicLaunchGate } from "@/lib/server/launch/gate";
 import { officialIdentity } from "@/lib/sdk/official";
 import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import type { Metadata } from "next";
@@ -87,6 +89,7 @@ async function LaunchBody({
   });
   const openLaunchPromise = account ? loadOpenLaunch(account.id) : Promise.resolve(null);
   const officialPromise = loadOfficialSdk();
+  const gatePromise = readPublicLaunchGate();
   let source: Awaited<ReturnType<typeof resolveLaunchQuery>> | null = null;
   let held: {
     name: string;
@@ -132,20 +135,22 @@ async function LaunchBody({
       );
     }
   }
-  const [openLaunch, catalog, official] = await Promise.all([
+  const [openLaunch, catalog, official, gate] = await Promise.all([
     openLaunchPromise,
     source || held ? Promise.resolve(null) : loadCatalog(account, query),
     officialPromise,
+    gatePromise,
   ]);
   const identity = officialIdentity(official);
-  const mintRegistered = identity.mint !== null;
+  const availability: PublicLaunchAvailability = !official.ok || (identity.mint !== null && gate.mint !== null && identity.mint !== gate.mint)
+    ? "unavailable"
+    : gate.availability;
   return (
     <>
-        {identity.mint ? (
-          <p className="mt-4 break-all font-mono text-[12px] text-muted-foreground">
-            Canonical parent {identity.mint}. Public token creation stays closed.
-          </p>
-        ) : null}
+        <p className="mt-4 text-[14px] leading-[1.5] text-muted-foreground" data-launch-availability={availability}>
+          {closedLaunchCopy(availability)}
+          {gate.mint ? <span className="mt-1 block break-all font-mono text-[12px]">Canonical parent {gate.mint}.</span> : null}
+        </p>
         {openLaunch ? (
           <div className="mt-6">
             <LaunchResume launch={openLaunch} />
@@ -161,10 +166,10 @@ async function LaunchBody({
           <LaunchForm
             key={`${source.kind}:${source.draftId ?? source.librarySdkId}:${source.versionId}`}
             source={source}
-            mintRegistered={mintRegistered}
+            availability={availability}
           />
         ) : null}
-        {held ? <HeldSdk sdk={held} mintRegistered={mintRegistered} /> : null}
+        {held ? <HeldSdk sdk={held} availability={availability} /> : null}
         {catalog ? (
           <LaunchSelector
             signedIn={account !== null}

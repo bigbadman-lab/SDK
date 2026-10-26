@@ -145,10 +145,10 @@ async function commitIdentity(sql: Sql, identity: CanonicalIdentity): Promise<"o
         await tx`
           insert into sdk_parent_config (
             id, mint_address, token_program, decimals, bonding_curve_address, quote_mint_address,
-            eligible, eligibility_reason, graduated, pool_address, verified_at, rewards_active, alt_status
+            eligible, eligibility_reason, graduated, pool_address, verified_at, rewards_active, launches_active, alt_status
           ) values (
             1, ${identity.mint}, ${identity.tokenProgram}, ${identity.decimals}, ${identity.bondingCurve},
-            ${identity.quoteMint}, true, 'canonical', ${identity.graduated}, ${identity.pool}, now(), false, 'absent'
+            ${identity.quoteMint}, true, 'canonical', ${identity.graduated}, ${identity.pool}, now(), false, false, 'absent'
           )
         `;
       } else {
@@ -165,6 +165,7 @@ async function commitIdentity(sql: Sql, identity: CanonicalIdentity): Promise<"o
               pool_address = ${identity.pool},
               verified_at = now(),
               rewards_active = false,
+              launches_active = false,
               updated_at = now()
           where id = 1 and mint_address is null
           returning id

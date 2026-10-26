@@ -1,0 +1,324 @@
+import { Connection, PublicKey } from "@solana/web3.js";
+
+import { canonicalAddress } from "../../../lib/auth/solana.ts";
+import {
+  LAUNCH_ACTIVATION_LOCK,
+  parseBuilderHealth,
+  parseLaunchWorkerHealth,
+  parseWebsiteHealth,
+  presentLaunchStatus,
+  runLaunchActivation,
+  type LaunchControlSnapshot,
+} from "../../../lib/launch/launch-activation.ts";
+import { TREST_MINT } from "../../../lib/launch/verified-launch.ts";
+import type { ProductionRegistration } from "../../../lib/rewards/production.ts";
+import { readMintAccount } from "../../../lib/sdk/canonical-registration.ts";
+import { createSql } from "./store.ts";
+
+type Sql = ReturnType<typeof createSql>;
+type CommitResult = "ok" | "idempotent" | "blocked" | "rolled_back";
+
+const WORKER = "https://sdk-rewards-worker.onrender.com";
+const BUILDER = "https://sdk-transaction-builder.onrender.com";
+const WEBSITE = "https://sdk.fund";
+
+function feeMode(value: string): ProductionRegistration["feeMode"] | null {
+  if (value === "single_recipient" || value === "fee_sharing" || value === "holder_rewards" || value === "unknown") return value;
+  return null;
+}
+
+function schemaCode(error: unknown): "schema" | "unavailable" {
+  const code = error && typeof error === "object" && "code" in error ? String((error as { code: unknown }).code) : "";
+  return code === "42703" || code === "42P01" ? "schema" : "unavailable";
+}
+
+async function guardedFlag(sql: Sql, mint: string, flag: "child_fees_active" | "launches_active", value: boolean): Promise<CommitResult> {
+  const expected = canonicalAddress(mint);
+  if (!expected || expected === TREST_MINT) return "blocked";
+  try {
+    return await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(${LAUNCH_ACTIVATION_LOCK})`;
+      const configs = await tx<{
+        mint: string | null;
+        tokenProgram: string | null;
+        decimals: number | null;
+        rewardsActive: boolean;
+        launchesActive: boolean;
+        childFeesActive: boolean;
+      }[]>`
+        select mint_address as mint,
+               token_program as "tokenProgram",
+               decimals,
+               rewards_active as "rewardsActive",
+               launches_active as "launchesActive",
+               child_fees_active as "childFeesActive"
+        from sdk_parent_config
+        where id = 1
+        for update
+      `;
+      const parents = await tx<{ mint: string; tokenProgram: string; decimals: number }[]>`
+        select mint_address as mint, token_program as "tokenProgram", decimals
+        from parent_registrations
+        where scope = 'production' and symbol = 'SDK'
+        for update
+      `;
+      const config = configs[0];
+      const parent = parents.length === 1 ? parents[0] : null;
+      if (!config?.mint || !parent || canonicalAddress(config.mint) !== expected || canonicalAddress(parent.mint) !== expected) {
+        throw new Error("blocked");
+      }
+      if (parent.tokenProgram !== config.tokenProgram || parent.decimals !== config.decimals) throw new Error("blocked");
+      const current = flag === "child_fees_active" ? config.childFeesActive === true : config.launchesActive === true;
+      if (current === value) return "idempotent" as const;
+      const updated = flag === "child_fees_active"
+        ? await tx<{ mint: string; rewardsActive: boolean; launchesActive: boolean }[]>`
+            update sdk_parent_config
+            set child_fees_active = ${value}, updated_at = now()
+            where id = 1
+              and child_fees_active = ${!value}
+              and mint_address = ${expected}
+              and rewards_active = ${config.rewardsActive}
+              and launches_active = ${config.launchesActive}
+            returning mint_address as mint, rewards_active as "rewardsActive", launches_active as "launchesActive"
+          `
+        : await tx<{ mint: string; rewardsActive: boolean; childFeesActive: boolean }[]>`
+            update sdk_parent_config
+            set launches_active = ${value}, updated_at = now()
+            where id = 1
+              and launches_active = ${!value}
+              and mint_address = ${expected}
+              and rewards_active = ${config.rewardsActive}
+              and child_fees_active = ${config.childFeesActive}
+            returning mint_address as mint, rewards_active as "rewardsActive", child_fees_active as "childFeesActive"
+          `;
+      const row = updated[0];
+      if (!row || canonicalAddress(row.mint) !== expected || row.rewardsActive !== config.rewardsActive) throw new Error("blocked");
+      if (flag === "child_fees_active" && "launchesActive" in row && row.launchesActive !== config.launchesActive) throw new Error("blocked");
+      if (flag === "launches_active" && "childFeesActive" in row && row.childFeesActive !== config.childFeesActive) throw new Error("blocked");
+      return "ok" as const;
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === "blocked") return "blocked";
+    return "rolled_back";
+  }
+}
+
+export function commitChildFees(sql: Sql, mint: string): Promise<CommitResult> {
+  return guardedFlag(sql, mint, "child_fees_active", true);
+}
+
+export function commitLaunches(sql: Sql, mint: string): Promise<CommitResult> {
+  return guardedFlag(sql, mint, "launches_active", true);
+}
+
+export function closeLaunches(sql: Sql, mint: string): Promise<CommitResult> {
+  return guardedFlag(sql, mint, "launches_active", false);
+}
+
+export function disableChildFees(sql: Sql, mint: string): Promise<CommitResult> {
+  return guardedFlag(sql, mint, "child_fees_active", false);
+}
+
+async function readChain(rpcUrl: string, mint: string | null): Promise<LaunchControlSnapshot["chain"]> {
+  if (!mint) return { ok: false, code: "not_checked" };
+  if (!rpcUrl.startsWith("http")) return { ok: false, code: "unavailable" };
+  try {
+    const info = await new Connection(rpcUrl, "confirmed").getAccountInfo(new PublicKey(mint), "confirmed");
+    if (!info) return { ok: false, code: "missing" };
+    const facts = readMintAccount(info.owner.toBase58(), info.data);
+    if (!facts) return { ok: false, code: "missing" };
+    return { ok: true, owner: facts.owner, decimals: facts.decimals };
+  } catch {
+    return { ok: false, code: "unavailable" };
+  }
+}
+
+async function readBody(url: string): Promise<unknown> {
+  try {
+    const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(2_000) });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function loadLaunchSnapshot(sql: Sql, env: NodeJS.ProcessEnv = process.env): Promise<LaunchControlSnapshot> {
+  const signerAddress = env.SDK_DEPLOYER_ADDRESS ? canonicalAddress(env.SDK_DEPLOYER_ADDRESS) : null;
+  const workerUrl = env.REWARDS_WORKER_URL?.trim() || WORKER;
+  const builderUrl = env.TRANSACTION_BUILDER_URL?.trim() || BUILDER;
+  const websiteUrl = env.WEBSITE_URL?.trim() || WEBSITE;
+  const empty = (database: LaunchControlSnapshot["database"]): LaunchControlSnapshot => ({
+    database,
+    config: null,
+    registration: null,
+    chain: { ok: false, code: "not_checked" },
+    signerAddress,
+    builder: { ok: false, code: "unavailable" },
+    website: { ok: false, code: "unavailable" },
+    worker: { ok: false, code: "unavailable" },
+    unresolvedChildFees: null,
+    trestSuspended: null,
+    trestRehearsalOpen: null,
+  });
+  try {
+    const configs = await sql<{
+      mint: string | null;
+      tokenProgram: string | null;
+      decimals: number | null;
+      rewardsActive: boolean;
+      launchesActive: boolean;
+      childFeesActive: boolean;
+    }[]>`
+      select mint_address as mint,
+             token_program as "tokenProgram",
+             decimals,
+             rewards_active as "rewardsActive",
+             launches_active as "launchesActive",
+             child_fees_active as "childFeesActive"
+      from sdk_parent_config
+      where id = 1
+    `;
+    const parents = await sql<{
+      scope: string;
+      symbol: string;
+      mint: string;
+      tokenProgram: string;
+      decimals: number;
+      deployer: string;
+      feeRecipient: string;
+      feeMode: string;
+      quoteMint: string;
+      eligible: boolean;
+    }[]>`
+      select
+        scope, symbol, mint_address as mint, token_program as "tokenProgram", decimals,
+        deployer_address as deployer, fee_recipient_address as "feeRecipient",
+        fee_mode as "feeMode", quote_mint_address as "quoteMint", eligible
+      from parent_registrations
+      where scope = 'production' and symbol = 'SDK'
+      limit 2
+    `;
+    const unresolved = await sql<{ n: number }[]>`
+      select count(*)::int as n
+      from child_fee_distributions
+      where scope = 'production' and status in ('submitted', 'uncertain', 'unreconciled')
+    `;
+    const trest = await sql<{ suspended: boolean | null; open: number }[]>`
+      select
+        (
+          select signer_suspended
+          from reward_controls
+          where scope = 'test' and parent_mint_address = ${TREST_MINT}
+        ) as suspended,
+        (
+          select count(*)::int
+          from reward_rehearsals rehearsal
+          join parent_registrations parent on parent.mint_address = rehearsal.parent_mint_address
+          where parent.scope = 'test' and parent.symbol = 'TREST' and rehearsal.status = 'open'
+        ) as open
+    `;
+    const config = configs[0] ?? null;
+    const row = parents.length === 1 ? parents[0] : null;
+    const mode = row ? feeMode(row.feeMode) : null;
+    const registration: ProductionRegistration | null = row && mode
+      ? {
+          scope: row.scope,
+          symbol: row.symbol,
+          mint: row.mint,
+          tokenProgram: row.tokenProgram,
+          decimals: row.decimals,
+          deployer: row.deployer,
+          feeRecipient: row.feeRecipient,
+          feeMode: mode,
+          quoteMint: row.quoteMint,
+          eligible: row.eligible === true,
+        }
+      : null;
+    const [chain, builderBody, websiteBody, workerBody] = await Promise.all([
+      readChain(env.HELIUS_RPC_URL?.trim() ?? "", config?.mint ?? null),
+      readBody(new URL("/health", builderUrl).toString()),
+      readBody(new URL("/api/health", websiteUrl).toString()),
+      readBody(new URL("/health", workerUrl).toString()),
+    ]);
+    const builder = parseBuilderHealth(builderBody);
+    const website = parseWebsiteHealth(websiteBody);
+    const worker = parseLaunchWorkerHealth(workerBody);
+    return {
+      database: "ok",
+      config: config
+        ? {
+            mint: config.mint,
+            tokenProgram: config.tokenProgram,
+            decimals: config.decimals,
+            rewardsActive: config.rewardsActive === true,
+            launchesActive: config.launchesActive === true,
+            childFeesActive: config.childFeesActive === true,
+          }
+        : null,
+      registration,
+      chain,
+      signerAddress,
+      builder: builder.ok ? builder : { ok: false, code: "unavailable" },
+      website: website.ok ? website : { ok: false, code: "unavailable" },
+      worker,
+      unresolvedChildFees: unresolved[0]?.n ?? null,
+      trestSuspended: trest[0]?.suspended ?? null,
+      trestRehearsalOpen: trest[0] ? trest[0].open > 0 : null,
+    };
+  } catch (error) {
+    return empty(schemaCode(error));
+  }
+}
+
+const invoked = process.argv[1]?.endsWith("sdk-launch-cli.ts") === true;
+if (invoked) {
+  delete process.env.SDK_DEPLOYER_PRIVATE_KEY;
+  delete process.env.TREST_DEPLOYER_PRIVATE_KEY;
+  const databaseUrl = process.env.DATABASE_URL?.trim() ?? "";
+  if (!databaseUrl.startsWith("postgres")) {
+    const result = await runLaunchActivation(process.argv, {
+      snapshot: async () => ({
+        database: "unavailable",
+        config: null,
+        registration: null,
+        chain: { ok: false, code: "not_checked" },
+        signerAddress: process.env.SDK_DEPLOYER_ADDRESS ? canonicalAddress(process.env.SDK_DEPLOYER_ADDRESS) : null,
+        builder: { ok: false, code: "unavailable" },
+        website: { ok: false, code: "unavailable" },
+        worker: { ok: false, code: "unavailable" },
+        unresolvedChildFees: null,
+        trestSuspended: null,
+        trestRehearsalOpen: null,
+      }),
+      commitChildFees: async () => "blocked",
+      commitLaunches: async () => "blocked",
+      closeLaunches: async () => "blocked",
+      disableChildFees: async () => "blocked",
+    });
+    process.stdout.write(`${result.out}\n`);
+    process.exitCode = result.code;
+  } else {
+    const sql = createSql(databaseUrl);
+    try {
+      const statusOnly = process.argv.includes("--status");
+      if (statusOnly) {
+        const result = presentLaunchStatus(await loadLaunchSnapshot(sql), process.argv.find((token) => /^[0-9a-f]{40}$/.test(token)) ?? "");
+        process.stdout.write(`${result.out}\n`);
+        process.exitCode = result.code;
+      } else {
+        const result = await runLaunchActivation(process.argv, {
+          snapshot: () => loadLaunchSnapshot(sql),
+          commitChildFees: (mint) => commitChildFees(sql, mint),
+          commitLaunches: (mint) => commitLaunches(sql, mint),
+          closeLaunches: (mint) => closeLaunches(sql, mint),
+          disableChildFees: (mint) => disableChildFees(sql, mint),
+        });
+        process.stdout.write(`${result.out}\n`);
+        process.exitCode = result.code;
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
+  }
+}

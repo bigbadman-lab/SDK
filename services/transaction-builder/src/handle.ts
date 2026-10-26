@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { bindingDecision, payloadHash, type BuildIdentity } from "../../../lib/launch/build-binding.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "../../../lib/launch/fees.ts";
+import { serviceRevision } from "../../../lib/launch/service-revision.ts";
 import { feeCategory } from "../../../lib/launch/prepare.ts";
 import { parseEvidenceRequest, parseParentObservationRequest, parseRehearsalBuildRequest, parseUnsignedBuildRequest } from "../../../lib/launch/builder-request.ts";
 import type { LaunchEvidence } from "../../../lib/launch/chain-evidence.ts";
@@ -150,6 +151,24 @@ async function serviceStatus(ports: HandlerPorts): Promise<HandlerResult> {
   };
 }
 
+export function builderHealthBody(): {
+  ok: true;
+  service: "transaction-builder";
+  revision: string;
+  customQuote: "production";
+  signing: false;
+  broadcast: false;
+} {
+  return {
+    ok: true,
+    service: "transaction-builder",
+    revision: serviceRevision(),
+    customQuote: "production",
+    signing: false,
+    broadcast: false,
+  };
+}
+
 function ready(launch: LaunchRecord): boolean {
   return launch.status === "ready_for_transaction" && Boolean(launch.metadataHash) && Boolean(launch.metadataUri);
 }
@@ -165,7 +184,7 @@ export async function handle(
   ports: HandlerPorts,
 ): Promise<HandlerResult> {
   if (request.method === "GET" && request.path === "/health") {
-    return { status: 200, body: { ok: true, service: "transaction-builder" } };
+    return { status: 200, body: builderHealthBody() };
   }
   if (request.method === "GET" && request.path === "/status") {
     return serviceStatus(ports);

@@ -123,7 +123,7 @@ export function LaunchSelector({
 
 export function HeldSdk({
   sdk,
-  mintRegistered = false,
+  availability = "inactive",
 }: {
   sdk: {
     name: string;
@@ -132,7 +132,7 @@ export function HeldSdk({
     versionLabel: string;
     originatorLabel: string;
   };
-  mintRegistered?: boolean;
+  availability?: "unregistered" | "inactive" | "open" | "unavailable";
 }): ReactNode {
   return (
     <div className="mt-6 grid gap-4 border border-solid border-border p-4">
@@ -160,9 +160,13 @@ export function HeldSdk({
       <p className="text-[14px] leading-[1.5] text-muted-foreground">
         Connect your wallet to continue.
       </p>
-      {mintRegistered ? null : (
+      {availability === "open" ? null : (
         <p className="text-[14px] leading-[1.5] text-muted-foreground">
-          Token launching opens when the official $SDK mint is registered.
+          {availability === "unavailable"
+            ? "Launching is temporarily unavailable."
+            : availability === "inactive"
+              ? "Public launches stay paired with $SDK. Launching is not active yet."
+              : "Token launching opens when the official $SDK mint is registered."}
         </p>
       )}
       <WalletButton />
