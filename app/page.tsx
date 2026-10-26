@@ -1,7 +1,7 @@
 import { BuilderIntro } from "@/components/builder-intro";
 import { Ecosystem } from "@/components/home/ecosystem";
 import { HowItWorks } from "@/components/home/how-it-works";
-import { LaunchShowcase } from "@/components/home/launch-showcase";
+import { ClientInstall } from "@/components/home/client-install";
 import { LibraryShowcase } from "@/components/home/library-showcase";
 import { FinalCta } from "@/components/final-cta";
 import { Footer } from "@/components/footer";
@@ -34,7 +34,7 @@ export default function HomePage(): ReactNode {
         <BuilderIntro />
         <LibraryShowcase />
         <HowItWorks />
-        <LaunchShowcase />
+        <ClientInstall />
         <Ecosystem />
         <FinalCta />
       </main>
