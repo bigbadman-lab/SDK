@@ -20,7 +20,6 @@ import { libraryQuery, type LibraryQuery } from "@/lib/library/library";
 import { createMetadata } from "@/lib/metadata";
 import { getCurrentAccount } from "@/lib/server/account";
 import { loadOpenLaunch } from "@/lib/server/launch/discover";
-import { isProvisionedOperator } from "@/lib/server/operator";
 import type { AccountIdentity } from "@/lib/server/auth";
 import { BlueprintFlowError, listDrafts } from "@/lib/server/blueprint/service";
 import {
@@ -52,7 +51,6 @@ type LaunchQuery = {
   version?: string;
   q?: string;
   page?: string;
-  rehearsal?: string;
 };
 
 export default async function LaunchPage({
@@ -81,10 +79,6 @@ async function LaunchBody({
 }): Promise<ReactNode> {
   const query = await searchParams;
   const account = await getCurrentAccount();
-  const rehearsalRequested = query.rehearsal === "trest";
-  const rehearsal = Boolean(
-    rehearsalRequested && account && isProvisionedOperator(account.walletAddress),
-  );
   const mode = launchPageMode({
     signedIn: account !== null,
     draftId: query.draft ?? null,
@@ -139,22 +133,12 @@ async function LaunchBody({
   }
   const [openLaunch, catalog, official] = await Promise.all([
     openLaunchPromise,
-    source || held ? Promise.resolve(null) : loadCatalog(account, query, rehearsal),
+    source || held ? Promise.resolve(null) : loadCatalog(account, query),
     officialPromise,
   ]);
   const mintRegistered = official.ok && official.phase === "live";
   return (
     <>
-        {rehearsal ? (
-          <p className="mt-6 text-[15px] leading-[1.6]" role="status">
-            TREST rehearsal. This is a test launch paired with $TREST.
-          </p>
-        ) : null}
-        {rehearsalRequested && !rehearsal ? (
-          <p className="mt-6 text-[15px] leading-[1.6]" role="status">
-            The TREST rehearsal is limited to the provisioned operator. This page stays paired with $SDK.
-          </p>
-        ) : null}
         {openLaunch ? (
           <div className="mt-6">
             <LaunchResume launch={openLaunch} />
@@ -170,7 +154,6 @@ async function LaunchBody({
           <LaunchForm
             key={`${source.kind}:${source.draftId ?? source.librarySdkId}:${source.versionId}`}
             source={source}
-            rehearsal={rehearsal}
             mintRegistered={mintRegistered}
           />
         ) : null}
@@ -184,7 +167,6 @@ async function LaunchBody({
             libraryUnavailable={catalog.libraryUnavailable}
             query={catalog.query}
             nextPage={catalog.nextPage}
-            rehearsal={rehearsal}
           />
         ) : null}
     </>
@@ -194,7 +176,6 @@ async function LaunchBody({
 async function loadCatalog(
   account: AccountIdentity | null,
   params: { q?: string; page?: string },
-  rehearsal: boolean,
 ): Promise<{
   mine: LaunchChoice[] | null;
   mineUnavailable: boolean;
@@ -208,7 +189,7 @@ async function loadCatalog(
     q: params.q ?? null,
     page: params.page ?? null,
   }).then((published) => ({
-    library: published.listings.map((sdk) => toLibraryChoice(sdk, rehearsal)),
+    library: published.listings.map((sdk) => toLibraryChoice(sdk)),
     libraryUnavailable: false,
     query: { q: published.query.q, page: published.query.page },
     nextPage: published.nextPage,
@@ -235,7 +216,7 @@ async function loadCatalog(
     mine: drafts
       .filter(isLaunchEligibleDraft)
       .filter((draft) => matchesSdkQuery(draft, published.query.q))
-      .map((draft) => toDraftChoice(draft, rehearsal)),
+      .map((draft) => toDraftChoice(draft)),
     mineUnavailable: false,
     ...published,
   };

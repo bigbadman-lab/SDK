@@ -48,6 +48,11 @@ export function readSdkRouteScope(value: string | undefined): SdkRouteScope | nu
   return null;
 }
 
+export function publicSdkRequest(value: string | null | undefined): "production" | "denied" | "invalid" {
+  if (value === "test") return "denied";
+  return readSdkRouteScope(value ?? undefined) === "production" ? "production" : "invalid";
+}
+
 function amount(value: string): bigint | null {
   if (!AMOUNT.test(value)) return null;
   return BigInt(value);

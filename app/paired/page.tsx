@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = createMetadata({
   title: "Paired",
-  description: "Verified child tokens paired with their parent. A TREST rehearsal is labelled as a test parent.",
+  description: "Verified child tokens paired with the official $SDK parent.",
   path: "/paired",
 });
 

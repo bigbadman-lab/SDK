@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { holderThreshold } from "../rewards/holders.ts";
-import { composeRehearsalLedger, readSdkRouteScope } from "./rehearsal.ts";
+import { composeRehearsalLedger, publicSdkRequest, readSdkRouteScope } from "./rehearsal.ts";
 
 test("sdk scope accepts production and the TREST rehearsal only", () => {
   assert.equal(readSdkRouteScope(undefined), "production");
@@ -10,6 +10,10 @@ test("sdk scope accepts production and the TREST rehearsal only", () => {
   assert.equal(readSdkRouteScope(""), null);
   assert.equal(readSdkRouteScope("production"), null);
   assert.equal(readSdkRouteScope("TREST"), null);
+  assert.equal(publicSdkRequest(undefined), "production");
+  assert.equal(publicSdkRequest(null), "production");
+  assert.equal(publicSdkRequest("test"), "denied");
+  assert.equal(publicSdkRequest("TREST"), "invalid");
 });
 
 test("rehearsal totals exclude deferred history and do not invent empty windows", () => {

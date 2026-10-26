@@ -32,13 +32,14 @@ const readVerifiedLaunches = cache(async (
   creator: string,
   mint: string,
 ): Promise<{ ok: true; launches: VerifiedLaunch[] } | { ok: false; code: "missing_schema" | "unavailable" }> => {
-  const key = `${creator}\n${mint}`;
+  const key = `production\n${creator}\n${mint}`;
   const remembered = rememberedLaunches(key);
   if (remembered) return { ok: true, launches: remembered };
   try {
     const launches = await selectVerifiedLaunches(getSql(), {
       creator: creator || null,
       mint: mint || null,
+      scope: "production",
     });
     rememberLaunches(key, launches);
     return { ok: true, launches };
@@ -105,7 +106,7 @@ export const loadPublishedTokenSdk = cache(async (librarySdkId: string | null): 
 export async function loadOpenLaunch(accountId: string): Promise<OpenLaunch | null> {
   try {
     const row = await selectOpenSubmission(getSql(), accountId);
-    return row ? toOpenLaunch(row) : null;
+    return row && row.scope === "production" ? toOpenLaunch(row) : null;
   } catch {
     return null;
   }

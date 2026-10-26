@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { getCurrentAccount } from "@/lib/server/account";
 import { approveRehearsal } from "@/lib/server/launch/submit";
 import { isProvisionedOperator } from "@/lib/server/operator";
@@ -14,6 +15,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   const account = await getCurrentAccount();
   if (!account || !isProvisionedOperator(account.walletAddress)) {
     return NextResponse.json({ ok: false, code: "forbidden" }, { status: 403 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, code: "closed" }, { status: 403 });
   }
   let body: unknown;
   try {

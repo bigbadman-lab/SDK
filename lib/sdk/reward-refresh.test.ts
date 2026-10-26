@@ -154,13 +154,15 @@ test("the allocations route stays read-only and the board polls it", () => {
   const market = readFileSync(new URL("../../app/api/sdk/market/route.ts", import.meta.url), "utf8");
   assert.equal(route.includes("cache-control"), true);
   assert.equal(route.includes("private, no-store"), true);
-  assert.equal(route.includes("figures: rehearsal.figures"), true);
+  assert.equal(route.includes("loadRehearsalSdk"), false);
+  assert.equal(route.includes("publicSdkRequest"), true);
   assert.equal(route.includes("export async function POST"), false);
   assert.equal(route.includes("rewards-worker"), false);
   assert.equal(board.includes("rewardRefreshPath"), true);
   assert.equal(board.includes("REWARD_REFRESH_MS"), true);
+  assert.equal(board.includes("Rewards are not yet active."), true);
   assert.equal(board.includes("rewards-worker"), false);
   assert.equal(board.includes("Live · Updates automatically"), true);
-  assert.equal(market.includes("loadRehearsalParent"), true);
-  assert.equal(market.includes("loadRehearsalSdk"), false);
+  assert.equal(market.includes("loadRehearsalParent"), false);
+  assert.equal(market.includes("publicSdkRequest"), true);
 });

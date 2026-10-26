@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { getCurrentAccount } from "@/lib/server/account";
 import { databaseFailure, getSql } from "@/lib/server/db";
 import { simulateExactWire } from "@/lib/server/launch/simulate-wire";
@@ -15,6 +16,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   const account = await getCurrentAccount();
   if (!account || !isProvisionedOperator(account.walletAddress)) {
     return NextResponse.json({ ok: false, code: "forbidden", submitted: false }, { status: 403 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, code: "closed", submitted: false }, { status: 403 });
   }
   let body: unknown;
   try {

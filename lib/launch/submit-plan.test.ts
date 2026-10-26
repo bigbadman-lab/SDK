@@ -316,8 +316,9 @@ test("public rehearsal selection stays on the operator and simulation waits for 
   const page = readFileSync(new URL("../../app/launch/page.tsx", import.meta.url), "utf8");
   const prepare = readFileSync(new URL("../../app/api/launch/prepare/route.ts", import.meta.url), "utf8");
   const form = readFileSync(new URL("../../components/launch/form.tsx", import.meta.url), "utf8");
-  assert.equal(page.includes("isProvisionedOperator"), true);
-  assert.equal(prepare.includes("isProvisionedOperator"), true);
+  assert.equal(page.includes("TREST"), false);
+  assert.match(prepare, /x-sdk-rehearsal/);
+  assert.equal(prepare.includes("bindRehearsalParent"), false);
   assert.equal(form.includes("sendTransaction"), false);
   assert.equal(form.includes("disabled"), true);
   let calls = 0;

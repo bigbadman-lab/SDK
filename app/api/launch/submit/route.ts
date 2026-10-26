@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { submitSignedLaunch } from "@/lib/server/launch/submit";
@@ -42,6 +43,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   if (typeof record.transaction !== "string" || record.transaction.length < 16) {
     return NextResponse.json({ ok: false, code: "body", broadcast: false }, { status: 400 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, code: "closed", broadcast: false }, { status: 403 });
   }
   const transaction = Buffer.from(record.transaction, "base64");
   if (transaction.byteLength < 1) {

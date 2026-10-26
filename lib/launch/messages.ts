@@ -58,6 +58,7 @@ export function launchMessage(code: string): string {
     return "The transaction builder is not configured. Nothing was signed.";
   if (code === "parent_unregistered")
     return "The rehearsal parent is not registered.";
+  if (code === "closed") return "Public token launches are not open.";
   if (code === "parent_immutable" || code === "parent_scope")
     return "This launch stays paired with its original parent.";
   if (code === "wire_key")

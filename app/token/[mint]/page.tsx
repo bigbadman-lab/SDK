@@ -23,20 +23,23 @@ export async function generateMetadata({
   if (!MINT.test(mint)) return createMetadata({ title: "Token", path: "/paired" });
   const loaded = await loadVerifiedLaunches({ mint });
   const launch = loaded.ok ? launchByMint(loaded.launches, mint) : null;
+  if (!launch) return createMetadata({ title: "Token", description: "This token page is not available.", path: "/paired" });
   return createMetadata({
-    title: launch ? launch.name : "Token",
-    description: launch
-      ? `${launch.name} is paired with ${launch.pairLabel}.`
-      : "Verified child token.",
+    title: launch.name,
+    description: `${launch.name} is paired with ${launch.pairLabel}.`,
     path: `/token/${mint}`,
   });
 }
 
-export default function TokenPage({
+export default async function TokenPage({
   params,
 }: {
   params: Promise<{ mint: string }>;
-}): ReactNode {
+}): Promise<ReactNode> {
+  const { mint } = await params;
+  if (!MINT.test(mint)) notFound();
+  const loaded = await loadVerifiedLaunches({ mint });
+  if (loaded.ok && !launchByMint(loaded.launches, mint)) notFound();
   return (
     <>
       <main id="main-content" className={mainClass}>

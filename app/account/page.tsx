@@ -16,12 +16,11 @@ import { HomeLink } from "@/components/home/chrome";
 import { Footer } from "@/components/footer";
 import { createMetadata } from "@/lib/metadata";
 import { readSession, type AccountIdentity } from "@/lib/server/auth";
-import { loadAccountRewards, rewardScope } from "@/lib/server/rewards/account";
+import { loadAccountRewards } from "@/lib/server/rewards/account";
 import { loadVerifiedLaunches, loadOpenLaunch } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { shortenAddress } from "@/lib/launch/verified-launch";
 import { SESSION_COOKIE } from "@/lib/auth/session";
-import type { RewardScope } from "@/lib/rewards/ledger";
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { Suspense, type ReactNode } from "react";
@@ -32,17 +31,13 @@ export const metadata = createMetadata({
   path: "/account",
 });
 
-export default function AccountPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ scope?: string }>;
-}): ReactNode {
+export default function AccountPage(): ReactNode {
   return (
     <>
       <main id="main-content" className={accountMainClass}>
         <AccountIntro />
         <Suspense fallback={<AccountBodySkeleton />}>
-          <AccountBody searchParams={searchParams} />
+          <AccountBody />
         </Suspense>
       </main>
       <Footer />
@@ -50,15 +45,10 @@ export default function AccountPage({
   );
 }
 
-async function AccountBody({
-  searchParams,
-}: {
-  searchParams: Promise<{ scope?: string }>;
-}): Promise<ReactNode> {
-  const [store, query] = await Promise.all([cookies(), searchParams]);
+async function AccountBody(): Promise<ReactNode> {
+  const store = await cookies();
   const session = await readSession(store.get(SESSION_COOKIE)?.value);
   const account = session.state === "active" ? session.account : null;
-  const scope = rewardScope(query.scope ?? null);
   if (!account) {
     return (
       <div className="mt-10 grid gap-4">
@@ -96,7 +86,7 @@ async function AccountBody({
       </Suspense>
       <ApiKeys />
       <Suspense fallback={<AccountSectionSkeleton label="Loading rewards" />}>
-        <AccountRewards wallet={account.walletAddress} scope={scope} />
+        <AccountRewards wallet={account.walletAddress} />
       </Suspense>
     </div>
   );
@@ -124,29 +114,10 @@ async function AccountLaunches({ account }: { account: AccountIdentity }): Promi
   );
 }
 
-async function AccountRewards({
-  wallet,
-  scope,
-}: {
-  wallet: string;
-  scope: RewardScope;
-}): Promise<ReactNode> {
-  const rewards = await loadAccountRewards(wallet, scope);
+async function AccountRewards({ wallet }: { wallet: string }): Promise<ReactNode> {
+  const rewards = await loadAccountRewards(wallet, "production");
   return (
     <>
-      {scope === "production" ? (
-        <p className="text-[14px] leading-[1.6]">
-          <Link href="/account?scope=test" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
-            TREST rehearsal balances
-          </Link>
-        </p>
-      ) : (
-        <p className="text-[14px] leading-[1.6]">
-          <Link href="/account" className="font-mono text-[10px] tracking-[0.04em] uppercase underline">
-            Production rewards
-          </Link>
-        </p>
-      )}
       <HolderRewards view={rewards} wallet={wallet} />
       <SdkEarnings view={rewards} />
     </>

@@ -250,7 +250,8 @@ test("TREST and production wording stay apart and the public launch stays closed
   assert.equal(progress.includes("View on Paired"), true);
   assert.equal(progress.includes("/feed"), false);
   assert.equal(progress.includes("/api/launch/submit"), false);
-  assert.equal(page.includes("isProvisionedOperator"), true);
+  assert.equal(page.includes("TREST"), false);
+  assert.equal(page.includes("rehearsal=trest"), false);
   assert.equal(service.includes("launch_open"), true);
   assert.equal(readFileSync(new URL("./post-launch.ts", import.meta.url), "utf8").includes("rewards"), false);
 });

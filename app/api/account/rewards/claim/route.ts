@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getCurrentAccount } from "@/lib/server/account";
 import { trustedOrigin } from "@/lib/server/origin";
-import { acceptRewardClaim, prepareRewardClaim, rewardScope } from "@/lib/server/rewards/account";
+import { acceptRewardClaim, prepareRewardClaim } from "@/lib/server/rewards/account";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +20,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (typeof body !== "object" || body === null) return NextResponse.json({ ok: false, code: "invalid" }, { status: 400 });
   const record = body as Record<string, unknown>;
   const asset = record.asset === "sol" || record.asset === "parent_token" ? record.asset : null;
-  const scope = rewardScope(typeof record.scope === "string" ? record.scope : null);
+  if (record.scope === "test") return NextResponse.json({ ok: false, code: "closed" }, { status: 403 });
+  const scope = "production" as const;
   if (record.asset === "all") {
     return NextResponse.json({ ok: false, code: "separate", execution: "unavailable" }, { status: 400 });
   }

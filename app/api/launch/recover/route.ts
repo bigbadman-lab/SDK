@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { recoverSignedLaunch } from "@/lib/server/launch/submit";
@@ -35,6 +36,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   if (typeof record.launchId !== "string" || !UUID.test(record.launchId)) {
     return NextResponse.json({ ok: false, code: "body", broadcast: false }, { status: 400 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, code: "closed", broadcast: false }, { status: 403 });
   }
   const result = await recoverSignedLaunch({
     accountId: account.id,

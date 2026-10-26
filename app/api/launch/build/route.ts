@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { builderFailureCode } from "@/lib/launch/builder-probe";
 import { publicLaunchScope } from "@/lib/launch/parent-scope";
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { requestUnsignedBuild } from "@/lib/server/launch/unsigned";
@@ -41,6 +42,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
   if (request.headers.get("x-sdk-rehearsal") === "trest") {
     return NextResponse.json({ ok: false, error: launchMessage("parent_scope"), code: "parent_scope" }, { status: 403 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, error: launchMessage("closed"), code: "closed" }, { status: 403 });
   }
   const parsed = publicLaunchScope(body);
   if (!parsed.ok) {

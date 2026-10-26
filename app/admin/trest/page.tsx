@@ -7,7 +7,6 @@ import { readSession } from "@/lib/server/auth";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { loadOperatorRewards } from "@/lib/server/rewards/operator";
 import { cookies } from "next/headers";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
@@ -16,8 +15,8 @@ export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
   ...createMetadata({
-    title: "TREST parent",
-    description: "Operator verification for the TREST test parent.",
+    title: "Operator",
+    description: "Operator records.",
     path: "/admin/trest",
   }),
   robots: { index: false, follow: false },
@@ -27,8 +26,8 @@ export default async function TrestParentPage(): Promise<ReactNode> {
   const store = await cookies();
   const session = await readSession(store.get(SESSION_COOKIE)?.value);
   const account = session.state === "active" ? session.account : null;
-  if (account && !isProvisionedOperator(account.walletAddress)) notFound();
-  const rewards = account ? await loadOperatorRewards() : null;
+  if (!account || !isProvisionedOperator(account.walletAddress)) notFound();
+  const rewards = await loadOperatorRewards();
 
   return (
     <>
@@ -40,25 +39,11 @@ export default async function TrestParentPage(): Promise<ReactNode> {
         <h1 className="mt-6 font-display text-[56px] leading-[1.14] tracking-[-1.6px] max-[561px]:text-[38px]">
           TREST parent
         </h1>
-        {!account ? (
-          <p className="mt-8 max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
-            Sign in with the provisioned operator wallet to verify the TREST mint.
-          </p>
-        ) : (
-          <>
-            <p className="mt-8 max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
-              TREST is created in the Pump.fun interface. This screen checks that mint and can register it in the test
-              scope. It does not create a token or send a transaction.
-            </p>
-            <TrestForm />
-            {rewards ? <RewardsMonitor status={rewards} /> : null}
-            <p className="mt-8">
-              <Link href="/launch?rehearsal=trest" className="font-mono text-[11px] tracking-[0.04em] uppercase">
-                Open the TREST rehearsal in the launch form
-              </Link>
-            </p>
-          </>
-        )}
+        <p className="mt-8 max-w-130 text-[17px] leading-[1.7] text-muted-foreground">
+          Historical TREST registration remains available to the provisioned operator. Public child launches stay closed.
+        </p>
+        <TrestForm />
+        {rewards ? <RewardsMonitor status={rewards} /> : null}
       </main>
       <Footer />
     </>

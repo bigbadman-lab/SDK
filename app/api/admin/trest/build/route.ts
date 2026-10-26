@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { parseLauncherBuildRequest } from "@/lib/launch/builder-request";
+import { publicChildLaunchesOpen } from "@/lib/launch/public-launch";
 import { launchMessage } from "@/lib/launch/messages";
 import { getCurrentAccount } from "@/lib/server/account";
 import { rehearsalBoundMint, requestRehearsalBuild } from "@/lib/server/launch/unsigned";
@@ -25,6 +26,9 @@ export async function POST(request: Request): Promise<NextResponse> {
   const account = await getCurrentAccount();
   if (!account || !isProvisionedOperator(account.walletAddress)) {
     return NextResponse.json({ ok: false, code: "forbidden" }, { status: 403 });
+  }
+  if (!publicChildLaunchesOpen()) {
+    return NextResponse.json({ ok: false, code: "closed" }, { status: 403 });
   }
   let body: unknown;
   try {

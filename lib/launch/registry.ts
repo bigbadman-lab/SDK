@@ -70,10 +70,11 @@ export async function writeSubmission(
 
 export async function selectVerifiedLaunches(
   sql: Sql,
-  filter: { creator?: string | null; mint?: string | null } = {},
+  filter: { creator?: string | null; mint?: string | null; scope?: "production" | "test" | null } = {},
 ): Promise<VerifiedLaunch[]> {
   const creator = filter.creator ?? null;
   const mint = filter.mint ?? null;
+  const scope = filter.scope ?? null;
   const rows = await sql<{
     status: string;
     slot: string | null;
@@ -122,6 +123,7 @@ export async function selectVerifiedLaunches(
     where s.status in ('verified', 'page_ready')
       and s.slot is not null
       and s.verified_at is not null
+      and (${scope}::text is null or s.scope = ${scope})
       and (${creator}::text is null or s.wallet_address = ${creator})
       and (${mint}::text is null or s.child_mint_address = ${mint})
     order by s.verified_at desc, s.child_mint_address

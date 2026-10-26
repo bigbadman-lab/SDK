@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { readAllocationCursor } from "@/lib/sdk/official";
-import { readSdkRouteScope } from "@/lib/sdk/rehearsal";
-import { loadRehearsalParent, loadRehearsalSdk } from "@/lib/server/sdk/rehearsal";
+import { publicSdkRequest } from "@/lib/sdk/rehearsal";
 import { loadHolderAllocations, loadOfficialSdk } from "@/lib/server/sdk/official";
 
 export const dynamic = "force-dynamic";
@@ -16,35 +15,12 @@ function json(body: unknown, status = 200): NextResponse {
 
 export async function GET(request: Request): Promise<NextResponse> {
   const url = new URL(request.url);
-  const rawScope = url.searchParams.get("scope");
-  const scope = rawScope === null ? "production" : readSdkRouteScope(rawScope);
-  if (!scope) return json({ ok: false, rows: [] }, 400);
+  const scope = publicSdkRequest(url.searchParams.get("scope"));
+  if (scope === "denied") return json({ ok: false, rows: [] }, 404);
+  if (scope !== "production") return json({ ok: false, rows: [] }, 400);
   const rawCursor = url.searchParams.get("cursor");
   const cursor = rawCursor === null ? null : readAllocationCursor(rawCursor);
   if (rawCursor !== null && !cursor) return json({ ok: false, rows: [] }, 400);
-  if (scope === "test") {
-    if (cursor) {
-      const parent = await loadRehearsalParent();
-      if (!parent.ok) return json({ ok: false, phase: "unavailable", rows: [] }, 503);
-      if (parent.phase !== "live") return json({ ok: true, phase: "prelaunch", rows: [], nextCursor: null, summary: null });
-      const page = await loadHolderAllocations(parent.mint, cursor, "test");
-      if (!page.ok) return json({ ok: false, phase: "live", rows: [] }, 503);
-      return json({ ok: true, phase: "live", rows: page.rows, nextCursor: page.nextCursor, summary: null });
-    }
-    const rehearsal = await loadRehearsalSdk();
-    if (!rehearsal.ok) return json({ ok: false, phase: "unavailable", rows: [] }, 503);
-    if (rehearsal.phase !== "live") return json({ ok: true, phase: "prelaunch", rows: [], nextCursor: null, summary: null });
-    const page = await loadHolderAllocations(rehearsal.mint, null, "test");
-    if (!page.ok) return json({ ok: false, phase: "live", rows: [] }, 503);
-    return json({
-      ok: true,
-      phase: "live",
-      rows: page.rows,
-      nextCursor: page.nextCursor,
-      summary: page.summary,
-      figures: rehearsal.figures,
-    });
-  }
   const official = await loadOfficialSdk();
   if (!official.ok) return json({ ok: false, phase: "unavailable", rows: [] }, 503);
   if (official.phase !== "live") return json({ ok: true, phase: "prelaunch", rows: [], nextCursor: null, summary: null });

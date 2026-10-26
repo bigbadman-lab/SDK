@@ -277,6 +277,7 @@ export function SdkBoard({
           <p>{rewardLead}</p>
           <p className="mt-3">{rewardQualify}</p>
           <p className="mt-3">Rewards accumulate as claimable SOL. They are not transferred automatically.</p>
+          {phase !== "live" ? <p className="mt-3">Rewards are not yet active.</p> : null}
           {scope === "test" ? (
             <p className="mt-3">
               <Link className="underline" href="/account?scope=test#holder-rewards-title">Open TREST holder rewards</Link>

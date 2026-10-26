@@ -38,7 +38,8 @@ test("the public path stays closed and a non-operator cannot open a TREST rehear
   const page = readFileSync(new URL("../../app/launch/page.tsx", import.meta.url), "utf8");
   const form = readFileSync(new URL("../../components/launch/form.tsx", import.meta.url), "utf8");
   const build = readFileSync(new URL("../../app/api/launch/build/route.ts", import.meta.url), "utf8");
-  assert.equal(page.includes("isProvisionedOperator"), true);
+  assert.equal(page.includes("TREST"), false);
+  assert.equal(page.includes("rehearsal=trest"), false);
   assert.equal(form.includes('phase="unavailable"'), true);
   assert.equal(form.includes("disabled"), true);
   assert.equal(form.includes("sendTransaction"), false);
