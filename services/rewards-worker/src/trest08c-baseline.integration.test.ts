@@ -15,6 +15,7 @@ const HISTORICAL = "3kUdMkBarVdzrWneSJueDuQgaUdDwn3VLgCywUK5riN7pD83aRSx8JrT8fBL
 const WINDOW = 300_000;
 const START = Date.UTC(2026, 9, 24, 12, 0, 0);
 const OBSOLETE = "20261022013000_trest07l_continuous_windows.sql";
+const UNAPPLIED_CANONICAL = "20261026190000_sdk_prod_01a_canonical_parent.sql";
 const DAY = "20261024120000_trest08b_day_rehearsal.sql";
 const LATEST = "20261025140000_library_sdk_votes.sql";
 
@@ -62,7 +63,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const present = (await readdir(migrationDir)).filter((file) => file.endsWith(".sql")).sort();
-  const deployed = present.filter((file) => file !== OBSOLETE);
+  const deployed = present.filter((file) => file !== OBSOLETE && file !== UNAPPLIED_CANONICAL);
   assert.equal(deployed.includes(OBSOLETE), false);
   assert.equal(deployed.includes(DAY), true);
   assert.equal(deployed.at(-1), LATEST);

@@ -45,6 +45,8 @@ function finite(value: unknown): number | null {
   return value;
 }
 
+export type OfficialPhase = "prelaunch" | "registered" | "live";
+
 export function acceptOfficialMint(
   mint: string | null,
   decimals: number | null,
@@ -52,6 +54,50 @@ export function acceptOfficialMint(
   if (!mint || mint === TREST_MINT || !MINT.test(mint)) return null;
   const scale = typeof decimals === "number" && Number.isInteger(decimals) && decimals >= 0 && decimals <= 9 ? decimals : null;
   return { mint, decimals: scale };
+}
+
+export function canonicalPhase(input: {
+  mint: string | null;
+  decimals: number | null;
+  rewardsActive: boolean;
+}): { phase: "prelaunch" } | { phase: "registered" | "live"; mint: string; decimals: number | null } {
+  const accepted = acceptOfficialMint(input.mint, input.decimals);
+  if (!accepted) return { phase: "prelaunch" };
+  if (input.rewardsActive) return { phase: "live", mint: accepted.mint, decimals: accepted.decimals };
+  return { phase: "registered", mint: accepted.mint, decimals: accepted.decimals };
+}
+
+export function rewardsAreActive(phase: OfficialPhase | "unavailable"): boolean {
+  return phase === "live";
+}
+
+export function visibleOfficialMint(phase: OfficialPhase | "unavailable", mint: string | null): string | null {
+  if ((phase === "registered" || phase === "live") && mint) return mint;
+  return null;
+}
+
+export function officialIdentity(official: {
+  ok: true;
+  phase: "prelaunch";
+} | {
+  ok: true;
+  phase: "registered" | "live";
+  mint: string;
+  decimals: number | null;
+} | { ok: false }): {
+  phase: OfficialPhase | "unavailable";
+  mint: string | null;
+  decimals: number | null;
+  rewardsActive: boolean;
+} {
+  if (!official.ok) return { phase: "unavailable", mint: null, decimals: null, rewardsActive: false };
+  if (official.phase === "prelaunch") return { phase: "prelaunch", mint: null, decimals: null, rewardsActive: false };
+  return {
+    phase: official.phase,
+    mint: visibleOfficialMint(official.phase, official.mint),
+    decimals: official.decimals,
+    rewardsActive: rewardsAreActive(official.phase),
+  };
 }
 
 export function officialQuoteFromOverview(body: unknown): OfficialQuote {

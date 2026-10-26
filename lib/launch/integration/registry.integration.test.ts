@@ -101,7 +101,7 @@ before(async () => {
   `);
   const migrationDir = path.resolve(import.meta.dirname, "../../../supabase/migrations");
   const files = (await readdir(migrationDir))
-    .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql")
+    .filter((file) => file.endsWith(".sql") && file !== "20261022013000_trest07l_continuous_windows.sql" && file !== "20261026190000_sdk_prod_01a_canonical_parent.sql")
     .sort();
   for (const file of files) {
     await sql.unsafe(await readFile(path.join(migrationDir, file), "utf8"));

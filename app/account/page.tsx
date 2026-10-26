@@ -16,7 +16,9 @@ import { HomeLink } from "@/components/home/chrome";
 import { Footer } from "@/components/footer";
 import { createMetadata } from "@/lib/metadata";
 import { readSession, type AccountIdentity } from "@/lib/server/auth";
+import { officialIdentity } from "@/lib/sdk/official";
 import { loadAccountRewards } from "@/lib/server/rewards/account";
+import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import { loadVerifiedLaunches, loadOpenLaunch } from "@/lib/server/launch/discover";
 import { isProvisionedOperator } from "@/lib/server/operator";
 import { shortenAddress } from "@/lib/launch/verified-launch";
@@ -115,10 +117,13 @@ async function AccountLaunches({ account }: { account: AccountIdentity }): Promi
 }
 
 async function AccountRewards({ wallet }: { wallet: string }): Promise<ReactNode> {
-  const rewards = await loadAccountRewards(wallet, "production");
+  const [rewards, identity] = await Promise.all([
+    loadAccountRewards(wallet, "production"),
+    loadOfficialSdk().then(officialIdentity),
+  ]);
   return (
     <>
-      <HolderRewards view={rewards} wallet={wallet} />
+      <HolderRewards view={rewards} wallet={wallet} phase={identity.phase} mint={identity.mint} />
       <SdkEarnings view={rewards} />
     </>
   );

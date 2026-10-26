@@ -30,7 +30,7 @@ import {
 import Link from "next/link";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-type Phase = "prelaunch" | "live" | "unavailable";
+type Phase = "prelaunch" | "registered" | "live" | "unavailable";
 
 const EMPTY_QUOTE: OfficialQuote = { marketCapUsd: null, priceUsd: null, volumeUsd: null, holders: null };
 
@@ -69,7 +69,8 @@ export function SdkBoard({
 }): ReactNode {
   const [quote, setQuote] = useState<OfficialQuote | null>(market?.quote ?? null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(market?.updatedAt ?? null);
-  const [marketOk, setMarketOk] = useState(phase !== "live" || market !== null);
+  const showMarket = phase === "live" || phase === "registered";
+  const [marketOk, setMarketOk] = useState(showMarket ? market !== null : true);
   const [copied, setCopied] = useState(false);
   const [allocations, setAllocations] = useState(rows);
   const [cursor, setCursor] = useState(nextCursor);
@@ -83,7 +84,7 @@ export function SdkBoard({
   const paged = useRef(false);
 
   useEffect(() => {
-    if (phase !== "live") return;
+    if (phase !== "live" && phase !== "registered") return;
     let cancelled = false;
     const load = () => {
       if (document.hidden) return;
@@ -208,7 +209,7 @@ export function SdkBoard({
     }
   }
 
-  const shown = phase === "live" && marketOk ? (quote ?? EMPTY_QUOTE) : EMPTY_QUOTE;
+  const shown = (phase === "live" || phase === "registered") && marketOk ? (quote ?? EMPTY_QUOTE) : EMPTY_QUOTE;
   const shownSummary = phase === "live" && rewardRowsOk ? rewardSummary : null;
 
   return (
@@ -227,10 +228,15 @@ export function SdkBoard({
         ) : (
           <p className="mt-2 text-[15px]">Not registered</p>
         )}
-        {scope === "test" && mint ? (
+        {mint ? (
           <a className="mt-2 inline-block font-mono text-[11px] underline" href={explorerUrl(mint)} rel="noreferrer">
             View on Solana explorer
           </a>
+        ) : null}
+        {phase === "registered" ? (
+          <p className="mt-3 max-w-2xl text-[13px] leading-[1.55] text-muted-foreground">
+            The canonical $SDK mint is registered. Rewards are not yet active.
+          </p>
         ) : null}
         {phase === "prelaunch" ? (
           <p className="mt-3 max-w-2xl text-[13px] leading-[1.55] text-muted-foreground">
@@ -338,7 +344,7 @@ function AllocationTable({
   if (phase !== "live" || !rewardsOk) {
     return (
       <p className="mt-4 text-[14px] leading-[1.55] text-muted-foreground">
-        {phase === "prelaunch" ? "No holder allocations yet." : "Holder allocations are unavailable."}
+        {phase === "prelaunch" || phase === "registered" ? "No holder allocations yet." : "Holder allocations are unavailable."}
       </p>
     );
   }

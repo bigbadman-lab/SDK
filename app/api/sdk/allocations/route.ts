@@ -23,6 +23,7 @@ export async function GET(request: Request): Promise<NextResponse> {
   if (rawCursor !== null && !cursor) return json({ ok: false, rows: [] }, 400);
   const official = await loadOfficialSdk();
   if (!official.ok) return json({ ok: false, phase: "unavailable", rows: [] }, 503);
+  if (official.phase === "registered") return json({ ok: true, phase: "registered", rows: [], nextCursor: null, summary: null });
   if (official.phase !== "live") return json({ ok: true, phase: "prelaunch", rows: [], nextCursor: null, summary: null });
   const page = await loadHolderAllocations(official.mint, cursor);
   if (!page.ok) return json({ ok: false, phase: "live", rows: [] }, 503);

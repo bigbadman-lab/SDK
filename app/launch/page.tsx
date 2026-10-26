@@ -27,6 +27,7 @@ import {
   resolveLaunchQuery,
 } from "@/lib/server/launch/service";
 import { listPublished, readPublished } from "@/lib/server/library/service";
+import { officialIdentity } from "@/lib/sdk/official";
 import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import type { Metadata } from "next";
 import { Suspense, type ReactNode } from "react";
@@ -136,9 +137,15 @@ async function LaunchBody({
     source || held ? Promise.resolve(null) : loadCatalog(account, query),
     officialPromise,
   ]);
-  const mintRegistered = official.ok && official.phase === "live";
+  const identity = officialIdentity(official);
+  const mintRegistered = identity.mint !== null;
   return (
     <>
+        {identity.mint ? (
+          <p className="mt-4 break-all font-mono text-[12px] text-muted-foreground">
+            Canonical parent {identity.mint}. Public token creation stays closed.
+          </p>
+        ) : null}
         {openLaunch ? (
           <div className="mt-6">
             <LaunchResume launch={openLaunch} />

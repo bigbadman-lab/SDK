@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 
+import { rewardsAreActive } from "@/lib/sdk/official";
 import { getCurrentAccount } from "@/lib/server/account";
+import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import { trustedOrigin } from "@/lib/server/origin";
 import { acceptRewardClaim, prepareRewardClaim } from "@/lib/server/rewards/account";
 
@@ -21,6 +23,10 @@ export async function POST(request: Request): Promise<NextResponse> {
   const record = body as Record<string, unknown>;
   const asset = record.asset === "sol" || record.asset === "parent_token" ? record.asset : null;
   if (record.scope === "test") return NextResponse.json({ ok: false, code: "closed" }, { status: 403 });
+  const official = await loadOfficialSdk();
+  if (!rewardsAreActive(official.ok ? official.phase : "unavailable")) {
+    return NextResponse.json({ ok: false, code: "closed" }, { status: 403 });
+  }
   const scope = "production" as const;
   if (record.asset === "all") {
     return NextResponse.json({ ok: false, code: "separate", execution: "unavailable" }, { status: 400 });

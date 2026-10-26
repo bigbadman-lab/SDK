@@ -1,5 +1,7 @@
 import { ContractBadge } from "@/components/contract-badge";
 import { HomeLink } from "@/components/home/chrome";
+import { explorerUrl } from "@/lib/launch/verified-launch";
+import { officialIdentity } from "@/lib/sdk/official";
 import { loadOfficialSdk } from "@/lib/server/sdk/official";
 import { Suspense, type ReactNode } from "react";
 
@@ -36,9 +38,17 @@ export function Hero(): ReactNode {
 }
 
 async function OfficialContract(): Promise<ReactNode> {
-  const official = await loadOfficialSdk();
-  const mint = official.ok && official.phase === "live" ? official.mint : null;
-  return <ContractBadge mint={mint} />;
+  const identity = officialIdentity(await loadOfficialSdk());
+  return (
+    <div className="grid justify-items-center gap-2">
+      <ContractBadge mint={identity.mint} />
+      {identity.mint ? (
+        <a className="font-mono text-[11px] underline" href={explorerUrl(identity.mint)} rel="noreferrer">
+          View on Solana explorer
+        </a>
+      ) : null}
+    </div>
+  );
 }
 
 function ContractBadgeFallback(): ReactNode {

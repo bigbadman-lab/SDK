@@ -19,7 +19,7 @@ export type RewardRefresh = {
   figures: RehearsalFigures | null;
 };
 
-export function rewardRefreshEnabled(phase: "prelaunch" | "live" | "unavailable"): boolean {
+export function rewardRefreshEnabled(phase: "prelaunch" | "registered" | "live" | "unavailable"): boolean {
   return phase === "live";
 }
 

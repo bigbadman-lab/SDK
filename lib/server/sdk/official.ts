@@ -1,18 +1,18 @@
 import "server-only";
 
 import {
-  acceptOfficialMint,
+  canonicalPhase,
   allocationCursor,
   SDK_ALLOCATION_PAGE,
   type SdkAllocation,
   type SdkSummary,
 } from "@/lib/sdk/official";
 import type { RewardScope } from "@/lib/rewards/ledger";
-import { getSql } from "@/lib/server/db";
+import { databaseFailure, getSql } from "@/lib/server/db";
 
 export type OfficialSdk =
   | { ok: true; phase: "prelaunch" }
-  | { ok: true; phase: "live"; mint: string; decimals: number | null }
+  | { ok: true; phase: "registered" | "live"; mint: string; decimals: number | null }
   | { ok: false };
 
 export async function loadOfficialSdk(): Promise<OfficialSdk> {
@@ -24,9 +24,22 @@ export async function loadOfficialSdk(): Promise<OfficialSdk> {
     `;
     const decimals = rows[0]?.decimals;
     const scale = typeof decimals === "number" ? decimals : null;
-    const accepted = acceptOfficialMint(rows[0]?.mint ?? null, scale);
-    if (!accepted) return { ok: true, phase: "prelaunch" };
-    return { ok: true, phase: "live", mint: accepted.mint, decimals: accepted.decimals };
+    const phase = canonicalPhase({ mint: rows[0]?.mint ?? null, decimals: scale, rewardsActive: false });
+    if (phase.phase === "prelaunch") return { ok: true, phase: "prelaunch" };
+    let rewardsActive = false;
+    try {
+      const flags = await getSql()<{ rewardsActive: boolean }[]>`
+        select rewards_active as "rewardsActive"
+        from sdk_parent_config
+        where id = 1
+      `;
+      rewardsActive = flags[0]?.rewardsActive === true;
+    } catch (error) {
+      if (databaseFailure(error) !== "missing_schema") return { ok: false };
+    }
+    const activated = canonicalPhase({ mint: phase.mint, decimals: phase.decimals, rewardsActive });
+    if (activated.phase === "prelaunch") return { ok: true, phase: "prelaunch" };
+    return { ok: true, phase: activated.phase, mint: activated.mint, decimals: activated.decimals };
   } catch {
     return { ok: false };
   }

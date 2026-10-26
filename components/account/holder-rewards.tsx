@@ -5,7 +5,8 @@ import { AccountSectionHeading } from "@/components/account/account-skeleton";
 import { ClaimActions } from "@/components/account/claim-actions";
 import type { AccountRewardsView, CreatorEarning, RewardActivity } from "@/lib/rewards/account-view";
 import { presentCreatorReceipt } from "@/lib/rewards/earnings-display";
-import { formatSol } from "@/lib/sdk/official";
+import { explorerUrl } from "@/lib/launch/verified-launch";
+import { formatSol, type OfficialPhase } from "@/lib/sdk/official";
 
 function add(left: string, right: string): string {
   return (BigInt(left) + BigInt(right)).toString();
@@ -31,12 +32,17 @@ function receipt(signature: string | null): ReactNode {
 export function HolderRewards({
   view,
   wallet,
+  phase = "prelaunch",
+  mint = null,
 }: {
   view: AccountRewardsView;
   wallet: string;
+  phase?: OfficialPhase | "unavailable";
+  mint?: string | null;
 }): ReactNode {
   const rehearsal = view.scope === "test";
   const closed = view.symbol === null;
+  const rewardsLive = rehearsal || phase === "live";
   const allocatedSol = add(add(view.claimableSol, view.pendingSol), view.paidSol);
   const noAllocation = allocatedSol === "0" && view.activity.length === 0;
   return (
@@ -67,12 +73,23 @@ export function HolderRewards({
             ? "Rewards could not be read."
             : "The rewards ledger is unavailable."}
         </p>
-      ) : closed ? (
-        <p className="text-[15px] leading-[1.7] text-muted-foreground">
-          {rehearsal
-            ? "No TREST parent is registered, so there is no claimable rehearsal balance."
-            : "Production $SDK rewards stay closed until that parent is registered. This page is not showing TREST balances."}
-        </p>
+      ) : closed || !rewardsLive ? (
+        <div className="grid gap-3">
+          <p className="text-[15px] leading-[1.7] text-muted-foreground">
+            {rehearsal
+              ? "No TREST parent is registered, so there is no claimable rehearsal balance."
+              : phase === "registered"
+                ? "The canonical $SDK mint is registered. Holder rewards are not yet active."
+                : phase === "unavailable"
+                  ? "The canonical mint could not be read. Rewards stay inactive."
+                  : "Production $SDK rewards stay closed until that parent is registered. This page is not showing TREST balances."}
+          </p>
+          {phase === "registered" && mint ? (
+            <a className="break-all font-mono text-[12px] underline" href={explorerUrl(mint)} rel="noreferrer">
+              {mint}
+            </a>
+          ) : null}
+        </div>
       ) : noAllocation ? (
         <p className="text-[15px] leading-[1.7] text-muted-foreground">No holder rewards allocated yet.</p>
       ) : (
@@ -103,7 +120,7 @@ export function HolderRewards({
       </dl>
       <ClaimActions
         scope={view.scope}
-        disabled={closed || view.ledger === "missing"}
+        disabled={!rewardsLive || closed || view.ledger === "missing"}
         claimableSol={view.claimableSol}
         claimableToken={view.claimableToken}
       />

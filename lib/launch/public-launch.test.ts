@@ -25,7 +25,8 @@ test("public child launches stay closed until an explicit flag is set", () => {
   assert.equal(paired.includes("TREST"), false);
   assert.equal(sdk.includes("TREST_MINT"), false);
   assert.equal(sdk.includes("RehearsalSdkPage"), false);
-  assert.match(market, /status: 404/);
+  assert.match(market, /json\(\{ ok: false, phase: "unavailable" \}, 404\)/);
+  assert.match(market, /"cache-control": "private, no-store"/);
   assert.match(allocations, /404/);
   assert.match(submit, /publicChildLaunchesOpen/);
   assert.match(recover, /publicChildLaunchesOpen/);

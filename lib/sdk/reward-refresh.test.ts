@@ -82,6 +82,7 @@ test("reward refresh follows the market interval and only runs for a live mint",
   assert.equal(REWARD_REFRESH_MS, 15_000);
   assert.equal(REWARD_REFRESH_MS, SDK_MARKET_REFRESH_MS);
   assert.equal(rewardRefreshEnabled("live"), true);
+  assert.equal(rewardRefreshEnabled("registered"), false);
   assert.equal(rewardRefreshEnabled("prelaunch"), false);
   assert.equal(rewardRefreshEnabled("unavailable"), false);
   assert.equal(rewardRefreshPath("production"), "/api/sdk/allocations");
