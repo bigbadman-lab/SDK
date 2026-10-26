@@ -1,9 +1,18 @@
+import { CopySdkId } from "@/components/library/copy-sdk-id";
 import { LibraryActions } from "@/components/library/sdk-actions";
-import { RemixButton, RemixNotice, RemixProvider } from "@/components/library/remix-sdk";
+import {
+  RemixButton,
+  RemixNotice,
+  RemixProvider,
+} from "@/components/library/remix-sdk";
 import { SdkVote } from "@/components/library/sdk-vote";
 import { Footer } from "@/components/footer";
 import { HomeLink } from "@/components/home/chrome";
-import { isPublicId, operationLabel, operationLabels } from "@/lib/library/library";
+import {
+  isPublicId,
+  operationLabel,
+  operationLabels,
+} from "@/lib/library/library";
 import { officialInputGuide } from "@/lib/library/official";
 import { createMetadata } from "@/lib/metadata";
 import { getCurrentAccount } from "@/lib/server/account";
@@ -111,24 +120,36 @@ function SdkDetail({
       <header className="mt-6">
         <p className="font-mono text-[10px] tracking-[0.06em] text-accent-ink uppercase">
           {sdk.origin === "official" ? "Official" : "Community"}
-          <span className="text-muted-foreground"> · {sdk.originatorLabel}</span>
+          <span className="text-muted-foreground">
+            {" "}
+            · {sdk.originatorLabel}
+          </span>
         </p>
         <h1 className="mt-4 font-display text-[52px] leading-[1.08] tracking-[-1.5px] break-words max-[561px]:text-[36px]">
           {sdk.name}
         </h1>
-        <p className="mt-5 max-w-150 text-[17px] leading-[1.7] text-muted-foreground">{sdk.description}</p>
+        <p className="mt-5 max-w-150 text-[17px] leading-[1.7] text-muted-foreground">
+          {sdk.description}
+        </p>
         <p className="mt-4 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
           Version {sdk.versionNumber}
         </p>
+        <CopySdkId sdkId={sdk.id} />
         {sdk.versions.length > 1 ? (
           <ul className="mt-4 flex flex-wrap gap-2">
             {sdk.versions.map((version) => (
               <li key={version.id}>
                 <Link
-                  href={version.id === sdk.versionId ? `/library/${sdk.id}` : `/library/${sdk.id}?version=${version.id}`}
+                  href={
+                    version.id === sdk.versionId
+                      ? `/library/${sdk.id}`
+                      : `/library/${sdk.id}?version=${version.id}`
+                  }
                   className={
                     "rounded-lg border border-solid px-2.5 py-1.5 font-mono text-[10px] uppercase " +
-                    (version.id === sdk.versionId ? "border-accent text-accent-ink" : "border-border text-muted-foreground")
+                    (version.id === sdk.versionId
+                      ? "border-accent text-accent-ink"
+                      : "border-border text-muted-foreground")
                   }
                 >
                   Version {version.versionNumber}
@@ -146,15 +167,24 @@ function SdkDetail({
             Launch a Token
           </HomeLink>
           {vote ? (
-            <SdkVote sdkId={sdk.id} count={vote.count} voted={vote.voted} signedIn={signedIn} />
+            <SdkVote
+              sdkId={sdk.id}
+              count={vote.count}
+              voted={vote.voted}
+              signedIn={signedIn}
+            />
           ) : null}
         </div>
         <RemixNotice place="top" />
       </header>
 
       <section className="mt-12 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">What it does</h2>
-        <p className="mt-4 max-w-150 text-[16px] leading-[1.7] text-muted-foreground">{sdk.description}</p>
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">
+          What it does
+        </h2>
+        <p className="mt-4 max-w-150 text-[16px] leading-[1.7] text-muted-foreground">
+          {sdk.description}
+        </p>
         {families.length > 0 ? (
           <ul className="mt-5 flex flex-wrap gap-2">
             {families.map((family) => (
@@ -170,11 +200,20 @@ function SdkDetail({
       </section>
 
       <section className="mt-12 border-t border-border pt-8">
-        <LibraryActions sdkId={sdk.id} versionId={sdk.versionId} inputs={inputs} />
+        <LibraryActions
+          sdkId={sdk.id}
+          versionId={sdk.versionId}
+          inputs={inputs}
+        />
       </section>
 
-      <section id="remix" className="mt-14 scroll-mt-23 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Remix this SDK</h2>
+      <section
+        id="remix"
+        className="mt-14 scroll-mt-23 border-t border-border pt-8"
+      >
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">
+          Remix this SDK
+        </h2>
         <p className="mt-3 max-w-xl text-[14px] leading-[1.6] text-muted-foreground">
           Open an editable version in the AI Builder and make it your own.
         </p>
@@ -185,27 +224,40 @@ function SdkDetail({
       </section>
 
       <section className="mt-14 border-t border-border pt-8">
-        <h2 className="text-[28px] leading-none tracking-[-0.4px]">Developer details</h2>
+        <h2 className="text-[28px] leading-none tracking-[-0.4px]">
+          Developer details
+        </h2>
         <p className="mt-3 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
           Version {sdk.versionNumber}
         </p>
         <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Inputs</h3>
         {sdk.inputs.length === 0 ? (
-          <p className="mt-3 text-[14px] text-muted-foreground">This SDK does not ask for inputs.</p>
+          <p className="mt-3 text-[14px] text-muted-foreground">
+            This SDK does not ask for inputs.
+          </p>
         ) : (
           <ul className="mt-3 border-t border-border">
             {inputs.map((field) => (
-              <li key={field.key} className="grid gap-1 border-b border-border py-3">
+              <li
+                key={field.key}
+                className="grid gap-1 border-b border-border py-3"
+              >
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <span className="text-[15px]">{"help" in field && field.help ? field.help : field.key}</span>
+                  <span className="text-[15px]">
+                    {"help" in field && field.help ? field.help : field.key}
+                  </span>
                   <span className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
                     {field.type}
                     {field.required ? " · required" : ""}
-                    {field.values.length > 0 ? ` · ${field.values.join(", ")}` : ""}
+                    {field.values.length > 0
+                      ? ` · ${field.values.join(", ")}`
+                      : ""}
                   </span>
                 </div>
                 {"help" in field && field.help ? (
-                  <p className="font-mono text-[11px] break-all text-muted-foreground">{field.key}</p>
+                  <p className="font-mono text-[11px] break-all text-muted-foreground">
+                    {field.key}
+                  </p>
                 ) : null}
               </li>
             ))}
@@ -214,31 +266,51 @@ function SdkDetail({
         <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Outputs</h3>
         <ul className="mt-3 border-t border-border">
           {sdk.outputs.map((output) => (
-            <li key={output.key} className="grid gap-1 border-b border-border py-3">
+            <li
+              key={output.key}
+              className="grid gap-1 border-b border-border py-3"
+            >
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-[15px]">{output.key}</span>
-                <span className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{output.type}</span>
+                <span className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+                  {output.type}
+                </span>
               </div>
-              <p className="font-mono text-[11px] break-all text-muted-foreground">{output.from}</p>
+              <p className="font-mono text-[11px] break-all text-muted-foreground">
+                {output.from}
+              </p>
             </li>
           ))}
         </ul>
         <h3 className="mt-8 text-[18px] tracking-[-0.2px]">Operations</h3>
         <ol className="mt-3 border-t border-border">
           {sdk.steps.map((step, index) => (
-            <li key={step.id} className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border-b border-border py-3">
-              <span className="pt-1 font-mono text-[10px] text-muted-foreground">{String(index + 1).padStart(2, "0")}</span>
+            <li
+              key={step.id}
+              className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 border-b border-border py-3"
+            >
+              <span className="pt-1 font-mono text-[10px] text-muted-foreground">
+                {String(index + 1).padStart(2, "0")}
+              </span>
               <div className="min-w-0">
                 <p className="text-[15px]">{step.id}</p>
-                <p className="mt-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{operationLabel(step.op)}</p>
+                <p className="mt-1 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+                  {operationLabel(step.op)}
+                </p>
               </div>
             </li>
           ))}
         </ol>
-        <p className="mt-8 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">Content hash</p>
-        <p className="mt-2 font-mono text-[11px] break-all text-muted-foreground">{sdk.contentHash}</p>
+        <p className="mt-8 font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
+          Content hash
+        </p>
+        <p className="mt-2 font-mono text-[11px] break-all text-muted-foreground">
+          {sdk.contentHash}
+        </p>
         <details className="mt-6 font-mono text-[10px] text-muted-foreground">
-          <summary className="cursor-pointer tracking-[0.04em] uppercase">Blueprint</summary>
+          <summary className="cursor-pointer tracking-[0.04em] uppercase">
+            Blueprint
+          </summary>
           <pre className="mt-2 overflow-auto leading-[1.5] break-words whitespace-pre-wrap text-foreground">
             {JSON.stringify(sdk.blueprint, null, 2)}
           </pre>
