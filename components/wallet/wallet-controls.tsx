@@ -23,8 +23,10 @@ import {
   describeSignFailure,
   encodeSignInMessage,
   normalizeWalletSignature,
+  requestWalletSignature,
   signFailureNotice,
   signingAccountMatches,
+  type WalletSigner,
 } from "@/lib/auth/sign-message";
 import { useRouter } from "next/navigation";
 
@@ -40,10 +42,19 @@ function shorten(address: string): string {
   return `${address.slice(0, 4)}…${address.slice(-4)}`;
 }
 
-type SigningProvider = {
-  signMessage: (message: Uint8Array) => Promise<unknown>;
+type SigningProvider = WalletSigner & {
   publicKey?: { toBase58: () => string };
+  providers?: SigningProvider[];
 };
+
+type PreparedChallenge = {
+  address: string;
+  challengeId: string;
+  message: string;
+  expiresAt: number;
+};
+
+const CHALLENGE_REUSE_MS = 4 * 60 * 1000;
 
 function rawSolanaProvider(): SigningProvider | null {
   const provider = ProviderController.getProvider("solana");
@@ -64,6 +75,39 @@ function providerAddress(provider: SigningProvider): string | null {
   } catch {
     return null;
   }
+}
+
+function injectedSigners(address: string): SigningProvider[] {
+  if (typeof window === "undefined") return [];
+  const browser = window as Window & {
+    solana?: SigningProvider;
+    phantom?: { solana?: SigningProvider };
+  };
+  const injected = [browser.phantom?.solana, browser.solana, ...(browser.solana?.providers ?? [])];
+  const signers: SigningProvider[] = [];
+  for (const provider of injected) {
+    if (!provider || typeof provider.signMessage !== "function" || signers.includes(provider)) continue;
+    if (signingAccountMatches(address, providerAddress(provider))) signers.push(provider);
+  }
+  return signers;
+}
+
+async function requestLoginChallenge(walletAddress: string): Promise<PreparedChallenge | null> {
+  const response = await fetch("/api/auth/challenge", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ walletAddress }),
+  });
+  if (!response.ok) return null;
+  const challenge = (await response.json()) as { challengeId?: string; message?: string };
+  if (!challenge.challengeId || !challenge.message) return null;
+  return {
+    address: walletAddress,
+    challengeId: challenge.challengeId,
+    message: challenge.message,
+    expiresAt: Date.now() + CHALLENGE_REUSE_MS,
+  };
 }
 
 export function WalletControls({
@@ -92,6 +136,7 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
   const [session, setSession] = useState<SessionState>({ status: "loading" });
   const [notice, setNotice] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [prepared, setPrepared] = useState<PreparedChallenge | null>(null);
 
   useEffect(() => {
     return subscribeBrowserSession((next) => {
@@ -106,6 +151,23 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
   useEffect(() => {
     void loadBrowserSession();
   }, []);
+
+  useEffect(() => {
+    if (!isConnected || !address || session.status === "signed-in") {
+      setPrepared(null);
+      return;
+    }
+    const provider = rawSolanaProvider();
+    const signingAddress = provider ? providerAddress(provider) : null;
+    if (!provider || !signingAddress || !signingAccountMatches(address, signingAddress)) return;
+    let cancelled = false;
+    void requestLoginChallenge(signingAddress).then((next) => {
+      if (!cancelled && next) setPrepared(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [address, isConnected, session.status]);
 
   const signOut = useCallback(async () => {
     await fetch("/api/auth/logout", {
@@ -158,30 +220,28 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
       setNotice("The connected account does not match this wallet.");
       return;
     }
+    const ready =
+      prepared && prepared.address === signingAddress && prepared.expiresAt > Date.now()
+        ? prepared
+        : null;
+    if (!ready) {
+      setPending(true);
+      setNotice(null);
+      const next = await requestLoginChallenge(signingAddress);
+      setPending(false);
+      if (!next) {
+        setNotice("Sign-in could not start.");
+        return;
+      }
+      setPrepared(next);
+      return;
+    }
     setPending(true);
     setNotice(null);
     try {
-      const challengeResponse = await fetch("/api/auth/challenge", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ walletAddress: signingAddress }),
-      });
-      if (!challengeResponse.ok) {
-        setNotice("Sign-in could not start.");
-        return;
-      }
-      const challenge = (await challengeResponse.json()) as {
-        challengeId?: string;
-        message?: string;
-      };
-      if (!challenge.challengeId || !challenge.message) {
-        setNotice("Sign-in could not start.");
-        return;
-      }
-      const signed = await provider.signMessage.call(
-        provider,
-        encodeSignInMessage(challenge.message),
+      const signed = await requestWalletSignature(
+        [provider, ...injectedSigners(signingAddress).filter((signer) => signer !== provider)],
+        encodeSignInMessage(ready.message),
       );
       const bytes = normalizeWalletSignature(signed);
       if (!bytes) {
@@ -193,7 +253,7 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          challengeId: challenge.challengeId,
+          challengeId: ready.challengeId,
           signature: bs58.encode(bytes),
         }),
       });
@@ -210,6 +270,7 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
           ? verified.walletAddress
           : signingAddress,
       );
+      setPrepared(null);
       router.refresh();
     } catch (error) {
       setNotice(signFailureNotice(describeSignFailure(error)));
@@ -287,11 +348,7 @@ function WalletSession({ compact }: { compact: boolean }): ReactNode {
       {awaitingSignature ? (
         <p
           id={hintId}
-          className={
-            compact
-              ? "font-mono text-[10px] leading-[1.45] text-muted-foreground"
-              : "sr-only"
-          }
+          className="max-w-full font-mono text-[10px] leading-[1.45] text-muted-foreground"
         >
           {hint}
         </p>

@@ -8,6 +8,7 @@ import {
   describeSignFailure,
   encodeSignInMessage,
   normalizeWalletSignature,
+  requestWalletSignature,
   signingAccountMatches,
 } from "./sign-message.ts";
 
@@ -63,6 +64,62 @@ test("sign failures distinguish rejection, unsupported signing, and a missing ac
     describeSignFailure(new TypeError("Cannot read private member from an object whose class did not declare it")),
     "failed",
   );
+  assert.equal(
+    describeSignFailure({ name: "WalletWindowBlockedError", message: "The wallet window was blocked" }),
+    "blocked",
+  );
+  assert.equal(
+    describeSignFailure({ message: "The app's signature request cannot be shown due to invalid formatting" }),
+    "unsupported",
+  );
+});
+
+test("a failed wallet is skipped and a rejection is not sent to the next wallet", async () => {
+  const message = encodeSignInMessage("challenge");
+  let second = 0;
+  const signature = new Uint8Array(64);
+  const signed = await requestWalletSignature(
+    [
+      {
+        signMessage() {
+          throw new TypeError("Cannot read private member from an object whose class did not declare it");
+        },
+      },
+      {
+        async signMessage(value, display) {
+          second += 1;
+          assert.equal(display, "utf8");
+          assert.deepEqual(Array.from(value), Array.from(message));
+          return signature;
+        },
+      },
+    ],
+    message,
+  );
+  assert.equal(signed, signature);
+  assert.equal(second, 1);
+
+  let reached = false;
+  await assert.rejects(
+    () => requestWalletSignature(
+      [
+        {
+          signMessage() {
+            throw Object.assign(new Error("User rejected the request"), { code: 4001 });
+          },
+        },
+        {
+          signMessage() {
+            reached = true;
+            return Promise.resolve(signature);
+          },
+        },
+      ],
+      message,
+    ),
+    /User rejected/,
+  );
+  assert.equal(reached, false);
 });
 
 test("a proxied wallet provider cannot read private fields, and the raw provider can", async () => {
