@@ -1,5 +1,6 @@
 import { canonicalAddress } from "../auth/solana.ts";
 import { PLATFORM_FEE_WALLET } from "./fees.ts";
+import { isServiceRevision, PRODUCTION_COMPATIBILITY } from "./service-revision.ts";
 import { TREST_MINT } from "./verified-launch.ts";
 import { resolveProductionParent, type ProductionRegistration } from "../rewards/production.ts";
 
@@ -8,8 +9,6 @@ export const CHILD_FEE_ENABLE_APPROVAL = "SDK-PROD-03-ENABLE-CHILD-FEES";
 export const LAUNCH_CLOSE_APPROVAL = "SDK-PROD-03-CLOSE-LAUNCHES";
 export const CHILD_FEE_DISABLE_APPROVAL = "SDK-PROD-03-DISABLE-CHILD-FEES";
 export const LAUNCH_ACTIVATION_LOCK = 814203;
-
-const REVISION = /^[0-9a-f]{40}$/;
 
 export type LaunchAction = "preflight" | "enable-child-fees" | "activate" | "close-launches" | "disable-child-fees";
 
@@ -37,6 +36,7 @@ export type ServiceProbe =
   | {
       ok: true;
       revision: string;
+      compatibility: string;
       customQuote?: "production";
       signing?: false;
       broadcast?: false;
@@ -51,6 +51,7 @@ export type WorkerProbe =
   | {
       ok: true;
       revision: string;
+      compatibility: string;
       runtime: string;
       signer: string;
       executionAuthorised: boolean;
@@ -93,6 +94,7 @@ export type LaunchControlSnapshot = {
 export type LaunchBlock =
   | "approval"
   | "args"
+  | "builder_contract"
   | "builder_quote"
   | "builder_revision"
   | "builder_unavailable"
@@ -112,8 +114,10 @@ export type LaunchBlock =
   | "signer"
   | "trest"
   | "unregistered"
+  | "website_contract"
   | "website_revision"
   | "website_unavailable"
+  | "worker_contract"
   | "worker_execution"
   | "worker_revision"
   | "worker_unavailable";
@@ -134,15 +138,15 @@ export function launchActivationContract(): readonly LaunchActivationStep[] {
     },
     {
       id: "builder_revision",
-      requirement: "The transaction builder health revision equals the approved revision and advertises production custom-quote creation.",
+      requirement: "The transaction builder reports a real Git revision and sdk-production-v1, plus production custom-quote creation with signing and broadcast false.",
     },
     {
       id: "website_revision",
-      requirement: "The website health revision equals the approved revision. Builder health is not evidence for the website.",
+      requirement: "The website reports a real Git revision and sdk-production-v1. Its revision may differ from the worker. Builder health is not evidence for the website.",
     },
     {
       id: "worker_revision",
-      requirement: "The rewards worker health revision equals the approved revision. Builder health is not evidence for the worker.",
+      requirement: "The rewards worker Git revision equals --revision and it reports sdk-production-v1. Builder health is not evidence for the worker.",
     },
     {
       id: "preflight",
@@ -229,7 +233,7 @@ export function parseLaunchActivationArgs(argv: readonly string[]): LaunchComman
   }
   if (actions > 1) return { ok: false, code: "args" };
   if (execute) action = action === "preflight" ? "activate" : action;
-  if (!revision || !REVISION.test(revision)) return { ok: false, code: "revision" };
+  if (!revision || !isServiceRevision(revision)) return { ok: false, code: "revision" };
   const expected = APPROVAL[action];
   if (execute && approval !== expected) return { ok: false, code: "approval" };
   if (!execute && approval !== undefined && approval !== expected) return { ok: false, code: "approval" };
@@ -272,13 +276,16 @@ function liveServices(snapshot: LaunchControlSnapshot, revision: string, mint: s
     return "chain";
   }
   if (!snapshot.builder.ok) return "builder_unavailable";
-  if (snapshot.builder.revision !== revision || snapshot.builder.customQuote !== "production" || snapshot.builder.signing !== false || snapshot.builder.broadcast !== false) {
-    return snapshot.builder.revision !== revision ? "builder_revision" : "builder_quote";
+  if (!isServiceRevision(snapshot.builder.revision)) return "builder_revision";
+  if (snapshot.builder.compatibility !== PRODUCTION_COMPATIBILITY) return "builder_contract";
+  if (snapshot.builder.customQuote !== "production" || snapshot.builder.signing !== false || snapshot.builder.broadcast !== false) {
+    return "builder_quote";
   }
   if (!snapshot.website.ok) return "website_unavailable";
+  if (!isServiceRevision(snapshot.website.revision)) return "website_revision";
+  if (snapshot.website.compatibility !== PRODUCTION_COMPATIBILITY) return "website_contract";
   if (
-    snapshot.website.revision !== revision
-    || snapshot.website.launchGate !== "database"
+    snapshot.website.launchGate !== "database"
     || snapshot.website.trestFallback !== false
     || (snapshot.website.canonicalMint !== null && snapshot.website.canonicalMint !== mint)
   ) {
@@ -288,7 +295,8 @@ function liveServices(snapshot: LaunchControlSnapshot, revision: string, mint: s
   const worker = snapshot.worker;
   const production = worker.production;
   if (!production || production.distributor !== "present") return "distributor";
-  if (worker.revision !== revision || !REVISION.test(worker.revision) || production.canonicalMint !== mint) return "worker_revision";
+  if (worker.revision !== revision || !isServiceRevision(worker.revision) || production.canonicalMint !== mint) return "worker_revision";
+  if (worker.compatibility !== PRODUCTION_COMPATIBILITY) return "worker_contract";
   if (worker.signer !== "matched" || production.signer !== "matched" || worker.runtime === "suspended") return "signer";
   if (production.emergencyFence === "active") return "fence";
   if (snapshot.trestSuspended !== true || snapshot.trestRehearsalOpen !== false) return "trest";
@@ -339,14 +347,29 @@ export function presentLaunchResult(input: {
   childFeesActive: boolean;
   launchesActive: boolean;
   writes: 0 | 1;
+  services?: {
+    websiteRevision: string;
+    builderRevision: string;
+    workerRevision: string;
+    websiteCompatibility: string;
+    builderCompatibility: string;
+    workerCompatibility: string;
+  };
 }): { code: number; out: string } {
   const pending = !input.review.ok && input.review.code === "child_fees_pending";
   const unready = !input.review.ok && input.review.code === "service_unready";
+  const services = input.services;
   const fields = {
     action: input.action,
     rewards: input.rewardsActive ? "active" : "inactive",
     child_fees: pending ? "pending" : input.childFeesActive ? "enabled" : "disabled",
     launches: unready ? "closed" : input.launchesActive ? "active" : "closed",
+    website_revision: services?.websiteRevision ?? "",
+    builder_revision: services?.builderRevision ?? "",
+    worker_revision: services?.workerRevision ?? "",
+    website_compatibility: services?.websiteCompatibility ?? "",
+    builder_compatibility: services?.builderCompatibility ?? "",
+    worker_compatibility: services?.workerCompatibility ?? "",
     writes: String(input.writes),
   };
   if (!input.review.ok) {
@@ -387,6 +410,9 @@ export function presentLaunchStatus(snapshot: LaunchControlSnapshot, revision: s
       `website_revision=${snapshot.website.ok ? snapshot.website.revision : ""}`,
       `builder_revision=${snapshot.builder.ok ? snapshot.builder.revision : ""}`,
       `worker_revision=${worker?.revision ?? ""}`,
+      `website_compatibility=${snapshot.website.ok ? snapshot.website.compatibility : ""}`,
+      `builder_compatibility=${snapshot.builder.ok ? snapshot.builder.compatibility : ""}`,
+      `worker_compatibility=${worker?.compatibility ?? ""}`,
       `signer=${production?.signer || worker?.signer || "missing"}`,
       `child_fee_reconciliation=${production?.childFeeReconciliation || (snapshot.unresolvedChildFees === null ? "unknown" : snapshot.unresolvedChildFees === 0 ? "clear" : "outstanding")}`,
       `emergency_fence=${production?.emergencyFence || "unknown"}`,
@@ -403,6 +429,7 @@ export function parseBuilderHealth(body: unknown): ServiceProbe {
   const probe: ServiceProbe = {
     ok: true,
     revision: typeof record.revision === "string" ? record.revision : "unverified",
+    compatibility: typeof record.compatibility === "string" ? record.compatibility : "",
   };
   if (record.customQuote === "production") probe.customQuote = "production";
   if (record.signing === false) probe.signing = false;
@@ -418,6 +445,7 @@ export function parseWebsiteHealth(body: unknown): ServiceProbe {
   const probe: ServiceProbe = {
     ok: true,
     revision: typeof record.revision === "string" ? record.revision : "unverified",
+    compatibility: typeof record.compatibility === "string" ? record.compatibility : "",
     launches,
     canonicalMint: typeof record.canonicalMint === "string" ? canonicalAddress(record.canonicalMint) : null,
   };
@@ -435,6 +463,7 @@ export function parseLaunchWorkerHealth(body: unknown): WorkerProbe {
   return {
     ok: true,
     revision: typeof record.revision === "string" ? record.revision : "unverified",
+    compatibility: typeof record.compatibility === "string" ? record.compatibility : "",
     runtime: typeof record.runtime === "string" ? record.runtime : "",
     signer: typeof record.signer === "string" ? record.signer : "",
     executionAuthorised: record.executionAuthorised === true,
@@ -452,6 +481,24 @@ export function parseLaunchWorkerHealth(body: unknown): WorkerProbe {
           emergencyFence: typeof parsed.emergencyFence === "string" ? parsed.emergencyFence : "",
         }
       : null,
+  };
+}
+
+function reportedServices(snapshot: LaunchControlSnapshot): {
+  websiteRevision: string;
+  builderRevision: string;
+  workerRevision: string;
+  websiteCompatibility: string;
+  builderCompatibility: string;
+  workerCompatibility: string;
+} {
+  return {
+    websiteRevision: snapshot.website.ok ? snapshot.website.revision : "",
+    builderRevision: snapshot.builder.ok ? snapshot.builder.revision : "",
+    workerRevision: snapshot.worker.ok ? snapshot.worker.revision : "",
+    websiteCompatibility: snapshot.website.ok ? snapshot.website.compatibility : "",
+    builderCompatibility: snapshot.builder.ok ? snapshot.builder.compatibility : "",
+    workerCompatibility: snapshot.worker.ok ? snapshot.worker.compatibility : "",
   };
 }
 
@@ -491,6 +538,7 @@ export async function runLaunchActivation(
       childFeesActive: review.ok && command.action === "enable-child-fees" && review.kind === "idempotent" ? true : childFeesActive,
       launchesActive: review.ok && command.action === "activate" && review.kind === "idempotent" ? true : launchesActive,
       writes: 0,
+      services: reportedServices(snapshot),
     });
   }
   const commit = command.action === "enable-child-fees"
@@ -512,6 +560,7 @@ export async function runLaunchActivation(
       childFeesActive: again.config?.childFeesActive === true,
       launchesActive: again.config?.launchesActive === true,
       writes: 0,
+      services: reportedServices(again),
     });
   }
   if (command.action === "enable-child-fees" && !confirmed.ok) {
@@ -523,6 +572,7 @@ export async function runLaunchActivation(
       childFeesActive: again.config?.childFeesActive === true,
       launchesActive: again.config?.launchesActive === true,
       writes: committed === "ok" ? 1 : 0,
+      services: reportedServices(again),
     });
   }
   if (command.action === "activate" && !confirmed.ok) {
@@ -534,6 +584,7 @@ export async function runLaunchActivation(
       childFeesActive: again.config?.childFeesActive === true,
       launchesActive: again.config?.launchesActive === true,
       writes: committed === "ok" ? 1 : 0,
+      services: reportedServices(again),
     });
   }
   return presentLaunchResult({
@@ -544,5 +595,6 @@ export async function runLaunchActivation(
     childFeesActive: command.action === "disable-child-fees" ? false : again.config?.childFeesActive === true,
     launchesActive: command.action === "close-launches" ? false : command.action === "activate" ? true : again.config?.launchesActive === true,
     writes: committed === "ok" ? 1 : 0,
+    services: reportedServices(again),
   });
 }

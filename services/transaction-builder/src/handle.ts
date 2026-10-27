@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import { bindingDecision, payloadHash, type BuildIdentity } from "../../../lib/launch/build-binding.ts";
 import { PLATFORM_FEE_WALLET, allocateCreatorFees } from "../../../lib/launch/fees.ts";
-import { serviceRevision } from "../../../lib/launch/service-revision.ts";
+import { productionCompatibility, serviceRevision } from "../../../lib/launch/service-revision.ts";
 import { feeCategory } from "../../../lib/launch/prepare.ts";
 import { parseEvidenceRequest, parseParentObservationRequest, parseRehearsalBuildRequest, parseUnsignedBuildRequest } from "../../../lib/launch/builder-request.ts";
 import type { LaunchEvidence } from "../../../lib/launch/chain-evidence.ts";
@@ -155,6 +155,7 @@ export function builderHealthBody(): {
   ok: true;
   service: "transaction-builder";
   revision: string;
+  compatibility: "sdk-production-v1";
   customQuote: "production";
   signing: false;
   broadcast: false;
@@ -163,6 +164,7 @@ export function builderHealthBody(): {
     ok: true,
     service: "transaction-builder",
     revision: serviceRevision(),
+    compatibility: productionCompatibility(),
     customQuote: "production",
     signing: false,
     broadcast: false,

@@ -18,6 +18,7 @@ import {
   type ActivationSnapshot,
   type ActivationWorker,
 } from "./activation.ts";
+import { PRODUCTION_COMPATIBILITY } from "../launch/service-revision.ts";
 import { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL, type ProductionRegistration } from "./production.ts";
 
 const MINT = "AKkzLhjhyFtM9j7WAhbaqYpFe49cXeJBg2kzLRC2PnNa";
@@ -50,6 +51,7 @@ function worker(patch: Partial<ActivationWorker> = {}): ActivationWorker {
     signer: "matched",
     executionAuthorised: true,
     revision: REVISION,
+    compatibility: PRODUCTION_COMPATIBILITY,
     production: {
       canonicalMint: MINT,
       signer: "matched",
@@ -198,6 +200,16 @@ test("preflight accepts a matched inactive parent and rejects the launch blocker
   const revision = reviewActivation(snapshot(), "cd".repeat(20));
   assert.equal(revision.ok, false);
   if (!revision.ok) assert.equal(revision.code, "worker_revision");
+  const missingContract = snapshot();
+  if (missingContract.worker.ok) missingContract.worker.compatibility = "";
+  const missing = reviewActivation(missingContract, REVISION);
+  assert.equal(missing.ok, false);
+  if (!missing.ok) assert.equal(missing.code, "worker_contract");
+  const otherContract = snapshot();
+  if (otherContract.worker.ok) otherContract.worker.compatibility = "sdk-production-v0";
+  const incompatible = reviewActivation(otherContract, REVISION);
+  assert.equal(incompatible.ok, false);
+  if (!incompatible.ok) assert.equal(incompatible.code, "worker_contract");
   const open = reviewActivation(snapshot({ unresolved: 2 }), REVISION);
   assert.equal(open.ok, false);
   if (!open.ok) assert.equal(open.code, "reconciliation");

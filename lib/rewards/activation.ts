@@ -1,8 +1,7 @@
+import { isServiceRevision, PRODUCTION_COMPATIBILITY } from "../launch/service-revision.ts";
 import { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL, resolveProductionParent, workerConfirmsProductionRewards, type ProductionRegistration } from "./production.ts";
 
 export { PRODUCTION_ACTIVATION_APPROVAL, PRODUCTION_DEACTIVATION_APPROVAL };
-
-const REVISION = /^[0-9a-f]{40}$/;
 
 export type ActivationMode = "dry-run" | "execute";
 
@@ -21,6 +20,7 @@ export type ActivationWorker = {
   signer: string;
   executionAuthorised: boolean;
   revision: string;
+  compatibility: string;
   production: {
     canonicalMint: string | null;
     signer: string;
@@ -67,6 +67,7 @@ export type ActivationBlock =
   | "signer"
   | "trest"
   | "unregistered"
+  | "worker_contract"
   | "worker_execution"
   | "worker_revision"
   | "worker_unavailable";
@@ -112,7 +113,7 @@ export function parseActivationArgs(argv: readonly string[]): ActivationCommand 
   const expected = deactivate ? PRODUCTION_DEACTIVATION_APPROVAL : PRODUCTION_ACTIVATION_APPROVAL;
   if (execute && approval !== expected) return { ok: false, code: "approval" };
   if (!execute && approval !== undefined && approval !== expected) return { ok: false, code: "approval" };
-  if (!revision || !REVISION.test(revision)) return { ok: false, code: "revision" };
+  if (!revision || !isServiceRevision(revision)) return { ok: false, code: "revision" };
   return { ok: true, action: deactivate ? "deactivate" : "activate", mode: execute ? "execute" : "dry-run", revision };
 }
 
@@ -167,6 +168,7 @@ export function parseWorkerHealth(body: unknown): ActivationWorker | { ok: false
     signer: text(record.signer),
     executionAuthorised: record.executionAuthorised === true,
     revision: typeof record.revision === "string" ? record.revision : "unverified",
+    compatibility: typeof record.compatibility === "string" ? record.compatibility : "",
     production: parsedProduction,
   };
 }
@@ -209,11 +211,12 @@ export function reviewActivation(snapshot: ActivationSnapshot, revision: string)
     worker.service !== "rewards-worker"
     || !production
     || worker.revision !== revision
-    || !REVISION.test(worker.revision)
+    || !isServiceRevision(worker.revision)
     || production.canonicalMint !== resolved.mint
   ) {
     return { ok: false, code: "worker_revision" };
   }
+  if (worker.compatibility !== PRODUCTION_COMPATIBILITY) return { ok: false, code: "worker_contract" };
   if (worker.signer !== "matched" || production.signer !== "matched" || worker.runtime === "suspended") {
     return { ok: false, code: "signer" };
   }
@@ -308,6 +311,7 @@ export function presentRewardsStatus(snapshot: ActivationSnapshot): { code: numb
       chain: snapshot.chain.ok ? "matched" : snapshot.chain.code,
       worker: worker ? "ready" : "unavailable",
       revision: worker?.revision ?? "",
+      compatibility: worker?.compatibility ?? "",
       signer: worker?.production?.signer || worker?.signer || "unverified",
       database_rewards: snapshot.database !== "ok" ? "unknown" : snapshot.config?.rewardsActive ? "active" : "inactive",
       financial: !worker ? "unknown" : worker.production?.broadcasts === "enabled" ? "enabled" : "disabled",

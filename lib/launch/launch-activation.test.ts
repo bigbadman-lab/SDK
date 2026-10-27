@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { PLATFORM_FEE_WALLET } from "./fees.ts";
+import { PRODUCTION_COMPATIBILITY, productionCompatibility } from "./service-revision.ts";
 import { TREST_MINT, TOKEN_2022_PROGRAM } from "./verified-launch.ts";
 import {
   CHILD_FEE_DISABLE_APPROVAL,
@@ -33,6 +34,7 @@ function worker(patch: Partial<NonNullable<Extract<WorkerProbe, { ok: true }>["p
   return {
     ok: true,
     revision: REVISION,
+    compatibility: PRODUCTION_COMPATIBILITY,
     runtime: "ready",
     signer: "matched",
     executionAuthorised: true,
@@ -77,8 +79,8 @@ function snapshot(patch: Partial<LaunchControlSnapshot> = {}): LaunchControlSnap
     },
     chain: { ok: true, owner: TOKEN_2022_PROGRAM, decimals: 6 },
     signerAddress: PLATFORM_FEE_WALLET,
-    builder: { ok: true, revision: REVISION, customQuote: "production", signing: false, broadcast: false },
-    website: { ok: true, revision: REVISION, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+    builder: { ok: true, revision: REVISION, compatibility: PRODUCTION_COMPATIBILITY, customQuote: "production", signing: false, broadcast: false },
+    website: { ok: true, revision: REVISION, compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
     worker: worker(),
     unresolvedChildFees: 0,
     trestSuspended: true,
@@ -104,19 +106,55 @@ test("launch preflight blocks a missing or incorrect canonical parent and deploy
   assert.equal(code(reviewLaunchActivation(snapshot({ chain: { ok: true, owner: TOKEN_2022_PROGRAM, decimals: 9 } }), { action: "enable-child-fees", revision: REVISION })), "chain");
 });
 
+test("the compatibility contract is defined in code", () => {
+  process.env.PRODUCTION_COMPATIBILITY = "sdk-production-v0";
+  process.env.SDK_PRODUCTION_COMPATIBILITY = "sdk-production-v0";
+  assert.equal(productionCompatibility(), PRODUCTION_COMPATIBILITY);
+  assert.equal(PRODUCTION_COMPATIBILITY, "sdk-production-v1");
+  delete process.env.PRODUCTION_COMPATIBILITY;
+  delete process.env.SDK_PRODUCTION_COMPATIBILITY;
+  const source = readFileSync(new URL("./service-revision.ts", import.meta.url), "utf8");
+  const contract = source.slice(source.indexOf("export function productionCompatibility"), source.indexOf("export function serviceRevision"));
+  assert.equal(contract.includes("process.env"), false);
+});
+
 test("builder, website, and worker revisions are checked separately", () => {
+  const websiteRevision = "11".repeat(20);
+  const drifted = reviewLaunchActivation(snapshot({
+    builder: { ok: true, revision: OTHER_REVISION, compatibility: PRODUCTION_COMPATIBILITY, customQuote: "production", signing: false, broadcast: false },
+    website: { ok: true, revision: websiteRevision, compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+  }), { action: "enable-child-fees", revision: REVISION });
+  assert.equal(drifted.ok, true);
   assert.equal(code(reviewLaunchActivation(snapshot({
-    builder: { ok: true, revision: OTHER_REVISION, customQuote: "production", signing: false, broadcast: false },
+    builder: { ok: true, revision: "unverified", compatibility: PRODUCTION_COMPATIBILITY, customQuote: "production", signing: false, broadcast: false },
   }), { action: "enable-child-fees", revision: REVISION })), "builder_revision");
   assert.equal(code(reviewLaunchActivation(snapshot({
-    builder: { ok: true, revision: REVISION, signing: false, broadcast: false },
+    builder: { ok: true, revision: OTHER_REVISION, compatibility: "", customQuote: "production", signing: false, broadcast: false },
+  }), { action: "enable-child-fees", revision: REVISION })), "builder_contract");
+  assert.equal(code(reviewLaunchActivation(snapshot({
+    builder: { ok: true, revision: OTHER_REVISION, compatibility: "sdk-production-v0", customQuote: "production", signing: false, broadcast: false },
+  }), { action: "enable-child-fees", revision: REVISION })), "builder_contract");
+  assert.equal(code(reviewLaunchActivation(snapshot({
+    builder: { ok: true, revision: REVISION, compatibility: PRODUCTION_COMPATIBILITY, signing: false, broadcast: false },
   }), { action: "enable-child-fees", revision: REVISION })), "builder_quote");
   assert.equal(code(reviewLaunchActivation(snapshot({
-    website: { ok: true, revision: OTHER_REVISION, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+    website: { ok: true, revision: "unverified", compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+  }), { action: "enable-child-fees", revision: REVISION })), "website_revision");
+  assert.equal(code(reviewLaunchActivation(snapshot({
+    website: { ok: true, revision: OTHER_REVISION, compatibility: "sdk-production-v0", launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+  }), { action: "enable-child-fees", revision: REVISION })), "website_contract");
+  assert.equal(code(reviewLaunchActivation(snapshot({
+    website: { ok: true, revision: OTHER_REVISION, compatibility: PRODUCTION_COMPATIBILITY, trestFallback: false, launches: "closed", canonicalMint: MINT },
   }), { action: "enable-child-fees", revision: REVISION })), "website_revision");
   const revised = worker();
   if (revised.ok) revised.revision = OTHER_REVISION;
   assert.equal(code(reviewLaunchActivation(snapshot({ worker: revised }), { action: "enable-child-fees", revision: REVISION })), "worker_revision");
+  const incompatible = worker();
+  if (incompatible.ok) incompatible.compatibility = "sdk-production-v0";
+  assert.equal(code(reviewLaunchActivation(snapshot({ worker: incompatible }), { action: "enable-child-fees", revision: REVISION })), "worker_contract");
+  const missing = worker();
+  if (missing.ok) missing.compatibility = "";
+  assert.equal(code(reviewLaunchActivation(snapshot({ worker: missing }), { action: "activate", revision: REVISION })), "worker_contract");
   assert.equal(code(reviewLaunchActivation(snapshot({ worker: { ok: false, code: "unavailable" } }), { action: "enable-child-fees", revision: REVISION })), "worker_unavailable");
   assert.equal(code(reviewLaunchActivation(snapshot({ worker: worker({ signer: "suspended" }) }), { action: "enable-child-fees", revision: REVISION })), "signer");
   assert.equal(code(reviewLaunchActivation(snapshot({ worker: worker({ distributor: "" }) }), { action: "enable-child-fees", revision: REVISION })), "distributor");
@@ -166,7 +204,7 @@ test("child fees can be enabled while parent rewards stay inactive, and launches
   assert.equal(code(reviewLaunchActivation(armed, { action: "enable-child-fees", revision: REVISION })), "idempotent");
   const live = snapshot({
     config: { mint: MINT, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: false, launchesActive: true, childFeesActive: true },
-    website: { ok: true, revision: REVISION, launchGate: "database", trestFallback: false, launches: "active", canonicalMint: MINT },
+    website: { ok: true, revision: REVISION, compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "active", canonicalMint: MINT },
     worker: worker({ childFees: "enabled", launches: "active" }),
   });
   assert.equal(code(reviewLaunchActivation(live, { action: "activate", revision: REVISION })), "idempotent");
@@ -174,6 +212,43 @@ test("child fees can be enabled while parent rewards stay inactive, and launches
     config: { mint: MINT, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: false, launchesActive: true, childFeesActive: true },
     worker: worker({ childFees: "enabled", launches: "inactive" }),
   }), { action: "activate", revision: REVISION })), "service_unready");
+});
+
+test("a website-only revision still passes child-fee and launch preflight", async () => {
+  const websiteRevision = "11".repeat(20);
+  const builderRevision = "22".repeat(20);
+  const current = snapshot({
+    builder: { ok: true, revision: builderRevision, compatibility: PRODUCTION_COMPATIBILITY, customQuote: "production", signing: false, broadcast: false },
+    website: { ok: true, revision: websiteRevision, compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+    config: { mint: MINT, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: true, launchesActive: false, childFeesActive: true },
+    worker: worker({ rewards: "active", childFees: "enabled" }),
+  });
+  const childFees = reviewLaunchActivation(current, { action: "enable-child-fees", revision: REVISION });
+  assert.equal(childFees.ok, true);
+  if (childFees.ok) assert.equal(childFees.kind, "idempotent");
+  const open = reviewLaunchActivation(snapshot({
+    builder: current.builder,
+    website: { ok: true, revision: websiteRevision, compatibility: PRODUCTION_COMPATIBILITY, launchGate: "database", trestFallback: false, launches: "active", canonicalMint: MINT },
+    config: { mint: MINT, tokenProgram: TOKEN_2022_PROGRAM, decimals: 6, rewardsActive: true, launchesActive: false, childFeesActive: true },
+    worker: current.worker,
+  }), { action: "activate", revision: REVISION });
+  assert.equal(open.ok, true);
+  if (open.ok) assert.equal(open.kind, "ready");
+  const dry = await runLaunchActivation(["node", "cli", "--revision", REVISION], {
+    snapshot: async () => current,
+    commitChildFees: async () => "ok",
+    commitLaunches: async () => "ok",
+    closeLaunches: async () => "ok",
+    disableChildFees: async () => "ok",
+  });
+  assert.equal(dry.code, 0);
+  assert.match(dry.out, /writes=0/);
+  assert.match(dry.out, new RegExp(`website_revision=${websiteRevision}`));
+  assert.match(dry.out, new RegExp(`builder_revision=${builderRevision}`));
+  assert.match(dry.out, new RegExp(`worker_revision=${REVISION}`));
+  assert.match(dry.out, /website_compatibility=sdk-production-v1/);
+  assert.match(dry.out, /builder_compatibility=sdk-production-v1/);
+  assert.match(dry.out, /worker_compatibility=sdk-production-v1/);
 });
 
 test("emergency closure does not require a live worker and repeated closure is idempotent", () => {
@@ -189,6 +264,19 @@ test("emergency closure does not require a live worker and repeated closure is i
   });
   assert.equal(code(reviewLaunchActivation(closed, { action: "close-launches", revision: REVISION })), "idempotent");
   assert.equal(code(reviewLaunchActivation(closed, { action: "disable-child-fees", revision: REVISION })), "idempotent");
+  const websiteDown = snapshot({
+    config: open.config,
+    website: { ok: false, code: "unavailable" },
+    builder: { ok: false, code: "unavailable" },
+    worker: { ok: false, code: "unavailable" },
+  });
+  assert.equal(code(reviewLaunchActivation(websiteDown, { action: "close-launches", revision: REVISION })), "ready");
+  const mismatched = snapshot({
+    config: open.config,
+    website: { ok: true, revision: OTHER_REVISION, compatibility: "sdk-production-v0", launchGate: "database", trestFallback: false, launches: "closed", canonicalMint: MINT },
+    builder: { ok: true, revision: "unverified", compatibility: "", customQuote: "production", signing: false, broadcast: false },
+  });
+  assert.equal(code(reviewLaunchActivation(mismatched, { action: "disable-child-fees", revision: REVISION })), "ready");
   const commands = launchEmergencyCommands().map((item) => item.command);
   assert.equal(commands.some((command) => command.includes(LAUNCH_CLOSE_APPROVAL)), true);
   assert.equal(commands.some((command) => command.includes(CHILD_FEE_DISABLE_APPROVAL)), true);

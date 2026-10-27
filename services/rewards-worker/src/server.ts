@@ -18,6 +18,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 
+import { productionCompatibility, serviceRevision } from "../../../lib/launch/service-revision.ts";
 import { presentProductionStatus } from "../../../lib/rewards/production.ts";
 import { inspectDeployerSigner, rewardsExecutionEnabled, rewardsHealth, type SignerState } from "../../../lib/rewards/signer.ts";
 import { settleClaimHttp, type ClaimBody } from "./claim-route.ts";
@@ -94,18 +95,18 @@ function readBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function workerRevision(): string {
-  const revision = process.env.RENDER_GIT_COMMIT?.trim() ?? "";
-  return /^[0-9a-f]{40}$/.test(revision) ? revision : "unverified";
-}
-
 function listen(signer: SignerState, active: boolean): void {
   const port = Number(process.env.PORT ?? "8080");
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/health") {
         response.writeHead(200, { "content-type": "application/json", "cache-control": "private, no-store" });
-        response.end(JSON.stringify({ ...rewardsHealth(signer, active), revision: workerRevision(), production: productionStatus() }));
+        response.end(JSON.stringify({
+          ...rewardsHealth(signer, active),
+          revision: serviceRevision(),
+          compatibility: productionCompatibility(),
+          production: productionStatus(),
+        }));
         return;
       }
       if (request.method === "POST" && request.url === "/v1/claims") {

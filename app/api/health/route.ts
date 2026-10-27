@@ -1,4 +1,4 @@
-import { serviceRevision } from "@/lib/launch/service-revision";
+import { productionCompatibility, serviceRevision } from "@/lib/launch/service-revision";
 import { readPublicLaunchGate } from "@/lib/server/launch/gate";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +18,7 @@ export async function GET(): Promise<Response> {
       ok: true,
       service: "website",
       revision: serviceRevision(),
+      compatibility: productionCompatibility(),
       launchGate: "database",
       trestFallback: false,
       launches,
