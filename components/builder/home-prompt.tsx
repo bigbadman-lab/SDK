@@ -2,16 +2,11 @@
 
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { getBrowserSession, loadBrowserSession, subscribeBrowserSession } from "@/lib/auth/browser-session";
+import { BUILDER_EXAMPLES } from "@/lib/builder/examples";
 import { builderPath, createHandoff, homepageSend, storeHandoff } from "@/lib/builder/handoff";
 import { ArrowUp } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
-
-const EXAMPLES = [
-  "Build a Solana wallet intelligence tool",
-  "Create an AI-powered token research assistant",
-  "Build an on-chain transaction analyser",
-] as const;
 
 export function HomePrompt(): ReactNode {
   const router = useRouter();
@@ -83,22 +78,22 @@ export function HomePrompt(): ReactNode {
           }}
           className="max-h-28 min-h-14 w-full resize-none bg-transparent px-1 py-1 font-sans text-[15px] leading-[1.5] text-[#f2f2f2] outline-none placeholder:text-[#8d8d8d]"
         />
-        <div className="mt-1 flex items-center gap-2">
+        <div className="mt-1 flex items-end gap-2">
           <div className="flex min-w-0 flex-1 flex-wrap gap-1">
-            {EXAMPLES.map((example) => {
-              const selected = text === example;
+            {BUILDER_EXAMPLES.map((example) => {
+              const selected = text === example.prompt;
               return (
                 <button
-                  key={example}
+                  key={example.id}
                   type="button"
                   aria-pressed={selected}
-                  onClick={() => setText(example)}
+                  onClick={() => setText(example.prompt)}
                   className={
-                    "shrink-0 rounded-lg px-2.5 py-1.5 text-left text-[13px] " +
+                    "shrink-0 rounded-lg px-2.5 py-1.5 text-left text-[13px] leading-[1.35] " +
                     (selected ? "bg-[#3a3a3a] text-[#f5f5f5]" : "text-[#c6c6c6] hover:bg-[#2a2a2a]")
                   }
                 >
-                  {example}
+                  {example.label}
                 </button>
               );
             })}

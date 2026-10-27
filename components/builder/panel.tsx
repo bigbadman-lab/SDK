@@ -2,6 +2,7 @@
 
 import { WalletButton } from "@/components/wallet/wallet-button";
 import { loadBrowserSession, noteSignedOut, subscribeBrowserSession } from "@/lib/auth/browser-session";
+import { BUILDER_EXAMPLES } from "@/lib/builder/examples";
 import { beginGeneration, emitBuildStage, settleGeneration, subscribeBuildStage } from "@/lib/builder/handoff";
 import { accountDestination, shouldRedirectAfterSave } from "@/lib/blueprint/save";
 import { useRouter } from "next/navigation";
@@ -35,12 +36,6 @@ type BuilderEvent = {
   saved?: boolean;
   unauthenticated?: boolean;
 };
-
-const EXAMPLES = [
-  "Build a Solana wallet intelligence tool",
-  "Create an AI-powered token research assistant",
-  "Build an on-chain transaction analyser",
-] as const;
 
 const STAGE_LABEL: Record<Stage, string> = {
   understanding: "Understanding your request",
@@ -342,14 +337,15 @@ export function BuilderPanel(): ReactNode {
                   Describe a tool, application or workflow. SDK will help turn your instructions into a working SDK.
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {EXAMPLES.map((example) => (
+                  {BUILDER_EXAMPLES.map((example) => (
                     <button
-                      key={example}
+                      key={example.id}
                       type="button"
-                      onClick={() => setText(example)}
+                      aria-pressed={text === example.prompt}
+                      onClick={() => setText(example.prompt)}
                       className="rounded-lg border border-solid border-border bg-background px-3 py-2 text-left text-[13px] leading-[1.45] text-foreground"
                     >
-                      {example}
+                      {example.label}
                     </button>
                   ))}
                 </div>
