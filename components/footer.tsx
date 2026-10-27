@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { XLink } from "@/components/x-link";
 import type { ReactNode } from "react";
 
 const GROUPS = [
@@ -42,6 +43,7 @@ export function Footer(): ReactNode {
             <Logo />
           </Link>
           <p>Build, publish and launch working software on Solana.</p>
+          <XLink className="mt-5 inline-flex h-8 w-8 items-center justify-center rounded-md border border-border text-foreground transition-colors duration-[180ms] ease-[ease] hover:bg-muted" />
         </div>
         {GROUPS.map((group) => (
           <div

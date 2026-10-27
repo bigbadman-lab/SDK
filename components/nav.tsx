@@ -7,6 +7,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { trapDialogFocus } from "@/lib/dialog";
 import { Logo } from "@/components/logo";
 import { WalletButton } from "@/components/wallet/wallet-button";
+import { XLink } from "@/components/x-link";
 
 const LINKS = [
   { label: "Builder", href: "/build" },
@@ -65,19 +66,22 @@ export function Nav(): ReactNode {
         <Link href="/#top" aria-label="SDK home" className="pointer-events-auto inline-flex">
           <Logo />
         </Link>
-        <div className="pointer-events-auto flex shrink-0 items-center justify-end max-[800px]:hidden">
-          <WalletButton />
+        <div className="pointer-events-auto flex shrink-0 items-center justify-end gap-1">
+          <XLink className="grid h-8 w-8 place-items-center text-foreground transition-opacity duration-[180ms] ease-[ease] hover:opacity-70" />
+          <div className="max-[800px]:hidden">
+            <WalletButton />
+          </div>
+          <button
+            ref={trigger}
+            className="hidden h-8 w-8 place-items-center max-[800px]:grid"
+            aria-expanded={open}
+            aria-controls="mobile-navigation"
+            aria-label="Open navigation"
+            onClick={() => setOpen(true)}
+          >
+            <Menu size={22} />
+          </button>
         </div>
-        <button
-          ref={trigger}
-          className="pointer-events-auto hidden max-[800px]:grid max-[800px]:h-8 max-[800px]:w-8 max-[800px]:place-items-center"
-          aria-expanded={open}
-          aria-controls="mobile-navigation"
-          aria-label="Open navigation"
-          onClick={() => setOpen(true)}
-        >
-          <Menu size={22} />
-        </button>
       </div>
       <nav
         className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center max-[800px]:hidden"
@@ -135,6 +139,12 @@ export function Nav(): ReactNode {
             </Link>
           ))}
         </nav>
+        <XLink
+          size={16}
+          className="mb-5 inline-flex items-center gap-2 font-mono text-[10px] tracking-[0.04em] text-foreground uppercase"
+        >
+          SDK on X
+        </XLink>
         <WalletButton compact />
         <p>Connect your wallet to build, save and manage SDKs.</p>
       </dialog>
