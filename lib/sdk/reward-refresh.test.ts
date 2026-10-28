@@ -159,11 +159,9 @@ test("the allocations route stays read-only and the board polls it", () => {
   assert.equal(route.includes("publicSdkRequest"), true);
   assert.equal(route.includes("export async function POST"), false);
   assert.equal(route.includes("rewards-worker"), false);
-  assert.equal(board.includes("rewardRefreshPath"), true);
-  assert.equal(board.includes("REWARD_REFRESH_MS"), true);
-  assert.equal(board.includes("Rewards are not yet active."), true);
+  assert.equal(board.includes("dexscreener.com/solana/"), true);
+  assert.equal(board.includes("Native SOL Rewards"), false);
   assert.equal(board.includes("rewards-worker"), false);
-  assert.equal(board.includes("Live · Updates automatically"), true);
   assert.equal(market.includes("loadRehearsalParent"), false);
   assert.equal(market.includes("publicSdkRequest"), true);
 });

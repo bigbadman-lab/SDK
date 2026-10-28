@@ -2,86 +2,40 @@
 
 import {
   formatHolderCount,
-  formatSol,
-  formatTokenBalance,
   formatTokenPrice,
   formatUsdCompact,
   formatUtcStamp,
-  formatWindow,
   SDK_MARKET_REFRESH_MS,
   type OfficialQuote,
-  type SdkAllocation,
-  type SdkSummary,
 } from "@/lib/sdk/official";
-import { explorerUrl, shortenAddress } from "@/lib/launch/verified-launch";
-import type { HistoricalRecoveryView, RehearsalFigures, RehearsalWindowStatus, SdkRouteScope } from "@/lib/sdk/rehearsal";
-import {
-  appendAllocationRows,
-  mergeAllocationRows,
-  REWARD_REFRESH_MS,
-  readAllocationRows,
-  readRewardRefresh,
-  rewardRefreshEnabled,
-  rewardRefreshPath,
-  settleRewardPoll,
-  startRewardPoll,
-  type RewardPollState,
-} from "@/lib/sdk/reward-refresh";
-import Link from "next/link";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { explorerUrl } from "@/lib/launch/verified-launch";
+import type { SdkRouteScope } from "@/lib/sdk/rehearsal";
+import { useTheme } from "next-themes";
+import { useEffect, useState, type ReactNode } from "react";
 
 type Phase = "prelaunch" | "registered" | "live" | "unavailable";
 
 const EMPTY_QUOTE: OfficialQuote = { marketCapUsd: null, priceUsd: null, volumeUsd: null, holders: null };
+const MINT = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 export function SdkBoard({
   phase,
   mint,
-  decimals,
   market,
-  summary,
-  rows,
-  nextCursor,
-  rewardsOk,
-  rewardLead,
-  rewardQualify,
   scope = "production",
-  tokenSymbol = "$SDK",
   notice = null,
-  figures = null,
-  historical = null,
 }: {
   phase: Phase;
   mint: string | null;
-  decimals: number | null;
   market: { updatedAt: number; quote: OfficialQuote } | null;
-  summary: SdkSummary | null;
-  rows: SdkAllocation[];
-  nextCursor: string | null;
-  rewardsOk: boolean;
-  rewardLead: string;
-  rewardQualify: string;
   scope?: SdkRouteScope;
-  tokenSymbol?: string;
   notice?: string | null;
-  figures?: RehearsalFigures | null;
-  historical?: HistoricalRecoveryView | null;
 }): ReactNode {
   const [quote, setQuote] = useState<OfficialQuote | null>(market?.quote ?? null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(market?.updatedAt ?? null);
   const showMarket = phase === "live" || phase === "registered";
   const [marketOk, setMarketOk] = useState(showMarket ? market !== null : true);
   const [copied, setCopied] = useState(false);
-  const [allocations, setAllocations] = useState(rows);
-  const [cursor, setCursor] = useState(nextCursor);
-  const [rewardSummary, setRewardSummary] = useState(summary);
-  const [rewardFigures, setRewardFigures] = useState(figures);
-  const [rewardRowsOk, setRewardRowsOk] = useState(rewardsOk);
-  const [rewardsCheckedAt, setRewardsCheckedAt] = useState<number | null>(null);
-  const [rewardsDelayed, setRewardsDelayed] = useState(false);
-  const [more, setMore] = useState(false);
-  const [moreFailed, setMoreFailed] = useState(false);
-  const paged = useRef(false);
 
   useEffect(() => {
     if (phase !== "live" && phase !== "registered") return;
@@ -122,59 +76,6 @@ export function SdkBoard({
   }, [phase, scope]);
 
   useEffect(() => {
-    if (!rewardRefreshEnabled(phase)) return;
-    let cancelled = false;
-    let poll: RewardPollState = { generation: 0, inFlight: false };
-    let abort: AbortController | null = null;
-    const load = (reason: "interval" | "visible") => {
-      if (cancelled) return;
-      const next = startRewardPoll(poll, { hidden: document.hidden, reason });
-      if (next.action === "skip") return;
-      if (poll.inFlight) abort?.abort();
-      poll = next.state;
-      const requestId = next.requestId;
-      const controller = new AbortController();
-      abort = controller;
-      void fetch(rewardRefreshPath(scope), { cache: "no-store", signal: controller.signal })
-        .then(async (response) => {
-          const body: unknown = await response.json().catch(() => null);
-          const settled = settleRewardPoll(poll, requestId);
-          if (settled.apply) poll = settled.state;
-          if (cancelled || !settled.apply) return;
-          const payload = response.ok ? readRewardRefresh(body, scope) : null;
-          if (!payload || (scope === "test" && !payload.figures)) {
-            setRewardsDelayed(true);
-            return;
-          }
-          setRewardSummary(payload.summary);
-          if (payload.figures) setRewardFigures(payload.figures);
-          setAllocations((current) => paged.current ? mergeAllocationRows(current, payload.rows) : payload.rows);
-          if (!paged.current) setCursor(payload.nextCursor);
-          setRewardRowsOk(true);
-          setRewardsCheckedAt(Date.now());
-          setRewardsDelayed(false);
-        })
-        .catch((error: unknown) => {
-          if (cancelled || (error instanceof DOMException && error.name === "AbortError")) return;
-          const settled = settleRewardPoll(poll, requestId);
-          if (settled.apply) poll = settled.state;
-          if (!cancelled && settled.apply) setRewardsDelayed(true);
-        });
-    };
-    const timer = window.setInterval(() => load("interval"), REWARD_REFRESH_MS);
-    const onVisible = () => {
-      if (!document.hidden) load("visible");
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      abort?.abort();
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [phase, scope]);
-
-  useEffect(() => {
     if (!copied) return;
     const timer = window.setTimeout(() => setCopied(false), 1_200);
     return () => window.clearTimeout(timer);
@@ -186,31 +87,7 @@ export function SdkBoard({
     if (copiedMint) setCopied(true);
   }
 
-  async function loadMore(): Promise<void> {
-    if (!cursor || more) return;
-    setMore(true);
-    setMoreFailed(false);
-    try {
-      const scopeQuery = scope === "test" ? "&scope=test" : "";
-      const response = await fetch(`/api/sdk/allocations?cursor=${encodeURIComponent(cursor)}${scopeQuery}`, { cache: "no-store" });
-      const body = (await response.json()) as { ok?: boolean; rows?: unknown; nextCursor?: unknown };
-      const next = response.ok && body.ok === true ? readAllocationRows(body.rows) : null;
-      if (!next) {
-        setMoreFailed(true);
-        return;
-      }
-      paged.current = true;
-      setAllocations((current) => appendAllocationRows(current, next));
-      setCursor(typeof body.nextCursor === "string" ? body.nextCursor : null);
-    } catch {
-      setMoreFailed(true);
-    } finally {
-      setMore(false);
-    }
-  }
-
   const shown = (phase === "live" || phase === "registered") && marketOk ? (quote ?? EMPTY_QUOTE) : EMPTY_QUOTE;
-  const shownSummary = phase === "live" && rewardRowsOk ? rewardSummary : null;
 
   return (
     <>
@@ -235,12 +112,12 @@ export function SdkBoard({
         ) : null}
         {phase === "registered" ? (
           <p className="mt-3 max-w-2xl text-[13px] leading-[1.55] text-muted-foreground">
-            The canonical $SDK mint is registered. Rewards are not yet active.
+            The canonical $SDK mint is registered.
           </p>
         ) : null}
         {phase === "prelaunch" ? (
           <p className="mt-3 max-w-2xl text-[13px] leading-[1.55] text-muted-foreground">
-            {notice ?? "The official $SDK mint is not registered. Market figures and holder allocations appear here once production is activated."}
+            {notice ?? "The official $SDK mint is not registered. Market figures appear here once production is activated."}
           </p>
         ) : null}
         {phase === "unavailable" ? (
@@ -267,230 +144,60 @@ export function SdkBoard({
         </div>
       </section>
 
-      <section className="mt-12">
-        <div className="flex items-end justify-between gap-4">
-          <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Native SOL Rewards</h2>
-          {phase === "live" ? (
-            <p className="text-right font-mono text-[10px] leading-[1.45] tracking-[0.04em] text-muted-foreground">
-              Live · Updates automatically
-              <span className="mt-1 block min-h-4 normal-case">
-                {rewardsDelayed ? "Update delayed" : rewardsCheckedAt !== null ? formatUtcStamp(rewardsCheckedAt) : "\u00a0"}
-              </span>
-            </p>
-          ) : null}
-        </div>
-        <div className="mt-4 max-w-2xl text-[14px] leading-[1.65] text-muted-foreground">
-          <p>{rewardLead}</p>
-          <p className="mt-3">{rewardQualify}</p>
-          <p className="mt-3">Rewards accumulate as claimable SOL. They are not transferred automatically.</p>
-          {phase !== "live" ? <p className="mt-3">Rewards are not yet active.</p> : null}
-          {scope === "test" ? (
-            <p className="mt-3">
-              <Link className="underline" href="/account?scope=test#holder-rewards-title">Open TREST holder rewards</Link>
-            </p>
-          ) : null}
-        </div>
-        {scope === "test" ? <RehearsalFiguresPanel figures={rewardFigures} historical={historical} /> : (
-          <div className="mt-4 grid gap-px border border-border bg-border min-[801px]:grid-cols-3">
-            <Metric label="Allocated to holders" value={shownSummary ? formatSol(shownSummary.totalLamports) : "—"} />
-            <Metric label="Last 24 hours" value={shownSummary ? formatSol(shownSummary.dayLamports) : "—"} />
-            <Metric
-              label="Latest window"
-              value={
-                shownSummary?.latestWindowStart && shownSummary.latestWindowEnd
-                  ? formatWindow(shownSummary.latestWindowStart, shownSummary.latestWindowEnd)
-                  : "—"
-              }
-            />
-          </div>
-        )}
-        <AllocationTable
-          phase={phase}
-          decimals={decimals}
-          rows={allocations}
-          rewardsOk={rewardRowsOk}
-          tokenSymbol={tokenSymbol}
-        />
-        {cursor ? (
-          <button
-            type="button"
-            className="mt-3 font-mono text-[10px] tracking-[0.04em] uppercase hover:text-accent-ink disabled:text-muted-foreground"
-            disabled={more}
-            onClick={() => void loadMore()}
-          >
-            {more ? "Loading" : "Load more"}
-          </button>
+      <SdkChart mint={mint} />
+      <p className="sr-only" aria-live="polite">{copied ? "Mint address copied" : ""}</p>
+    </>
+  );
+}
+
+function SdkChart({ mint }: { mint: string | null }): ReactNode {
+  const { resolvedTheme } = useTheme();
+  const theme = resolvedTheme === "light" ? "light" : "dark";
+  const src = mint && MINT.test(mint) ? dexscreenerEmbed(mint, theme) : null;
+  return (
+    <section className="mt-12">
+      <div className="flex items-end justify-between gap-4">
+        <h2 className="font-display text-[32px] leading-[1.15] tracking-[-0.6px] max-[561px]:text-[26px]">Chart</h2>
+        {src && mint ? (
+          <a className="font-mono text-[10px] tracking-[0.04em] uppercase hover:text-accent-ink" href={dexscreenerPage(mint)} rel="noreferrer">
+            Dexscreener
+          </a>
         ) : null}
-        {moreFailed ? <p className="mt-2 text-[13px] text-muted-foreground">More allocations could not be loaded.</p> : null}
-      </section>
-      <p className="sr-only" aria-live="polite">{copied ? "Mint address copied" : rewardsDelayed ? "Rewards update delayed" : ""}</p>
-    </>
-  );
-}
-
-function AllocationTable({
-  phase,
-  decimals,
-  rows,
-  rewardsOk,
-  tokenSymbol,
-}: {
-  phase: Phase;
-  decimals: number | null;
-  rows: SdkAllocation[];
-  rewardsOk: boolean;
-  tokenSymbol: string;
-}): ReactNode {
-  if (phase !== "live" || !rewardsOk) {
-    return (
-      <p className="mt-4 text-[14px] leading-[1.55] text-muted-foreground">
-        {phase === "prelaunch" || phase === "registered" ? "No holder allocations yet." : "Holder allocations are unavailable."}
-      </p>
-    );
-  }
-  if (rows.length === 0) {
-    return <p className="mt-4 text-[14px] leading-[1.55] text-muted-foreground">No holder allocations have been recorded.</p>;
-  }
-  return (
-    <>
-      <p className="mt-4 text-[13px] leading-[1.5] text-muted-foreground">
-        These rows are SOL allocated to holders. They are not claims or transfers.
-      </p>
-      <ul className="mt-3 divide-y divide-border border border-border min-[801px]:hidden">
-        {rows.map((row) => (
-          <li key={row.id} className="grid gap-2 px-3 py-3">
-            <div className="flex items-baseline justify-between gap-3">
-              <time className="font-mono text-[11px]">{formatUtcStamp(Date.parse(row.windowStart))}</time>
-              <a className="font-mono text-[12px] underline" href={explorerUrl(row.owner)} rel="noreferrer">
-                {shortenAddress(row.owner)}
-              </a>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <Mini label="Balance" value={formatTokenBalance(row.balance, decimals)} />
-              <Mini label="SOL" value={formatSol(row.solLamports)} />
-              <Mini label="Window" value={formatWindow(row.windowStart, row.windowEnd)} />
-            </div>
-          </li>
-        ))}
-      </ul>
-      <div className="mt-3 hidden overflow-x-auto border border-border min-[801px]:block">
-        <table className="w-full text-left">
-          <thead>
-            <tr className="border-b border-border font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
-              <th className="px-3 py-2 font-normal">Time (UTC)</th>
-              <th className="px-3 py-2 font-normal">Holder</th>
-              <th className="px-3 py-2 text-right font-normal">{tokenSymbol} balance</th>
-              <th className="px-3 py-2 text-right font-normal">SOL allocated</th>
-              <th className="px-3 py-2 font-normal">Window</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id} className="border-b border-border last:border-b-0">
-                <td className="px-3 py-2.5 font-mono text-[12px] whitespace-nowrap">{formatUtcStamp(Date.parse(row.windowStart))}</td>
-                <td className="px-3 py-2.5">
-                  <a className="font-mono text-[12px] underline" href={explorerUrl(row.owner)} rel="noreferrer">
-                    {shortenAddress(row.owner)}
-                  </a>
-                </td>
-                <td className="px-3 py-2.5 text-right font-mono text-[12px] tabular-nums">{formatTokenBalance(row.balance, decimals)}</td>
-                <td className="px-3 py-2.5 text-right font-mono text-[12px] tabular-nums">{formatSol(row.solLamports)}</td>
-                <td className="px-3 py-2.5 font-mono text-[12px] whitespace-nowrap">{formatWindow(row.windowStart, row.windowEnd)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       </div>
-    </>
+      {src ? (
+        <iframe
+          title="$SDK price chart"
+          src={src}
+          className="mt-4 h-[560px] w-full border border-border bg-card max-[561px]:h-[420px]"
+          loading="lazy"
+        />
+      ) : (
+        <p className="mt-4 text-[14px] leading-[1.55] text-muted-foreground">The $SDK chart appears here once the canonical mint is registered.</p>
+      )}
+    </section>
   );
 }
 
-function RehearsalFiguresPanel({
-  figures,
-  historical,
-}: {
-  figures: RehearsalFigures | null;
-  historical: HistoricalRecoveryView | null;
-}): ReactNode {
-  const figure = (value: string | null | undefined) => value ? formatSol(value) : "—";
-  return (
-    <>
-      <div className="mt-4 grid grid-cols-2 gap-px border border-border bg-border min-[801px]:grid-cols-4">
-        <Metric label="Collected" value={figure(figures?.collectedLamports)} />
-        <Metric label="Distributable" value={figure(figures?.distributableLamports)} />
-        <Metric label="Holder 50%" value={figure(figures?.holderLamports)} />
-        <Metric label="Protocol 50%" value={figure(figures?.protocolLamports)} />
-        <Metric label="Reserve" value={figures?.reserveLamports ? `${figure(figures.reserveLamports)}${figures.reserveSatisfied ? " held" : ""}` : "—"} />
-        <Metric label="Allocated" value={figure(figures?.allocatedLamports)} />
-        <Metric label="Claimable" value={figure(figures?.claimableLamports)} />
-        <Metric label="Claimed" value={figure(figures?.claimedLamports)} />
-        <Metric label="Unassigned" value={figure(figures?.unassignedLamports)} />
-        <Metric label="Last 24 hours" value={figure(figures?.dayLamports)} />
-        <Metric label="Latest window" value={figures?.latestStart ? formatUtcStamp(Date.parse(figures.latestStart)) : "—"} />
-      </div>
-      <WindowHistory rows={figures?.windows ?? []} />
-      {historical ? (
-        <div className="mt-4 border border-border px-4 py-4">
-          <p className="font-mono text-[10px] tracking-[0.04em] text-accent-ink uppercase">Historical TREST activity</p>
-          <p className="mt-2 max-w-2xl text-[13px] leading-[1.55] text-muted-foreground">
-            Previous 30/30/40 recovery. These amounts stay outside the current 50/50 rehearsal.
-          </p>
-          <div className="mt-3 grid grid-cols-2 gap-px border border-border bg-border min-[801px]:grid-cols-5">
-            <Metric label="Net collected" value={formatSol(historical.netLamports)} />
-            <Metric label="Reserve" value={formatSol(historical.reserveLamports)} />
-            <Metric label="Deferred holders" value={formatSol(historical.holderLamports)} />
-            <Metric label="Buyback" value={formatSol(historical.buybackLamports)} />
-            <Metric label="Protocol" value={formatSol(historical.protocolLamports)} />
-          </div>
-        </div>
-      ) : null}
-    </>
-  );
+function dexscreenerPage(mint: string): string {
+  return `https://dexscreener.com/solana/${mint}`;
 }
 
-function WindowHistory({ rows }: { rows: RehearsalFigures["windows"] }): ReactNode {
-  if (rows.length === 0) {
-    return <p className="mt-4 text-[14px] leading-[1.55] text-muted-foreground">No reward windows recorded.</p>;
-  }
-  return (
-    <div className="mt-4 max-h-96 overflow-auto border border-border">
-      <table className="w-full min-w-[720px] border-collapse text-left">
-        <caption className="sr-only">Five-minute reward windows</caption>
-        <thead className="font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">
-          <tr>
-            <th className="px-3 py-2 font-normal">UTC window</th>
-            <th className="px-3 py-2 font-normal">Status</th>
-            <th className="px-3 py-2 text-right font-normal">Collected</th>
-            <th className="px-3 py-2 text-right font-normal">Holders</th>
-            <th className="px-3 py-2 text-right font-normal">Protocol</th>
-            <th className="px-3 py-2 text-right font-normal">Eligible</th>
-            <th className="px-3 py-2 text-right font-normal">Unassigned</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.id} className="border-t border-border">
-              <td className="px-3 py-2 font-mono text-[12px] whitespace-nowrap">{formatUtcStamp(Date.parse(row.start))}</td>
-              <td className="px-3 py-2 font-mono text-[12px]">{windowStatus(row.status)}</td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] tabular-nums">{row.collectedLamports === null ? "—" : formatSol(row.collectedLamports)}</td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] tabular-nums">{row.holderLamports === null ? "—" : formatSol(row.holderLamports)}</td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] tabular-nums">{row.protocolLamports === null ? "—" : formatSol(row.protocolLamports)}</td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] tabular-nums">{row.eligibleHolders === null ? "—" : String(row.eligibleHolders)}</td>
-              <td className="px-3 py-2 text-right font-mono text-[12px] tabular-nums">{row.unassignedLamports === null ? "—" : formatSol(row.unassignedLamports)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function windowStatus(status: RehearsalWindowStatus): string {
-  if (status === "empty") return "Empty";
-  if (status === "allocated") return "Allocated";
-  if (status === "skipped") return "Skipped";
-  if (status === "pending") return "Pending";
-  return "Stopped";
+function dexscreenerEmbed(mint: string, theme: "dark" | "light"): string {
+  const params = new URLSearchParams({
+    embed: "1",
+    loadChartSettings: "0",
+    trades: "0",
+    tabs: "0",
+    info: "0",
+    chartLeftToolbar: "0",
+    chartDefaultOnMobile: "1",
+    chartTheme: theme,
+    theme,
+    chartStyle: "1",
+    chartType: "usd",
+    interval: "15",
+  });
+  return `${dexscreenerPage(mint)}?${params.toString()}`;
 }
 
 function Metric({ label, value }: { label: string; value: string }): ReactNode {
@@ -498,15 +205,6 @@ function Metric({ label, value }: { label: string; value: string }): ReactNode {
     <p className="min-w-0 bg-background px-3 py-3">
       <span className="block font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{label}</span>
       <span className="mt-2 block font-mono text-[16px] leading-none tabular-nums max-[561px]:text-[14px]">{value}</span>
-    </p>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: string }): ReactNode {
-  return (
-    <p className="min-w-0">
-      <span className="block font-mono text-[10px] tracking-[0.04em] text-muted-foreground uppercase">{label}</span>
-      <span className="mt-1 block font-mono text-[11px] leading-[1.35] tabular-nums">{value}</span>
     </p>
   );
 }
